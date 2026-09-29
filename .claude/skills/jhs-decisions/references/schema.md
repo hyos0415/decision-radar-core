@@ -2,7 +2,7 @@
 
 ## ADR 파일
 
-- 위치: ADR repo의 `docs/adr/NNNN-kebab-title.md` (4자리 번호, `jhs.py next-id`로 받는다)
+- 위치: ADR repo의 `docs/adr/NNNN-kebab-title.md` (4자리 번호, `radar.py next-id`로 받는다)
 - 형식: MADR 3.x 호환. frontmatter는 YAML, 본문은 MADR 절 + 이 스킬의 절
 
 ```yaml
@@ -45,9 +45,9 @@ revisit_last_checked:            # 재검토 루프만 쓴다. 사람은 손대�
 | `technology`·`use`·`affected` | 동일성 키. 기존 ADR과 비교할 때 `use`는 정규화 문자열 비교라서, 같은 용도면 **기존 ADR의 문구를 그대로** 쓴다 |
 | `evidence` | `{url, source_type}` 필수. `community`는 여기 올 수 없다 |
 | `revisit_when` | 조건마다 `id`·`check_type`·`condition`. human이 아니면 `source_hint`. numeric이면 `threshold` |
-| `revisit_last_checked` | `jhs.py apply`만 쓴다. undetermined면 `reason` 필수 |
+| `revisit_last_checked` | `radar.py apply`만 쓴다. undetermined면 `reason` 필수 |
 
-`jhs.py validate <adr_dir>`가 위 규칙을 검사한다. human 조건은 오류가 아니라 **경고**다 (B1-2).
+`radar.py validate <adr_dir>`가 위 규칙을 검사한다. human 조건은 오류가 아니라 **경고**다 (B1-2).
 
 ## source_type 분류
 
@@ -73,7 +73,7 @@ revisit_last_checked:            # 재검토 루프만 쓴다. 사람은 손대�
   "dry_run": true,
   "adrs_checked": ["0001", "0002", "0004"],
   "results": [{"adr": "0004", "condition_id": "c1", "result": "met", "reason": null, "evidence_urls": ["github.com/yichuan-w/LEANN/releases"]}],
-  "pr": {"needed": true, "opened": false, "branch": "claude/jhs-revisit-2026-09-28"},
+  "pr": {"needed": true, "opened": false, "branch": "claude/radar-revisit-2026-09-28"},
   "alerts": [{"adr": "0004", "condition_id": "c1", "kind": "issue", "created": false}],
   "files_written": ["docs/adr/0004-leann.md"],
   "remote_side_effects": [],
@@ -87,7 +87,7 @@ revisit_last_checked:            # 재검토 루프만 쓴다. 사람은 손대�
 
 | 필드 | flow | 뜻 |
 |---|---|---|
-| `results`·`adrs_checked`·`alerts`·`overrides` | revisit | `jhs.py decide` 출력을 **그대로** 옮긴다. 손으로 고치지 않는다 |
+| `results`·`adrs_checked`·`alerts`·`overrides` | revisit | `radar.py decide` 출력을 **그대로** 옮긴다. 손으로 고치지 않는다 |
 | `pr.needed` | revisit·detect | revisit은 `decide.pr_needed`. detect는 후보가 1개 이상일 때 |
 | `pr.opened`·`alerts[].created` | 전부 | dry-run이면 false |
 | `files_written` | 전부 | 이번 실행에서 쓴 파일 (브랜치에 커밋한 ADR 포함) |

@@ -7,13 +7,13 @@
 
 명세: 작업 지시서 「B부 명세 v1 개정」 R1~R16.
 
-  jhs.py list      <adr_dir> [--in-scope]
-  jhs.py validate  <adr_dir>
-  jhs.py match     <adr_dir> --technology T --repo R --component C [--use U]
-  jhs.py decide    <adr_dir> <results.json|-> [--now ISO] [--apply]
-  jhs.py apply     <adr_dir> <decision.json>
-  jhs.py next-id   <adr_dir>
-  jhs.py snapshot  fetch <url> | search <query> | feed
+  radar.py list      <adr_dir> [--in-scope]
+  radar.py validate  <adr_dir>
+  radar.py match     <adr_dir> --technology T --repo R --component C [--use U]
+  radar.py decide    <adr_dir> <results.json|-> [--now ISO] [--apply]
+  radar.py apply     <adr_dir> <decision.json>
+  radar.py next-id   <adr_dir>
+  radar.py snapshot  fetch <url> | search <query> | feed
 
 출력은 전부 stdout JSON. 표준 라이브러리 + PyYAML.
 """
@@ -177,8 +177,8 @@ def cmd_decide(a):
     results = json.load(sys.stdin if a.results == "-" else open(a.results, encoding="utf-8"))
     by_adr = {x["id"]: x for x in load_all(a.adr_dir)}
     served = None
-    log = os.environ.get("JHS_SERVED_LOG")
-    if os.environ.get("JHS_SNAPSHOT_DIR") and log and os.path.exists(log):
+    log = os.environ.get("RADAR_SERVED_LOG")
+    if os.environ.get("RADAR_SNAPSHOT_DIR") and log and os.path.exists(log):
         served = {l.strip() for l in open(log, encoding="utf-8") if l.strip()}
 
     decided, changed, alerts, overrides = [], [], [], []
@@ -311,9 +311,9 @@ def cmd_next_id(a):
 
 
 def snapshot_dir():
-    d = os.environ.get("JHS_SNAPSHOT_DIR")
+    d = os.environ.get("RADAR_SNAPSHOT_DIR")
     if not d:
-        sys.stderr.write("jhs snapshot: JHS_SNAPSHOT_DIR가 없다 — 라이브 모드에서는 WebFetch/WebSearch를 쓴다\n")
+        sys.stderr.write("jhs snapshot: RADAR_SNAPSHOT_DIR가 없다 — 라이브 모드에서는 WebFetch/WebSearch를 쓴다\n")
         sys.exit(2)
     return d
 
@@ -331,7 +331,7 @@ def cmd_snapshot(a):
             out({"url": url, "ok": False, "status": ent["status"]})
             return
         body = open(os.path.join(d, ent["file"]), encoding="utf-8").read()
-        log = os.environ.get("JHS_SERVED_LOG")
+        log = os.environ.get("RADAR_SERVED_LOG")
         if log:
             open(log, "a", encoding="utf-8").write(url + "\n")
         out({"url": url, "ok": True, "status": 200, "source_type_hint": ent.get("source_type"), "body": body})

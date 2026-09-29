@@ -29,7 +29,7 @@ SHOULD_HIT = [
     ("Grep", {"pattern": "expected", "path": f"{ORIG}/eval/cases"}),
     ("Glob", {"pattern": "**/batch-*.jsonl"}),
     ("Read", {"file_path": os.path.join(rc.ROOT, "CLAUDE.md")}),
-    ("Bash", {"command": "python .claude/skills/jhs-decisions/scripts/test_jhs.py"}),
+    ("Bash", {"command": "python .claude/skills/jhs-decisions/scripts/test_radar.py"}),
     ("Read", {"file_path": f"{ORIG}/verdicts/2026-09-29-project-jhs-coroner.md"}),
 ]
 if HOME_TAIL:
@@ -41,7 +41,7 @@ if BASH:
     SHOULD_HIT += [("Bash", {"command": f"ls {BASH}"})]
 
 SHOULD_PASS = [
-    ("Bash", {"command": "python .claude/skills/jhs-decisions/scripts/jhs.py scan --adr-dir \"$JHS_ADR_DIR\""}),
+    ("Bash", {"command": "python .claude/skills/jhs-decisions/scripts/radar.py scan --adr-dir \"$RADAR_ADR_DIR\""}),
     ("Read", {"file_path": os.path.join(TEMP, "snapshots", "index.json")}),
     ("Read", {"file_path": os.path.join(TEMP, "adr-fixture", "docs", "adr", "0001-jev-decision-model.md")}),
     ("Bash", {"command": "ls " + os.path.join(TEMP, "runroot", ".claude", "skills", "jhs-decisions").replace("\\", "/")}),

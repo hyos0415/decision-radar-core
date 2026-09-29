@@ -1,10 +1,10 @@
-"""jhs.py 회귀 테스트 — 스크립트 층만.
+"""radar.py 회귀 테스트 — 스크립트 층만.
 
 eval 케이스(eval/cases/*.jsonl) 중 결론이 스크립트 규칙으로 정해지는 부분을 재현한다.
 모델 층(페이지를 읽고 판단)은 여기서 보지 않는다 — 대신 **모델이 틀린 결과를 넘겼을 때
 규칙이 막는지**를 본다. 스크립트가 막아주는 실패는 eval에서 모델 실패로 잡히지 않는다.
 
-실행: python test_jhs.py   (PyYAML 필요, 픽스처: ../../../../eval/fixture/adr-fixture)
+실행: python test_radar.py   (PyYAML 필요, 픽스처: ../../../../eval/fixture/adr-fixture)
 """
 
 import json
@@ -15,7 +15,7 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-JHS = os.path.join(HERE, "jhs.py")
+JHS = os.path.join(HERE, "radar.py")
 FIXTURE = os.path.normpath(os.path.join(HERE, "..", "..", "..", "..", "eval", "fixture", "adr-fixture", "docs", "adr"))
 NOW = "2026-09-28T09:07:00+09:00"
 
@@ -89,7 +89,7 @@ def result_of(d, key):
     return next(r for r in d["results"] if r["adr"] == adr and r["condition_id"] == cid)
 
 
-print("jhs.py 스크립트 층 회귀")
+print("radar.py 스크립트 층 회귀")
 
 
 @case("JHS-043 QUIET → PR 0, 알림 0")
@@ -216,7 +216,7 @@ def _(t):
 def _(t):
     log = os.path.join(t, "served.log")
     open(log, "w").write("jev.example/releases\n")
-    env = {"JHS_SNAPSHOT_DIR": t, "JHS_SERVED_LOG": log}
+    env = {"RADAR_SNAPSHOT_DIR": t, "RADAR_SERVED_LOG": log}
     d = decide(t, results({("0004", "c1"): ("met", [("github.example/leann/releases", "release_note")], None)}), env=env)
     assert result_of(d, "0004/c1")["result"] == "undetermined" and d["alerts"] == []
     assert any(o["rule"] == "INV-2" for o in d["overrides"])

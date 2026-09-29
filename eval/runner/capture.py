@@ -26,11 +26,11 @@ APPROVAL_TEXT = {"approve": "좋아요, 이 초안 그대로 승인합니다. �
 def env_for(work, py):
     env = dict(os.environ)
     env.update({
-        "JHS_ADR_DIR": os.path.join(work, "adr-fixture", "docs", "adr"),
-        "JHS_TARGETS": os.path.join(work, "adr-fixture", "jhs-targets.json"),
-        "JHS_SNAPSHOT_DIR": os.path.join(work, "snapshots"),
-        "JHS_SERVED_LOG": os.path.join(work, "served.log"),
-        "JHS_DRY_RUN": "1",
+        "RADAR_ADR_DIR": os.path.join(work, "adr-fixture", "docs", "adr"),
+        "RADAR_TARGETS": os.path.join(work, "adr-fixture", "radar-targets.json"),
+        "RADAR_SNAPSHOT_DIR": os.path.join(work, "snapshots"),
+        "RADAR_SERVED_LOG": os.path.join(work, "served.log"),
+        "RADAR_DRY_RUN": "1",
         "PATH": os.path.dirname(py) + os.pathsep + env.get("PATH", ""),
         "TEMP": os.path.join(work, "tmp"), "TMP": os.path.join(work, "tmp"), "TMPDIR": os.path.join(work, "tmp"),
     })
@@ -55,9 +55,9 @@ def run(case, work, model, py, out_dir):
     convs = json.load(open(os.path.join(rc.FIX, "conversations.json"), encoding="utf-8"))
     setup = case["setup"]
     env = env_for(work, py)
-    open(env["JHS_SERVED_LOG"], "w").close()
+    open(env["RADAR_SERVED_LOG"], "w").close()
     prompt = (f"/jhs-decisions capture\n\n지금 시각: {rc.NOW}\n"
-              "ADR 디렉터리와 대상 repo는 환경변수(JHS_ADR_DIR, JHS_TARGETS)에 있다. dry-run이다.\n"
+              "ADR 디렉터리와 대상 repo는 환경변수(RADAR_ADR_DIR, RADAR_TARGETS)에 있다. dry-run이다.\n"
               "아래는 방금 나눈 조사 대화다.\n\n<conversation>\n" + convs[setup["conversation"]] + "\n</conversation>")
     runroot = rc.prepare_runroot(work)
     ev1, w1, raw1 = claude(prompt, work, model, env, runroot)
@@ -141,7 +141,7 @@ def grade(case, before, state1, work, ev1, ev2):
             check(f"Research Note에 {u}", u in note, None)
         for s in exp.get("outside_research_note_must_not_contain", []):
             check(f"Research Note 밖에 '{s}' 없음", s not in outside, None)
-        v = subprocess.run([sys.executable, os.path.join(rc.ROOT, ".claude", "skills", "jhs-decisions", "scripts", "jhs.py"),
+        v = subprocess.run([sys.executable, os.path.join(rc.ROOT, ".claude", "skills", "jhs-decisions", "scripts", "radar.py"),
                             "validate", os.path.join(work, "adr-fixture", "docs", "adr")], capture_output=True, text=True, encoding="utf-8")
         try:
             vj = json.loads(v.stdout)
