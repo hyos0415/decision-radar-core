@@ -1,0 +1,290 @@
+"""jhs.py 회귀 테스트 — 스크립트 층만.
+
+eval 케이스(eval/cases/*.jsonl) 중 결론이 스크립트 규칙으로 정해지는 부분을 재현한다.
+모델 층(페이지를 읽고 판단)은 여기서 보지 않는다 — 대신 **모델이 틀린 결과를 넘겼을 때
+규칙이 막는지**를 본다. 스크립트가 막아주는 실패는 eval에서 모델 실패로 잡히지 않는다.
+
+실행: python test_jhs.py   (PyYAML 필요, 픽스처: ../../../../eval/fixture/adr-fixture)
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+JHS = os.path.join(HERE, "jhs.py")
+FIXTURE = os.path.normpath(os.path.join(HERE, "..", "..", "..", "..", "eval", "fixture", "adr-fixture", "docs", "adr"))
+NOW = "2026-09-28T09:07:00+09:00"
+
+QUIET = {  # cases/README.md 베이스 — 모델이 올바르게 읽었을 때의 결과
+    ("0001", "c1"): ("not_met", [("jev.example/releases", "release_note")], None),
+    ("0001", "c2"): ("not_met", [("repo:finance-verifier/eval/results/jev-latest.json", "repo")], 912),
+    ("0001", "c3"): ("undetermined", [], None),
+    ("0002", "c1"): ("not_met", [("docs.cloudvendor.example/guardrails/languages", "official_doc")], None),
+    ("0002", "c2"): ("not_met", [("cloudvendor.example/pricing/guardrails", "official_doc")], 0.15),
+    ("0004", "c1"): ("not_met", [("github.example/leann/releases", "release_note")], None),
+    ("0004", "c2"): ("not_met", [("repo:medical-mate/data/corpus_stats.json", "repo")], 48210),
+}
+
+failures = []
+
+
+def run(*args, env=None):
+    p = subprocess.run([sys.executable, JHS, *args], capture_output=True, text=True, encoding="utf-8",
+                       env={**os.environ, **(env or {})})
+    if p.returncode not in (0, 1):
+        raise RuntimeError(p.stderr)
+    return json.loads(p.stdout)
+
+
+def results(overrides=None, drop=()):
+    out = []
+    for (adr, cid), (res, ev, val) in QUIET.items():
+        if (adr, cid) in drop:
+            continue
+        o = (overrides or {}).get((adr, cid))
+        if o:
+            res, ev, val = o
+        r = {"adr": adr, "condition_id": cid, "result": res, "reason": "human" if cid == "c3" and adr == "0001" else None,
+             "evidence": [{"url": u, "source_type": t} for u, t in ev]}
+        if res == "undetermined" and not r["reason"]:
+            r["reason"] = "fetch_failed"
+        if val is not None:
+            r["observed_value"] = val
+        out.append(r)
+    return out
+
+
+def decide(tmp, res, env=None):
+    rp = os.path.join(tmp, "results.json")
+    json.dump(res, open(rp, "w", encoding="utf-8"))
+    return run("decide", os.path.join(tmp, "adr"), rp, "--now", NOW, env=env)
+
+
+def case(name):
+    def wrap(fn):
+        tmp = tempfile.mkdtemp()
+        shutil.copytree(FIXTURE, os.path.join(tmp, "adr"))
+        try:
+            fn(tmp)
+            print(f"  ok   {name}")
+        except AssertionError as e:
+            failures.append(name)
+            print(f"  FAIL {name}: {e}")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        return fn
+    return wrap
+
+
+def alerts(d):
+    return sorted(f"{a['adr']}/{a['condition_id']}" for a in d["alerts"])
+
+
+def result_of(d, key):
+    adr, cid = key.split("/")
+    return next(r for r in d["results"] if r["adr"] == adr and r["condition_id"] == cid)
+
+
+print("jhs.py 스크립트 층 회귀")
+
+
+@case("JHS-043 QUIET → PR 0, 알림 0")
+def _(t):
+    d = decide(t, results())
+    assert d["pr_needed"] is False, d["updates"]
+    assert d["alerts"] == []
+
+
+@case("JHS-001 0001/c1 met → PR, 알림 1")
+def _(t):
+    d = decide(t, results({("0001", "c1"): ("met", [("jev.example/releases", "release_note")], None)}))
+    assert d["pr_needed"] and alerts(d) == ["0001/c1"]
+
+
+@case("JHS-008 met→not_met 역전 → PR, 알림 0 (R4)")
+def _(t):
+    p = os.path.join(t, "adr", "0002-guardrails-injection.md")
+    s = open(p, encoding="utf-8").read().replace(
+        "{condition_id: c2, checked_at: \"2026-09-21T09:07:00+09:00\", result: not_met",
+        "{condition_id: c2, checked_at: \"2026-09-21T09:07:00+09:00\", result: met")
+    open(p, "w", encoding="utf-8").write(s)
+    d = decide(t, results())
+    assert d["pr_needed"] and d["alerts"] == []
+
+
+@case("JHS-015/016 경계 799 met / 800 not_met — 모델이 반대로 넘겨도 threshold가 교정")
+def _(t):
+    d = decide(t, results({("0001", "c2"): ("not_met", [("repo:finance-verifier/eval/results/jev-latest.json", "repo")], 799)}))
+    assert result_of(d, "0001/c2")["result"] == "met" and alerts(d) == ["0001/c2"]
+    assert any(o["rule"] == "threshold" for o in d["overrides"])
+    d = decide(t, results({("0001", "c2"): ("met", [("repo:finance-verifier/eval/results/jev-latest.json", "repo")], 800)}))
+    assert result_of(d, "0001/c2")["result"] == "not_met" and d["pr_needed"] is False
+
+
+@case("JHS-017/018 경계 ≤0.10 met, ≥100000 met")
+def _(t):
+    d = decide(t, results({("0002", "c2"): ("not_met", [("cloudvendor.example/pricing/guardrails", "official_doc")], 0.10),
+                           ("0004", "c2"): ("not_met", [("repo:medical-mate/data/corpus_stats.json", "repo")], 100000)}))
+    assert alerts(d) == ["0002/c2", "0004/c2"]
+
+
+@case("JHS-021 403 → undetermined, PR 있음(변화), 알림 0")
+def _(t):
+    d = decide(t, results({("0002", "c1"): ("undetermined", [], None)}))
+    assert result_of(d, "0002/c1")["result"] == "undetermined" and d["pr_needed"] and d["alerts"] == []
+
+
+@case("JHS-022 모델이 블로그만으로 met → R2가 undetermined로 강등, 알림 0")
+def _(t):
+    d = decide(t, results({("0002", "c1"): ("met", [("blog.devnews.example/guardrails-korean", "community")], None)}))
+    r = result_of(d, "0002/c1")
+    assert r["result"] == "undetermined" and r["evidence_urls"] == [] and d["alerts"] == []
+    assert any(o["rule"] == "R2" for o in d["overrides"])
+
+
+@case("JHS-025 numeric인데 observed_value 없음 → undetermined (대체 지표 금지)")
+def _(t):
+    d = decide(t, results({("0001", "c2"): ("met", [("repo:finance-verifier/eval/results/jev-latest.json", "repo")], None)}))
+    assert result_of(d, "0001/c2")["result"] == "undetermined" and d["alerts"] == []
+
+
+@case("JHS-044 직전 met(알림 기발송) + 이번 met → PR 0, 알림 0 (R3)")
+def _(t):
+    p = os.path.join(t, "adr", "0004-leann-index.md")
+    s = open(p, encoding="utf-8").read().replace(
+        "{condition_id: c1, checked_at: \"2026-09-21T09:07:00+09:00\", result: not_met",
+        "{condition_id: c1, checked_at: \"2026-09-21T09:07:00+09:00\", result: met")
+    open(p, "w", encoding="utf-8").write(s)
+    d = decide(t, results({("0004", "c1"): ("met", [("github.example/leann/releases", "release_note")], None)}))
+    assert d["pr_needed"] is False and d["alerts"] == []
+
+
+@case("JHS-045 직전 undetermined + 이번 undetermined(reason 다름) → PR 0")
+def _(t):
+    p = os.path.join(t, "adr", "0002-guardrails-injection.md")
+    s = open(p, encoding="utf-8").read().replace(
+        "{condition_id: c1, checked_at: \"2026-09-21T09:07:00+09:00\", result: not_met, reason: null",
+        "{condition_id: c1, checked_at: \"2026-09-21T09:07:00+09:00\", result: undetermined, reason: fetch_failed")
+    open(p, "w", encoding="utf-8").write(s)
+    res = results({("0002", "c1"): ("undetermined", [], None)})
+    next(r for r in res if r["adr"] == "0002" and r["condition_id"] == "c1")["reason"] = "403 again"
+    d = decide(t, res)
+    assert d["pr_needed"] is False
+
+
+@case("JHS-049 모델이 human 조건을 met으로 → R5가 undetermined(human)")
+def _(t):
+    d = decide(t, results({("0001", "c3"): ("met", [("repo:finance-verifier/CLAUDE.md", "repo")], None)}))
+    r = result_of(d, "0001/c3")
+    assert r["result"] == "undetermined" and r["reason"] == "human" and d["pr_needed"] is False and d["alerts"] == []
+
+
+@case("JHS-050 모델이 adopted 0003 결과를 넘김 → R13이 버림")
+def _(t):
+    res = results() + [{"adr": "0003", "condition_id": "c1", "result": "met",
+                        "evidence": [{"url": "docs.cloudvendor.example/guardrails/pii-patterns", "source_type": "official_doc"}]}]
+    d = decide(t, res)
+    assert d["adrs_checked"] == ["0001", "0002", "0004"] and d["alerts"] == [] and d["pr_needed"] is False
+
+
+@case("JHS-052 첫 실행(prior 없음) → PR, 알림은 met만 (R15)")
+def _(t):
+    for f in os.listdir(os.path.join(t, "adr")):
+        p = os.path.join(t, "adr", f)
+        s = open(p, encoding="utf-8").read()
+        if "revisit_last_checked:" in s:
+            head, rest = s.split("revisit_last_checked:", 1)
+            s = head + rest[rest.index("---"):]
+            open(p, "w", encoding="utf-8").write(s)
+    d = decide(t, results({("0004", "c1"): ("met", [("github.example/leann/releases", "release_note")], None)}))
+    assert d["pr_needed"] and alerts(d) == ["0004/c1"]
+    assert sum(len(v) for v in d["updates"].values()) == 7
+
+
+@case("누락 조건 → undetermined(not checked)로 채움 + override")
+def _(t):
+    d = decide(t, results(drop={("0002", "c2")}))
+    assert result_of(d, "0002/c2")["result"] == "undetermined"
+    assert any(o.get("why") == "결과 누락" for o in d["overrides"])
+
+
+@case("INV-2 스냅숏 모드: 제공 안 된 URL 근거 → 제거 후 R2로 강등")
+def _(t):
+    log = os.path.join(t, "served.log")
+    open(log, "w").write("jev.example/releases\n")
+    env = {"JHS_SNAPSHOT_DIR": t, "JHS_SERVED_LOG": log}
+    d = decide(t, results({("0004", "c1"): ("met", [("github.example/leann/releases", "release_note")], None)}), env=env)
+    assert result_of(d, "0004/c1")["result"] == "undetermined" and d["alerts"] == []
+    assert any(o["rule"] == "INV-2" for o in d["overrides"])
+
+
+@case("apply: last_checked만 바뀌고 status·본문 불변 (R8)")
+def _(t):
+    d = decide(t, results({("0004", "c1"): ("met", [("github.example/leann/releases", "release_note")], None)}))
+    dp = os.path.join(t, "decision.json")
+    json.dump(d, open(dp, "w", encoding="utf-8"))
+    p = os.path.join(t, "adr", "0004-leann-index.md")
+    before = open(p, encoding="utf-8").read()
+    w = run("apply", os.path.join(t, "adr"), dp)
+    after = open(p, encoding="utf-8").read()
+    assert len(w["files_written"]) == 1
+    assert "status: hold" in after and before.split("---", 2)[2] == after.split("---", 2)[2]
+    rows = run("list", os.path.join(t, "adr"))
+    lc = {r["condition_id"]: r for r in next(x for x in rows if x["id"] == "0004")["revisit_last_checked"]}
+    assert lc["c1"]["result"] == "met" and lc["c1"]["checked_at"] == NOW and lc["c2"]["result"] == "not_met"
+    assert run("validate", os.path.join(t, "adr"))["ok"]
+
+
+@case("match: R7 exact / R14 overlap / related (JHS-030·031·032·033·051)")
+def _(t):
+    a = os.path.join(t, "adr")
+    m = run("match", a, "--technology", "Bedrock Guardrails", "--repo", "medical-mate", "--component", "pii-guard", "--use", "PII masking")
+    assert m["exact"] == ["0003"], m                                    # JHS-030
+    m = run("match", a, "--technology", "Bedrock Guardrails", "--repo", "finance-verifier", "--component", "verifier-core", "--use", "prompt injection 방어")
+    assert m["exact"] == [] and [r["id"] for r in m["related"]] == ["0001", "0002", "0003"]   # JHS-031 (0001은 같은 component)
+    m = run("match", a, "--technology", "Bedrock Guardrails", "--repo", "medical-mate", "--component", "chat-api", "--use", "prompt injection 방어")
+    assert m["exact"] == ["0002"]                                       # JHS-032
+    m = run("match", a, "--technology", "Bedrock Guardrails", "--repo", "medical-mate", "--component", "pii-guard", "--use", "prompt injection 방어")
+    assert m["exact"] == [] and m["overlap"] == ["0003"]                # JHS-033
+    m = run("match", a, "--technology", "LEANN", "--repo", "medical-mate", "--component", "retrieval")
+    assert m["overlap"] == ["0004"]                                     # JHS-051 (R14)
+    m = run("match", a, "--technology", "vllm", "--repo", "finance-verifier", "--component", "serving-layer")
+    assert m["overlap"] == [] and m["related"] == []                    # JHS-011
+
+
+@case("decide stdin + --apply: 임시 파일 없이 한 번에 (스모크 경합 수정)")
+def _(t):
+    res = results({("0004", "c1"): ("met", [("github.example/leann/releases", "release_note")], None)})
+    p = subprocess.run([sys.executable, JHS, "decide", os.path.join(t, "adr"), "-", "--now", NOW, "--apply"],
+                       input=json.dumps(res), capture_output=True, text=True, encoding="utf-8")
+    d = json.loads(p.stdout)
+    assert len(d["files_written"]) == 1 and alerts(d) == ["0004/c1"]
+    lc = {r["condition_id"]: r for r in next(x for x in run("list", os.path.join(t, "adr")) if x["id"] == "0004")["revisit_last_checked"]}
+    assert lc["c1"]["result"] == "met"
+
+
+@case("numeric: 모델이 result=undetermined/null + observed_value → 스크립트가 계산 (배치 실측 F2)")
+def _(t):
+    res = results()
+    for r in res:
+        if (r["adr"], r["condition_id"]) == ("0001", "c2"):
+            r["result"], r["observed_value"] = "undetermined", 640
+        if (r["adr"], r["condition_id"]) == ("0004", "c2"):
+            r["result"], r["observed_value"] = None, 48210
+    d = decide(t, res)
+    assert result_of(d, "0001/c2")["result"] == "met" and alerts(d) == ["0001/c2"]
+    assert result_of(d, "0004/c2")["result"] == "not_met"
+    assert not [o for o in d["overrides"] if o["rule"] == "threshold"]  # 모델이 판정을 안 한 것은 뒤집기가 아니다
+
+
+@case("next-id")
+def _(t):
+    assert run("next-id", os.path.join(t, "adr"))["next_id"] == "0006"
+
+
+print(f"\n{'FAILED ' + str(len(failures)) if failures else 'all passed'}")
+sys.exit(1 if failures else 0)

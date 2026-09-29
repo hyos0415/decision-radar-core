@@ -1,0 +1,23 @@
+{
+ "D01": {"title": "vllm 0.9.0 released", "kind": "dependency_release", "package": "vllm", "from_version": "0.8.5", "version": "0.9.0",
+         "summary": "Scheduler rewrite. BREAKING: `--max-num-seqs` now limits sequences per step instead of total in-flight sequences.",
+         "url": "github.example/vllm/releases/v0.9.0", "source_type": "release_note"},
+ "D02": {"title": "fastapi 0.118.2", "kind": "dependency_release", "package": "fastapi", "from_version": "0.118.1", "version": "0.118.2",
+         "summary": "Bugfix: fix typo in OpenAPI schema generation for optional headers.",
+         "url": "github.example/fastapi/releases/0.118.2", "source_type": "release_note"},
+ "D03": {"title": "pydantic 2.12.1 (security)", "kind": "dependency_release", "package": "pydantic", "from_version": "2.12.0", "version": "2.12.1",
+         "summary": "Security: CVE-2026-41xx — crafted JSON can bypass `max_length` validation on constrained str fields.",
+         "url": "github.example/pydantic/security/advisories/41xx", "source_type": "issue_pr"},
+ "D04": {"title": "KoPII-small: 한국어 PII NER 모델 공개", "kind": "new_model",
+         "summary": "한국어 개인정보(주민등록번호·전화번호·주소) 개체명 인식 소형 모델. Apache-2.0. CPU 추론 가능.",
+         "url": "models.example/kopii-small", "source_type": "official_doc"},
+ "D05": {"title": "PixelForge-XL 이미지 생성 모델 공개", "kind": "new_model",
+         "summary": "텍스트→이미지 생성 모델. 1024px, 상업 라이선스.",
+         "url": "models.example/pixelforge-xl", "source_type": "official_doc"},
+ "D06": {"title": "LEANN v0.5.0", "kind": "new_release_non_dependency", "package": "leann", "version": "0.5.0",
+         "summary": "incremental insert is now stable and officially supported.",
+         "url": "github.example/leann/releases", "source_type": "release_note"},
+ "D07": {"title": "react 19.2.0", "kind": "release", "package": "react", "version": "19.2.0",
+         "summary": "Major feature release: new compiler defaults.",
+         "url": "github.example/react/releases/v19.2.0", "source_type": "release_note"}
+}

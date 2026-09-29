@@ -1,0 +1,126 @@
+{
+ "S01": {
+  "url": "jev.example/releases",
+  "source_type": "release_note"
+ },
+ "S02": {
+  "url": "jev.example/releases",
+  "source_type": "release_note"
+ },
+ "S23": {
+  "url": "jev.example/releases",
+  "source_type": "release_note"
+ },
+ "S07": {
+  "url": "docs.cloudvendor.example/guardrails/languages",
+  "source_type": "official_doc"
+ },
+ "S08": {
+  "url": "docs.cloudvendor.example/guardrails/languages",
+  "source_type": "official_doc"
+ },
+ "S09": {
+  "url": "docs.cloudvendor.example/guardrails/languages",
+  "source_type": "official_doc",
+  "status": 403
+ },
+ "S19": {
+  "url": "docs.cloudvendor.example/guardrails/languages",
+  "source_type": "official_doc"
+ },
+ "S10": {
+  "url": "blog.devnews.example/guardrails-korean",
+  "source_type": "community"
+ },
+ "S11": {
+  "url": "cloudvendor.example/pricing/guardrails",
+  "source_type": "official_doc"
+ },
+ "S12": {
+  "url": "cloudvendor.example/pricing/guardrails",
+  "source_type": "official_doc"
+ },
+ "S13": {
+  "url": "cloudvendor.example/pricing/guardrails",
+  "source_type": "official_doc"
+ },
+ "S26": {
+  "url": "cloudvendor.example/pricing/guardrails",
+  "source_type": "official_doc",
+  "status": 403
+ },
+ "S14": {
+  "url": "github.example/leann/releases",
+  "source_type": "release_note"
+ },
+ "S15": {
+  "url": "github.example/leann/releases",
+  "source_type": "release_note"
+ },
+ "S20": {
+  "url": "github.example/leann/releases",
+  "source_type": "release_note"
+ },
+ "S25": {
+  "url": "github.example/leann/releases",
+  "source_type": "release_note",
+  "status": 403
+ },
+ "S18": {
+  "url": "reddit.example/r/rag/leann-incremental",
+  "source_type": "community"
+ },
+ "S31": {
+  "url": "docs.cloudvendor.example/guardrails/pii-patterns",
+  "source_type": "official_doc"
+ },
+ "S32": {
+  "url": "forum.example/threads/guardrails-all-good",
+  "source_type": "community"
+ },
+ "S03": {
+  "repo": "finance-verifier",
+  "path": "eval/results/jev-latest.json",
+  "body": "{\"split\": \"heldout-53\", \"model\": \"jev-0.8.3\", \"n\": 53, \"p50_ms\": 455, \"p95_ms\": 912}"
+ },
+ "S04": {
+  "repo": "finance-verifier",
+  "path": "eval/results/jev-latest.json",
+  "body": "{\"split\": \"heldout-53\", \"model\": \"jev-0.9.0\", \"n\": 53, \"p50_ms\": 310, \"p95_ms\": 640}"
+ },
+ "S05": {
+  "repo": "finance-verifier",
+  "path": "eval/results/jev-latest.json",
+  "body": "{\"split\": \"heldout-53\", \"model\": \"jev-0.9.0\", \"n\": 53, \"p50_ms\": 402, \"p95_ms\": 799}"
+ },
+ "S06": {
+  "repo": "finance-verifier",
+  "path": "eval/results/jev-latest.json",
+  "body": "{\"split\": \"heldout-53\", \"model\": \"jev-0.9.0\", \"n\": 53, \"p50_ms\": 404, \"p95_ms\": 800}"
+ },
+ "S29": {
+  "repo": "finance-verifier",
+  "path": "eval/results/jev-latest.json",
+  "body": "{\"split\": \"heldout-53\", \"model\": \"jev-0.9.0\", \"n\": 53, \"p50_ms\": 410}"
+ },
+ "S16": {
+  "repo": "medical-mate",
+  "path": "data/corpus_stats.json",
+  "body": "{\"doc_count\": 48210, \"updated\": \"2026-09-20\"}"
+ },
+ "S17": {
+  "repo": "medical-mate",
+  "path": "data/corpus_stats.json",
+  "body": "{\"doc_count\": 100000, \"updated\": \"2026-09-27\"}"
+ },
+ "S22": {
+  "repo": "medical-mate",
+  "path": "data/corpus_stats.json",
+  "body": "{\"doc_count\": 152340, \"updated\": \"2026-09-27\"}"
+ },
+ "S24": {
+  "repo": "medical-mate",
+  "path": "data/corpus_stats.json",
+  "body": "{\"doc_count\": 99999, \"updated\": \"2026-09-27\"}"
+ }
+}
