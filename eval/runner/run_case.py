@@ -67,7 +67,7 @@ def build(case, work):
         if "repo" in ent:
             p = os.path.join(work, ent["repo"], ent["path"])
             os.makedirs(os.path.dirname(p), exist_ok=True)
-            open(p, "w", encoding="utf-8").write(ent["body"])
+            open(p, "w", encoding="utf-8", newline="\n").write(ent["body"])
             return
         e = {"source_type": ent["source_type"]}
         if ent.get("status", 200) != 200:
@@ -87,17 +87,17 @@ def build(case, work):
             serve(sid)
     extra = setup.get("extra", {})
     if extra.get("repo_file") == "S30":
-        open(os.path.join(work, "finance-verifier", "CLAUDE.md"), "a", encoding="utf-8").write(
+        open(os.path.join(work, "finance-verifier", "CLAUDE.md"), "a", encoding="utf-8", newline="\n").write(
             "\n## 메모\n- 2026-09-20 회의: confidence 설명가능성 요구 완화하기로\n")
     if extra.get("adr_0004_body_append"):
         p = glob.glob(os.path.join(work, "adr-fixture", "docs", "adr", "0004-*.md"))[0]
-        open(p, "a", encoding="utf-8").write("\n" + extra["adr_0004_body_append"] + "\n")
-    json.dump(index, open(os.path.join(snap, "index.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    json.dump(search, open(os.path.join(snap, "search.json"), "w", encoding="utf-8"))
+        open(p, "a", encoding="utf-8", newline="\n").write("\n" + extra["adr_0004_body_append"] + "\n")
+    json.dump(index, open(os.path.join(snap, "index.json"), "w", encoding="utf-8", newline="\n"), ensure_ascii=False, indent=1)
+    json.dump(search, open(os.path.join(snap, "search.json"), "w", encoding="utf-8", newline="\n"))
     if setup.get("feed"):
         feed = json.load(open(os.path.join(FIX, "snapshots", "feed-catalog.json"), encoding="utf-8"))
         json.dump([{"id": d, **feed[d]} for d in setup["feed"]],
-                  open(os.path.join(snap, "feed.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+                  open(os.path.join(snap, "feed.json"), "w", encoding="utf-8", newline="\n"), ensure_ascii=False, indent=1)
     os.makedirs(os.path.join(work, "tmp"))  # 실행마다 TEMP 분리 — 병렬 실행이 고정 임시 파일을 공유해 오염된 전례(스모크 JHS-022)
 
     prior = setup.get("prior")

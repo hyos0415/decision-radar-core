@@ -1,0 +1,2 @@
+# 줄바꿈은 LF로 고정 — Windows(core.autocrlf=true)와 macOS를 오가도 픽스처·ADR 바이트가 같아야 한다
+* text=auto eol=lf
