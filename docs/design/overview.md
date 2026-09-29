@@ -232,7 +232,11 @@ MoSCoW = **M**ust(없으면 실패) · **S**hould(중요하지만 없어도 성�
 
 이 표는 가설이다. W4 게이트를 못 넘으면 제품 실사용 기간이 줄어든다 — 그때 줄이는 순서는 Should부터.
 
-## 11. 에픽 (Linear·GitHub 등록 예정)
+## 11. 에픽
+
+> **등록됨 (2026-09-29)** — 계획·상태의 원본은 **Linear 프로젝트 Decision Radar**(팀 HYO), 코드 작업은 GitHub Issue + Milestone(에픽별).
+> GitHub Issue 제목은 Linear 키로 시작하고(`[HYO-18] …`), Linear 이슈에는 GitHub Issue 링크가 붙어 있다.
+> 에픽 키: E0 HYO-9 · E1 HYO-10 · E2 HYO-14 · E3 HYO-23 · E4 HYO-30 · E5 HYO-41 · E6 HYO-49 · E7 HYO-54 · E8 HYO-58
 
 | 에픽 | 내용 | 주 |
 |---|---|---|
