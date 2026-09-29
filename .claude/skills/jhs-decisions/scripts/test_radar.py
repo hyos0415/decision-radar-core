@@ -14,6 +14,8 @@ import subprocess
 import sys
 import tempfile
 
+sys.stdout.reconfigure(encoding="utf-8")  # Windows cp949 콘솔에서 — 출력에서 크래시 (radar.py와 같게)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 JHS = os.path.join(HERE, "radar.py")
 FIXTURE = os.path.normpath(os.path.join(HERE, "..", "..", "..", "..", "eval", "fixture", "adr-fixture", "docs", "adr"))
