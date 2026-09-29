@@ -149,8 +149,22 @@ def prepare_runroot(work):
     return runroot
 
 
-_ROOT_FWD = ROOT.replace("\\", "/").lower()
-LEAK_PAT = re.compile(r"eval[/\\](cases|runner|precondition-sheet|fixtures\.md|experiment|smoke-log)|batch-\d+\.jsonl|"
+def _path_forms(p):
+    """한 경로를 모델이 쓸 수 있는 표기로 — c:/…, Git Bash /c/…, 홈 기준 ~/… $HOME/…"""
+    fwd = os.path.abspath(p).replace("\\", "/").lower()
+    forms = {fwd}
+    if fwd[1:2] == ":":
+        forms.add("/" + fwd[0] + fwd[2:])
+    home = os.path.expanduser("~").replace("\\", "/").lower()
+    if fwd.startswith(home + "/"):
+        tail = fwd[len(home):]
+        forms |= {"~" + tail, "$home" + tail, "${home}" + tail}
+    return forms
+
+
+_ORIG = os.path.join(os.path.dirname(ROOT), "project-jhs")  # 이관 원본 — 같은 정답지가 있다
+_ROOT_PAT = re.compile("(" + "|".join(re.escape(f) for f in sorted(_path_forms(ROOT) | _path_forms(_ORIG))) + r")(?![\w.-])")
+LEAK_PAT = re.compile(r"eval[/\\](cases|runner|precondition-sheet|fixtures\.md|experiment|smoke-log)|batch-(\d+|\*)\.jsonl|"
                       r"precondition-sheet|feed-catalog|catalog\.json|conversations\.json|test_jhs\.py")
 
 
@@ -160,7 +174,7 @@ def answer_key_access(uses):
     for u in uses:
         s = json.dumps(u["input"], ensure_ascii=False)
         low = s.replace("\\\\", "/").replace("\\", "/").lower()
-        if LEAK_PAT.search(s) or _ROOT_FWD in low:
+        if LEAK_PAT.search(s) or _ROOT_PAT.search(low):
             hits.append(f"{u['name']}: {s[:200]}")
     return hits
 

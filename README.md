@@ -21,7 +21,7 @@
 
 ```bash
 pip install -r requirements.txt
-python .claude/skills/jhs-decisions/scripts/test_jhs.py      # 스크립트 층 회귀 21건
+python .claude/skills/jhs-decisions/scripts/test_jhs.py      # 스크립트 층 회귀 20건
 python eval/runner/run_case.py JHS-043 --model sonnet        # 모델 층 1케이스 (claude -p 세션 1개 = 구독 사용량)
 python eval/runner/batch.py --flow revisit --jobs 6          # 전체 (273세션)
 ```
