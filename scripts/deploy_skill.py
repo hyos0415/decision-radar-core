@@ -19,6 +19,7 @@ SKILL_EXCLUDE = shutil.ignore_patterns("test_*.py", "__pycache__", "*.pyc")  # e
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8")
     if len(sys.argv) != 2:
         sys.exit(__doc__)
     target = os.path.abspath(sys.argv[1])

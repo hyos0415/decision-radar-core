@@ -15,7 +15,7 @@ revisit_when:
   - id: c1
     check_type: numeric
     condition: 스킬 실사용 4주(W1–4) 동안 새로 쌓인 실제 ADR이 1건 이하
-    source_hint: "repo:<ADR repo>/docs/adr"
+    source_hint: "repo:adr/docs/adr"
     threshold: {metric: new_adr_count_w1_w4, op: "<=", value: 1}
   - id: c2
     check_type: human
@@ -78,7 +78,7 @@ revisit_when:
 | c2 W4 게이트 불통과 | 제품이 안전 조항을 못 지킨다 → 실사용으로 가지 않고, 원 판정(Build a Skill)의 근거가 강해진다 |
 | c3 Won't 항목 착수 | 목적이 학습에서 "기술 수집"으로 미끄러졌다는 신호 → 범위 재조정 |
 
-c1은 ADR repo가 생긴 뒤(E2) `source_hint`의 `<ADR repo>`를 실제 이름으로 바꾼다.
+c1은 ADR repo가 생긴 뒤(E2) `source_hint`의 `<ADR repo>`를 실제 이름으로 바꾼다. → 변경 (2026-09-29, HYO-15): `repo:adr/docs/adr` (`hyos0415/adr`, private)
 
 ## 관련
 
