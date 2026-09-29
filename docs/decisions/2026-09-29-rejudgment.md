@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: adopted
 technology: Decision Radar 제품 (LangGraph 에이전트 + Retrieval Arena + 웹 Inbox)
 use: 스킬과 같은 조건에서 비교하는 실험군 (학습·연구 목적)
 affected:
@@ -27,7 +27,7 @@ revisit_when:
 # 재판정 — 스킬 기준선 + 제품 실험군으로 간다
 
 > 2026-09-29 · 원 판정: `2026-09-29-coroner-verdict.md` (Build a Skill, 서비스 축 보류)
-> **status는 사람만 바꾼다(R8).** 이 기록은 `proposed`로 작성했고, 채택(`adopted`)은 사용자가 한다.
+> **status는 사람만 바꾼다(R8).** `proposed`로 작성 → **2026-09-29 사용자가 채택(`adopted`)**.
 
 ## Context and Problem Statement
 
@@ -52,7 +52,7 @@ revisit_when:
 |---|---|---|
 | A. 스킬만 유지 | 원 판정 그대로 | 목적 1·2·4·5에 답하지 못한다 |
 | B. 제품으로 교체 | 스킬을 버리고 제품을 만든다 | 판정을 뒤집는 것이고, 비교 대상이 사라져 "제품이 나았다"를 말할 근거가 없다. 제안서 §27 H의 경고("기술이 재미있다는 이유만으로 복잡한 Agent를 만드는 것")에 그대로 걸린다 |
-| **C. 스킬 = 기준선, 제품 = 실험군** | 같은 명세(R1~R16)·같은 eval·같은 안전 규칙층(`radar.py`) 위에서 두 구현을 비교한다 | **채택 제안** |
+| **C. 스킬 = 기준선, 제품 = 실험군** | 같은 명세(R1~R16)·같은 eval·같은 안전 규칙층(`radar.py`) 위에서 두 구현을 비교한다 | **채택** |
 
 ## Decision Outcome
 
