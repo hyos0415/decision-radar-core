@@ -1,0 +1,4 @@
+# 제품 의존성 — 버전은 설치할 때 고정한다
+openai-agents
+litellm
+PyYAML
