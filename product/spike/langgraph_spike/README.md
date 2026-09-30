@@ -37,3 +37,4 @@ capture:  create_agent(match_adr · propose_adr) + HumanInTheLoopMiddleware(prop
 | 날짜 | 모델 | P1 | P2 | P3 | P4 | P5 | P6 | 비고 |
 |---|---|---|---|---|---|---|---|---|
 | 2026-09-30 | stub | 11/11 | 6케이스 × k=3 = 18/18 | 해당 없음 | diff 0 · 사본 동일 | 연결 0 · trace 0 | 5/5 (체크포인트 49–74KB, 컨텍스트 없음) | 음성 대조 7/7. **통과 판정 아님** — 실제 모델 실행에만 적용 |
+| 2026-09-30 | **Sonnet 5.5 · medium** | **11/11** | **18/18** | **0** | diff 0 · 사본 동일 | 연결 0 · trace 0 | 전부 통과 | **스파이크 통과.** $1.131. 요청 184건 모두 `output_config.format`·tool_choice 없음·adaptive thinking. 짝 비교: `../COMPARISON.md` |

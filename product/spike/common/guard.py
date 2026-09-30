@@ -63,6 +63,12 @@ class NetGuard:
 
     def __init__(self, allow=()):
         self.allow, self.attempts, self.stacks = set(allow), [], {}
+        self.resolved = set()  # 허용 호스트를 해석해서 나온 IP — 이 IP로의 connect만 허용한다
+
+    @staticmethod
+    def _name(host):
+        # httpx2(langchain-anthropic)는 호스트를 bytes로 넘긴다 — str(b'..')로 비교하면 허용 호스트도 막힌다 (2026-09-30 실측)
+        return host.decode("ascii", "replace") if isinstance(host, (bytes, bytearray)) else str(host)
 
     def _block(self, host):
         self.attempts.append(host)
@@ -73,7 +79,8 @@ class NetGuard:
 
     def _ok(self, host):
         try:
-            return ipaddress.ip_address(host).is_loopback  # 이벤트 루프의 self-pipe 등
+            ip = ipaddress.ip_address(host)
+            return ip.is_loopback or host in self.resolved  # 루프백(이벤트 루프 self-pipe 등) · 허용 호스트의 IP
         except ValueError:
             return host in self.allow or host == "localhost"
 
@@ -82,14 +89,18 @@ class NetGuard:
         guard = self
 
         def gai(host, *a, **k):
-            if not guard._ok(str(host)):
-                guard._block(str(host))
-            return guard._gai(host, *a, **k)
+            name = guard._name(host)
+            if not guard._ok(name):
+                guard._block(name)
+            res = guard._gai(host, *a, **k)
+            if name in guard.allow:
+                guard.resolved |= {r[4][0] for r in res}
+            return res
 
         def conn(sock, addr):
-            host = addr[0] if isinstance(addr, tuple) else str(addr)
-            if not guard._ok(str(host)):
-                guard._block(str(host))
+            host = guard._name(addr[0] if isinstance(addr, tuple) else addr)
+            if not guard._ok(host):
+                guard._block(host)
             return guard._conn(sock, addr)
 
         socket.getaddrinfo, socket.socket.connect = gai, conn
