@@ -40,6 +40,15 @@ repo 전체에서 기술을 뽑으면 수십 개가 나온다(pydantic·requests
 | — | 쓰임새 정보가 없으면 | V1-U4(분류 불가)로 간다 |
 | V2-2 | DB·검색 엔진의 클라이언트 (예: PostgreSQL JDBC, elasticsearch-py, neo4j 드라이버) | **L5를 「L1·L2·L3을 부르는 클라이언트」로 넓힌다** (사용자 결정). v1의 L5 「L2·L3을 부르는 클라이언트」에는 L1(DB)을 부르는 드라이버가 들어갈 자리가 없었다 |
 
+## 1-3. 변경 (2026-09-30, `v1.3` — tier-screen v2 뒤)
+
+tier-screen v2(`eval/tier-screen/results-v2.md`)에서 Elasticsearch·Neo4j 서버가 L3·L5로 갈렸다. 정답지가 프롬프트에 없던 「검색 엔진 → L1」을 전제했고, L1·L3 경계도 정의에 없었다. 사용자 결정으로 아래를 더한다.
+
+| # | 무엇 | v1.3 규칙 |
+|---|---|---|
+| V3-1 | L1 ↔ L3 경계 | **우리가 띄우는 서버**(자체 호스팅 DB·검색 엔진·서빙 엔진, docker 포함) → **L1**. **남이 운영하는 서비스** → **L3** |
+| V3-2 | DB 매핑 | v1.1 U3의 「DB → L1」을 **「DB·검색 엔진·그래프 DB → L1」**로 명시한다 |
+
 ## 2. 축 1 — 기술 등급
 
 ### 2-1. 등급 (세분화 후보)
@@ -49,7 +58,7 @@ repo 전체에서 기술을 뽑으면 수십 개가 나온다(pydantic·requests
 | L0 | 언어 런타임 | 인터프리터·언어 버전 | Python 3.12 | 확정 |
 | L1 | 실행 기반 | 베이스 이미지 · 서빙 엔진 · GPU 스택 | `python:3.12-slim` · `vllm/vllm-openai` · llama.cpp `llama-server` · CUDA | 확정 |
 | L2 | 호스팅 모델 (v1.1: 호스팅·로컬) | 외부 API로 부르는 모델 (v1.1: 로컬 서빙 모델 포함) | Bedrock `nova-pro`(운영 기본) · `claude-sonnet-5` · `gpt-5.6-terra` · Jev | 확정 |
-| L3 | 호스팅 서비스 | 모델이 아닌 외부 서비스·공공 API | Langfuse Cloud · Bedrock Guardrails · Finlife API · 국가법령정보 API | 확정 |
+| L3 | 호스팅 서비스 | 모델이 아닌 외부 서비스·공공 API (v1.3: 남이 운영하는 것만) | Langfuse Cloud · Bedrock Guardrails · Finlife API · 국가법령정보 API | 확정 |
 | L4 | 앱 프레임워크 | 앱의 뼈대 — 바꾸면 코드 전반이 바뀜 | fastapi · pydantic · uvicorn · jinja2 | 확정 |
 | L5 | 공급자 SDK | L2·L3을 부르는 클라이언트 (v1.2: L1·L2·L3) | boto3 · anthropic · openai · google-genai · langfuse · typesafe-sdk | 확정 |
 | L6 | 도메인 라이브러리 | 특정 기능 하나를 맡음 | kiwipiepy · pdfplumber · torch·transformers | 확정 |
