@@ -1,4 +1,7 @@
-# 제품 의존성 — 버전은 설치할 때 고정한다
-openai-agents
-litellm
-PyYAML
+# 제품 의존성 — 버전은 설치할 때 고정한다 (2026-09-30, Python 3.12)
+openai-agents==0.22.3
+openai==3.22.1
+PyYAML==6.0.3
+
+# litellm — 미해결 충돌 (2026-09-30): openai-agents 0.22.3은 openai>=3, litellm 최신(1.103.1)은 openai<3.
+# 스텁 파이프라인에는 필요 없다. 실제 모델 실행(P3) 전에 경로를 정한다 — spike/agents_sdk/README.md

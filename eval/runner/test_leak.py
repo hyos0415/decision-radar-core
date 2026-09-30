@@ -65,12 +65,15 @@ for name, inp in SHOULD_PASS:
         failures.append(inp)
 
 # 격리 이후 실행한 transcript가 있으면 오탐 0이어야 한다 (eval/runs는 gitignore — 없으면 건너뜀)
+# 예외: 제품 스파이크의 음성 대조 CTRL-repo-path는 일부러 레포 경로를 부른 실행이다 — 잡혀야 한다
 for t in sorted(glob.glob(os.path.join(rc.EVAL, "runs", "*", "*", "transcript*.jsonl"))):
     events = [json.loads(l) for l in open(t, encoding="utf-8") if l.strip().startswith("{")]
     hits = rc.answer_key_access(rc.tool_uses(events))
     rel = os.path.relpath(t, rc.EVAL)
-    print(f"  {'ok  ' if not hits else 'FP  '} run  {rel}")
-    if hits:
+    want_hit = "CTRL-repo-path" in rel
+    ok = bool(hits) == want_hit
+    print(f"  {'ok  ' if ok else ('MISS' if want_hit else 'FP  ')} {'hit ' if want_hit else 'run '} {rel}")
+    if not ok:
         failures.append(rel)
 
 print(f"\n{'FAILED ' + str(len(failures)) if failures else 'all passed'}")
