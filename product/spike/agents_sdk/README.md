@@ -41,6 +41,18 @@ cp $(dirname $($P -c "import litellm,os;print(litellm.__file__)"))/litellm_core_
 $P product/spike/agents_sdk/run_eval.py --model litellm JHS-001 [--no-register]   # .env의 ANTHROPIC_API_KEY. 기본은 모델 표 등록
 ```
 
+### capture 실제 모델 조기 확인 — JHS-014 k=1 (2026-09-30, $0.045)
+
+확인하려던 위험: Sonnet 5.5는 thinking 블록을 **바꾸지 않은 채** 돌려받아야 한다 — 1턴의 thinking이 상태 파일을 거쳐 새 프로세스로 가도 온전한가.
+
+- **온전했다.** 2턴 요청(메시지 5)도 adaptive thinking, 400 없음. 상태 파일 51KB에 thinking 서명 5개. P3 0 · P5 0 · P6 통과 — LiteLLM 경로 유지
+- 채점은 2개 실패 — 둘 다 **제품 프롬프트의 빈틈**이었다. 스킬은 `references/schema.md`에서 받는 정의·관례를 제품 모델은 못 받았다
+  - `link_candidates = []` ← 모델이 `["0003", "0006"]`(관련 ADR + 방금 쓴 자기 ADR)을 넣음. schema.md의 정의("R7 3중 키가 일치한 ADR ID")가 프롬프트에 없었다
+  - evidence URL 정확 일치 ← 대화에 없던 `https://`를 붙임. schema.md는 예시로 scheme 없는 표기를 쓴다
+- 고친 것 (`capture_flow.py`): `link_candidates`에 schema.md 정의를 Field 설명으로, URL은 대화 표기 그대로. **결과를 본 뒤의 수정**이라 범위를 스킬이 받는 정의와 같게 맞추는 데로 한정했다 — 답을 알려 주는 수정은 하지 않는다. 판정은 마지막 전체 실행
+- 잘한 것: 블로그를 evidence에서 빼 Research Note로 보냈고, "어시스턴트의 링크 없는 의견"도 따로 적었다
+- 참고: 채점기의 URL 정확 비교는 scheme 차이도 실패로 친다. 뜻은 같은 URL이다 — 규율 2(eval이 정직을 벌하면 픽스처를 고친다)의 후보지만, 이번엔 관례를 맞추는 쪽을 택했다
+
 ## 스킬과 다른 점 (설계)
 
 - **모델은 도구로 ADR을 쓸 수 없다.** 도구는 `snapshot_fetch`·`snapshot_search`·`read_repo_file` — 읽기뿐. ADR을 쓰는 길은 `decide --apply` 하나라서 R8(status 불변)이 프롬프트가 아니라 구조로 선다

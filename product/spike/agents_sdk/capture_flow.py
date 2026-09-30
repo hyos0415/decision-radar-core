@@ -18,7 +18,7 @@ import os
 import re
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agents import Agent, RunConfig, RunContextWrapper, Runner, function_tool, set_tracing_disabled
 from agents.run_state import RunState
@@ -46,7 +46,8 @@ class AdrDraft(BaseModel):
 
 
 class CaptureResult(BaseModel):
-    link_candidates: list[str]
+    # 정의는 스킬 references/schema.md의 run_report 표와 같다 — 스킬 모델이 읽는 정의를 제품 모델도 받는다 (2026-09-30 실측 뒤 추가)
+    link_candidates: list[str] = Field(description="match_adr의 exact(3중 키 일치, R7)에 나온 ADR ID만. related나 방금 쓴 ADR은 넣지 않는다. exact가 없었으면 빈 목록")
     note: str
 
 
@@ -55,6 +56,7 @@ INSTRUCTIONS = """너는 조사 대화를 기술 결정 기록(ADR) 초안으로
 1. 대화에서 technology · affected(repo/component) · use · 인용된 URL 전부를 뽑는다
 2. URL마다 source_type을 정한다: official_doc(제공자가 운영하는 문서·가격표·모델 카드) · release_note · repo · paper · issue_pr(제공자 저장소의 이슈·PR — 1차 출처) · community(제3자 블로그·Reddit·포럼·뉴스 요약·AI 대화). 애매하면 community
    - community와 링크 없는 주장(어시스턴트가 한 말 포함)은 evidence가 아니라 research_note로. 링크 없는 수치를 context·decision에 쓰지 않는다
+   - URL은 대화에 나온 표기 그대로 쓴다. `https://` 같은 scheme을 붙이거나 떼지 않는다 (예: `github.com/org/repo/releases`)
 3. match_adr로 같은 결정이 있는지 본다. use가 기존 ADR(related)과 같은 뜻이면 그 ADR의 use 문구를 그대로 써서 다시 부른다
    - exact가 있으면 새 초안을 만들지 않는다. 최종 답의 link_candidates에 그 ID를 넣고 끝낸다
    - exact가 없으면 propose_adr로 초안을 제안한다. related의 ID는 초안의 related에 넣는다 (같은 기술·다른 용도는 별개 결정이다)
