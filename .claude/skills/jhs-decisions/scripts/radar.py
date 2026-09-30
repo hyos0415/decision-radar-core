@@ -148,10 +148,51 @@ def validate_fm(fm):
     return errs, warns
 
 
+NO_CONDITION_NOTE = "재검토 조건 없음"  # R17-2 — 근거가 없어 조건을 만들지 않았다는 본문 표시
+
+
+def norm_url(u):
+    return re.sub(r"^https?://", "", (u or "").strip()).rstrip("/")
+
+
+def is_repo_hint(h):
+    """`repo:<repo>/<path>` 또는 `<repo>:<path>` (repo 이름에는 점이 없다 — 도메인과 가른다)."""
+    h = (h or "").strip()
+    if h.startswith("repo:"):
+        return True
+    m = re.match(r"^([\w-]+):(?!//)\S", h)
+    return bool(m) and "." not in m.group(1)
+
+
+def validate_draft(fm, body):
+    """R17 (2026-09-30): proposed 초안의 재검토 조건. 사람이 쓴 기존 ADR(proposed 아님)은 대상이 아니다.
+
+    ADR 파일만 보고 알 수 있는 것만 여기서 막는다. basis가 대화·소식의 문장을 그대로 인용했는지는
+    대화가 있어야 알 수 있어서 eval 채점이 본다.
+    """
+    errs = []
+    if not isinstance(fm, dict) or fm.get("status") != "proposed":
+        return errs
+    conds = fm.get("revisit_when") or []
+    if not conds and NO_CONDITION_NOTE not in (body or ""):  # R17-2
+        errs.append(f"재검토 조건이 없으면 본문 Research Note에 「{NO_CONDITION_NOTE}: …」를 적는다 (R17-2)")
+    ev = {norm_url(e.get("url")) for e in fm.get("evidence") or [] if isinstance(e, dict) and e.get("source_type") != "community"}
+    for c in conds:
+        cid = c.get("id")
+        if not str(c.get("basis") or "").strip():  # R17-3
+            errs.append(f"{cid}: basis(근거 문장 인용)가 없다 — 근거 없는 조건은 쓰지 않는다 (R17-3)")
+        if c.get("check_type") in ("web", "numeric", "repo"):  # R17-5
+            h = c.get("source_hint")
+            if not (is_repo_hint(h) or norm_url(h) in ev):
+                errs.append(f"{cid}: source_hint는 evidence의 1차 출처 URL이거나 repo 경로여야 한다 (R17-5): {h!r}")
+    return errs
+
+
 def cmd_validate(a):
     report = []
     for x in load_all(a.adr_dir):
         errs, warns = validate_fm(x["fm"])
+        errs += validate_draft(x["fm"], read_adr(x["file"])[1])
         report.append({"id": x["id"], "file": x["file"], "errors": errs, "warnings": warns})
     out({"ok": not any(r["errors"] for r in report), "adrs": report})
     sys.exit(0 if not any(r["errors"] for r in report) else 1)
@@ -349,6 +390,35 @@ def cmd_next_id(a):
     out({"next_id": f"{(max(ids) + 1) if ids else 1:04d}"})
 
 
+def append_line(path, line):
+    """여러 프로세스가 동시에 덧붙여도 줄이 섞이지 않게 잠그고 쓴다.
+
+    2026-09-30 실측: LangGraph가 조건 판정을 병렬로 돌리자 served.log가 4줄 → 3줄 + 조각("uages")이 됐고,
+    INV-2가 멀쩡한 근거 URL을 버려 met이 undetermined로 강등됐다. 스킬도 모델이 도구를 병렬로 부르면 같다.
+    """
+    data = (line + "\n").encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)  # 0번 바이트를 뮤텍스로 — 쓰기는 O_APPEND라 늘 끝에 붙는다
+            try:
+                os.write(fd, data)
+            finally:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                os.write(fd, data)
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def snapshot_dir():
     d = os.environ.get("RADAR_SNAPSHOT_DIR")
     if not d:
@@ -372,7 +442,7 @@ def cmd_snapshot(a):
         body = open(os.path.join(d, ent["file"]), encoding="utf-8").read()
         log = os.environ.get("RADAR_SERVED_LOG")
         if log:
-            open(log, "a", encoding="utf-8").write(url + "\n")
+            append_line(log, url)
         out({"url": url, "ok": True, "status": 200, "source_type_hint": ent.get("source_type"), "body": body})
     elif a.op == "search":
         p = os.path.join(d, "search.json")

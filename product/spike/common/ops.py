@@ -67,6 +67,8 @@ def slug(s):
 def render(draft, now):
     fm = {"status": "proposed", "date": now[:10], "technology": draft.technology, "use": draft.use,
           "affected": [a.model_dump() for a in draft.affected], "evidence": [e.model_dump() for e in draft.evidence]}
+    if draft.revisit_when:  # R17 — 없으면 칸을 두지 않는다 (본문 「재검토 조건 없음」)
+        fm["revisit_when"] = [c.model_dump(exclude_none=True) for c in draft.revisit_when]
     body = [f"# {draft.title}", "", "## Context and Problem Statement", draft.context, "", "## Decision Outcome", draft.decision, ""]
     if draft.related:
         body += ["관련 결정: " + ", ".join(draft.related), ""]

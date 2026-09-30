@@ -23,6 +23,22 @@ class Affected(BaseModel):
     component: str
 
 
+class Threshold(BaseModel):
+    metric: str
+    op: Literal["<", "<=", ">", ">=", "=="]
+    value: float
+
+
+class RevisitCondition(BaseModel):
+    """초안의 재검토 조건 — R17 (2026-09-30)."""
+    id: str
+    check_type: Literal["web", "repo", "numeric", "human"]
+    condition: str
+    source_hint: str | None = Field(description="evidence에 넣은 1차 출처 URL이거나 repo 경로 (`<repo>:<path>`). human이면 null")
+    threshold: Threshold | None = Field(description="numeric일 때만 — 적힌 수치와 비교. 아니면 null")
+    basis: str = Field(description="판단 근거 문장을 대화·소식에서 그대로 인용")
+
+
 class AdrDraft(BaseModel):
     """capture 초안. status 칸이 없다 — 코드가 proposed로 박는다 (R8)."""
     title: str
@@ -34,6 +50,7 @@ class AdrDraft(BaseModel):
     decision: str
     related: list[str]
     research_note: list[str]
+    revisit_when: list[RevisitCondition] = Field(description="R17 — 적힌 판단 근거가 바뀌는 사건. 근거가 없으면 빈 목록 + research_note에 「재검토 조건 없음: …」")
 
 
 class CaptureResult(BaseModel):

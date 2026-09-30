@@ -261,6 +261,36 @@ def norm_aff(xs):
     return {(norm_tech(x.get("repo")), norm_tech(x.get("component"))) for x in xs or [] if isinstance(x, dict)}
 
 
+R17_NOTE = "재검토 조건 없음"
+_R17_STRIP = re.compile(r"[\s\"'`“”‘’()（）\[\].,·「」:;]")
+
+
+def _r17_norm(s):
+    return _R17_STRIP.sub("", (s or "")).lower()
+
+
+def _url(u):
+    return re.sub(r"^https?://", "", (u or "").strip()).rstrip("/")
+
+
+def r17_checks(check, label, spec, fm, body, input_text):
+    """초안의 재검토 조건 (R17) — 확정 시트 precondition-sheet-r17.md §5. 조건 문구는 채점하지 않는다."""
+    conds = fm.get("revisit_when") or []
+    if "count" in spec:
+        check(f"{label} R17 조건 수 = {spec['count']}", len(conds) == spec["count"], [c.get("condition") for c in conds])
+        if spec["count"] == 0:
+            check(f"{label} R17-② 「{R17_NOTE}」 메모", R17_NOTE in (body or ""))
+    if "min" in spec:
+        check(f"{label} R17 조건 수 ≥ {spec['min']}", len(conds) >= spec["min"], len(conds))
+    for w in spec.get("must_include", []):
+        hit = any(c.get("check_type") == w["check_type"] and _url(c.get("source_hint")) == _url(w["source_hint"]) for c in conds)
+        check(f"{label} R17 조건 {w['check_type']} · {w['source_hint']}", hit,
+              [(c.get("check_type"), c.get("source_hint")) for c in conds])
+    src = _r17_norm(input_text)
+    outside = [c.get("basis") for c in conds if not c.get("basis") or _r17_norm(c.get("basis")) not in src]
+    check(f"{label} R17-③⑥ basis ⊂ 입력", not outside, outside)
+
+
 def grade_detect(case, before, work, events):
     exp = case["expected"]
     final = next((e for e in reversed(events) if e.get("type") == "result"), {})
@@ -295,6 +325,25 @@ def grade_detect(case, before, work, events):
     if exp["pr"]:
         check(f"새 초안 수 = 후보 수 ({len(want)})", len(new_ids) == len(want), new_ids)
         check("새 초안 status = proposed", all(after[i]["status"] == "proposed" for i in new_ids), {i: after[i]["status"] for i in new_ids})
+        if any("r17" in w for w in want.values()):  # R17 — 초안 파일을 technology로 짝짓는다
+            feed = json.load(open(os.path.join(work, "snapshots", "feed.json"), encoding="utf-8"))
+            input_text = "\n".join(f"{d.get('title', '')}\n{d.get('summary', '')}" for d in feed)
+            drafts = {}
+            for i in new_ids:
+                m = FM.match(after[i]["text"])
+                fm = yaml.safe_load(m.group(1)) or {}
+                drafts[norm_tech(fm.get("technology"))] = (fm, m.group(2))
+            v = subprocess.run([sys.executable, os.path.join(ROOT, ".claude", "skills", "jhs-decisions", "scripts", "radar.py"),
+                                "validate", os.path.join(work, "adr-fixture", "docs", "adr")], capture_output=True, text=True, encoding="utf-8")
+            errs = {a["id"]: a["errors"] for a in json.loads(v.stdout)["adrs"] if a["id"] in new_ids}
+            check("새 초안 validate 통과 (R17-②③⑤ 포함)", not any(errs.values()), {k: e for k, e in errs.items() if e})
+            for k, w in want.items():
+                if "r17" not in w:
+                    continue
+                fm_body = drafts.get(k)
+                check(f"{k} 초안 파일 있음 (R17 채점용)", fm_body is not None, sorted(drafts))
+                if fm_body:
+                    r17_checks(check, k, w["r17"], fm_body[0], fm_body[1], input_text)
     else:
         check("새 초안 0", not new_ids, new_ids)
     check("INV-1 기존 ADR 무변경 (status·본문)", all(after[k]["text"] == v["text"] for k, v in before.items() if k in after),

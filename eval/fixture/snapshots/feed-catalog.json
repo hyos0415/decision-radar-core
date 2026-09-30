@@ -19,5 +19,8 @@
          "url": "github.example/leann/releases", "source_type": "release_note"},
  "D07": {"title": "react 19.2.0", "kind": "release", "package": "react", "version": "19.2.0",
          "summary": "Major feature release: new compiler defaults.",
-         "url": "github.example/react/releases/v19.2.0", "source_type": "release_note"}
+         "url": "github.example/react/releases/v19.2.0", "source_type": "release_note"},
+ "D08": {"title": "HanNER-pii 공개: 한국어 PII NER 모델", "kind": "new_model", "version": "0.3",
+         "summary": "한국어 개인정보(주민등록번호·전화번호) 개체명 인식 모델. MIT. 알려진 한계: 여권번호·외국인등록번호는 아직 인식하지 않는다.",
+         "url": "models.example/hanner-pii", "source_type": "official_doc"}
 }

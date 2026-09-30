@@ -380,6 +380,133 @@ def _(t):
     assert not v["ok"] and any("watch 값" in e for e in a3["errors"]), a3
 
 
+DRAFT_OK = """---
+status: proposed
+date: 2026-09-30
+technology: KoPII-small
+use: PII 탐지 보완
+affected:
+  - {repo: medical-mate, component: pii-guard}
+evidence:
+  - {url: "models.example/kopii-small", source_type: official_doc}
+  - {url: "github.example/kopii/issues/12", source_type: issue_pr}
+revisit_when:
+  - id: c1
+    check_type: web
+    condition: 외국인등록번호를 주민등록번호로 오탐하는 이슈 #12가 해결된다
+    source_hint: github.example/kopii/issues/12
+    basis: "외국인등록번호를 주민등록번호로 오탐하는 이슈(#12)가 열려 있다"
+---
+# KoPII-small로 pii-guard를 보완할지
+
+## Research Note
+"""
+
+
+def draft_errors(t, text):
+    open(os.path.join(t, "adr", "0006-kopii-small.md"), "w", encoding="utf-8").write(text)
+    v = run("validate", os.path.join(t, "adr"))
+    return next(a for a in v["adrs"] if a["id"] == "0006")["errors"]
+
+
+@case("R17: 근거 있는 초안 조건(basis + evidence의 1차 출처) → validate 통과")
+def _(t):
+    assert draft_errors(t, DRAFT_OK) == []
+
+
+@case("R17-3: basis 없는 조건 → 오류 (결정 자체를 적은 human 조건 포함)")
+def _(t):
+    bad = DRAFT_OK.replace('    basis: "외국인등록번호를 주민등록번호로 오탐하는 이슈(#12)가 열려 있다"\n', "") + ""
+    assert any("R17-3" in e for e in draft_errors(t, bad))
+    human = DRAFT_OK.replace("""  - id: c1
+    check_type: web
+    condition: 외국인등록번호를 주민등록번호로 오탐하는 이슈 #12가 해결된다
+    source_hint: github.example/kopii/issues/12
+    basis: "외국인등록번호를 주민등록번호로 오탐하는 이슈(#12)가 열려 있다"
+""", """  - id: c1
+    check_type: human
+    condition: KoPII-small 도입을 검토할지 사람이 판단한다
+""")
+    assert any("R17-3" in e for e in draft_errors(t, human))
+
+
+@case("R17-5: source_hint가 evidence 밖(블로그) → 오류, repo 경로는 통과")
+def _(t):
+    blog = DRAFT_OK.replace("    source_hint: github.example/kopii/issues/12\n", "    source_hint: blog.devnews.example/kopii-review\n")
+    assert any("R17-5" in e for e in draft_errors(t, blog))
+    repo = DRAFT_OK.replace("    source_hint: github.example/kopii/issues/12\n", "    source_hint: medical-mate:eval/pii-eval.jsonl\n")
+    assert not any("R17-5" in e for e in draft_errors(t, repo))
+
+
+@case("R17-2: 조건 없는 초안 — 본문에 「재검토 조건 없음」 없으면 오류, 있으면 통과")
+def _(t):
+    head, rest = DRAFT_OK.split("revisit_when:\n", 1)
+    empty = head + rest[rest.index("---"):]
+    assert any("R17-2" in e for e in draft_errors(t, empty))
+    noted = empty.replace("## Research Note\n", "## Research Note\n- 재검토 조건 없음: 대화에 판단 근거가 없다 (블로그 후기뿐)\n")
+    assert draft_errors(t, noted) == []
+
+
+@case("R17은 proposed 초안만 — 사람이 쓴 기존 ADR(basis 없음)은 오류 아님")
+def _(t):
+    v = run("validate", os.path.join(t, "adr"))
+    assert v["ok"] and not any("R17" in e for a in v["adrs"] for e in a["errors"]), v
+
+
+def _snap(t):
+    snap = os.path.join(t, "snap")
+    os.makedirs(snap, exist_ok=True)
+    urls = [f"docs.example/page-{i:02d}" for i in range(40)]
+    json.dump({u: {"file": "p.md", "source_type": "official_doc"} for u in urls}, open(os.path.join(snap, "index.json"), "w", encoding="utf-8"))
+    open(os.path.join(snap, "p.md"), "w", encoding="utf-8").write("body")
+    return snap, urls
+
+
+@case("served.log 잠금 — 다른 프로세스가 잠근 동안 fetch는 기다렸다가 쓴다 (INV-2 경쟁, LangGraph 병렬 판정에서 실측)")
+def _(t):
+    """결정론 — 확률에 기대는 동시 쓰기 테스트는 고치기 전 코드에서 12라운드 중 0번 걸렸다 (2026-09-30)."""
+    import time
+    snap, urls = _snap(t)
+    log = os.path.join(t, "served.log")
+    open(log, "w").close()
+    env = {**os.environ, "RADAR_SNAPSHOT_DIR": snap, "RADAR_SERVED_LOG": log}
+    fd = os.open(log, os.O_RDWR)
+    if os.name == "nt":
+        import msvcrt
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        p = subprocess.Popen([sys.executable, JHS, "snapshot", "fetch", urls[0]], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1.5)
+        waiting = p.poll() is None
+        written_early = os.path.getsize(log)  # 잠근 동안 읽지 않는다 — Windows 잠금은 강제라 읽기도 막힌다
+    finally:
+        if os.name == "nt":
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    p.wait(timeout=30)
+    assert waiting and written_early == 0, ("잠금을 기다리지 않았다", waiting, written_early)
+    assert open(log, encoding="utf-8").read() == urls[0] + "\n", "잠금이 풀린 뒤에 써야 한다"
+
+
+@case("snapshot fetch 동시 40회 → served.log 줄 유실·섞임 0 (스모크 — 위 잠금 테스트가 본체)")
+def _(t):
+    snap, urls = _snap(t)
+    log = os.path.join(t, "served.log")
+    env = {**os.environ, "RADAR_SNAPSHOT_DIR": snap, "RADAR_SERVED_LOG": log}
+    procs = [subprocess.Popen([sys.executable, JHS, "snapshot", "fetch", u], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+             for u in urls]
+    for q in procs:
+        q.wait()
+    got = [l.rstrip("\n") for l in open(log, encoding="utf-8")]
+    assert sorted(got) == sorted(urls), (len(got), [g for g in got if g not in urls][:3])
+
+
 @case("next-id")
 def _(t):
     assert run("next-id", os.path.join(t, "adr"))["next_id"] == "0006"

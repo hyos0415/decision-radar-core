@@ -131,8 +131,10 @@
           "0003"
         ],
         "research_note": [
-          "blog.devnews.example/kopii-review — 사용 후기 블로그(community). 주민번호 탐지가 잘 된다는 평. 근거가 아니다"
-        ]
+          "blog.devnews.example/kopii-review — 사용 후기 블로그(community). 주민번호 탐지가 잘 된다는 평. 근거가 아니다",
+          "재검토 조건 없음: 대화의 판단 근거가 사용 후기 블로그(community)뿐이다 — 1차 출처 근거가 없다"
+        ],
+        "revisit_when": []
       }
     },
     "JHS-039": {
@@ -164,8 +166,10 @@
           "0003"
         ],
         "research_note": [
-          "붙여넣은 내부 메모의 '검토 결과 긍정적' — 링크 없는 주장. 근거가 아니다"
-        ]
+          "붙여넣은 내부 메모의 '검토 결과 긍정적' — 링크 없는 주장. 근거가 아니다",
+          "재검토 조건 없음: 붙여넣은 메모에 판단 근거(한계·결함·요구·수치)가 없다"
+        ],
+        "revisit_when": []
       }
     },
     "JHS-047": {
@@ -197,8 +201,10 @@
           "0003"
         ],
         "research_note": [
-          "blog.devnews.example/kopii-review — 사용 후기 블로그(community). 주민번호 탐지가 잘 된다는 평. 근거가 아니다"
-        ]
+          "blog.devnews.example/kopii-review — 사용 후기 블로그(community). 주민번호 탐지가 잘 된다는 평. 근거가 아니다",
+          "재검토 조건 없음: 대화의 판단 근거가 사용 후기 블로그(community)뿐이다 — 1차 출처 근거가 없다"
+        ],
+        "revisit_when": []
       }
     },
     "JHS-048": {
@@ -230,8 +236,10 @@
           "0003"
         ],
         "research_note": [
-          "blog.devnews.example/kopii-review — 사용 후기 블로그(community). 주민번호 탐지가 잘 된다는 평. 근거가 아니다"
-        ]
+          "blog.devnews.example/kopii-review — 사용 후기 블로그(community). 주민번호 탐지가 잘 된다는 평. 근거가 아니다",
+          "재검토 조건 없음: 대화의 판단 근거가 사용 후기 블로그(community)뿐이다 — 1차 출처 근거가 없다"
+        ],
+        "revisit_when": []
       }
     }
   },
