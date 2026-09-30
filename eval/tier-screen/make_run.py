@@ -1,6 +1,8 @@
 """tier-screen 실행 디렉터리 만들기 — prompt.md + items.json만 넣는다 (정답지는 넣지 않는다).
 
-실행: python eval/tier-screen/make_run.py <실행 디렉터리>
+실행: python eval/tier-screen/make_run.py <실행 디렉터리> [--set v2] [--examples]
+  --set v2      새 항목 15개(gold-v2-draft.md) + 정책 v1.2 정의 · 항목마다 쓰는 방식(usage)을 준다
+  --examples    정책 표 예시 34개를 프롬프트에 붙인다 (예시 효과 측정 B안)
 """
 
 import json
@@ -81,12 +83,61 @@ JSON 배열 하나만 출력한다. 다른 문장은 쓰지 않는다.
 """
 
 
+# v2 — 새 항목 15개. usage는 모델에게 주는 쓰임새 (정답 근거 문구는 넣지 않는다)
+ITEMS_V2 = [
+    ("N01", "PyYAML", "ADR 파일의 YAML frontmatter를 읽고 쓴다. 규칙 스크립트의 모든 명령이 이걸 거친다"),
+    ("N02", "GLiNER", "다른 프로젝트에서 NER 모델을 토크나이저로만 썼다"),
+    ("N03", "Elasticsearch 서버 (docker)", "검색 실험의 BM25·kNN 엔진"),
+    ("N04", "elasticsearch-py", "실험 하네스가 Elasticsearch에 색인·질의를 보내는 클라이언트"),
+    ("N05", "Neo4j 서버 (docker)", "그래프 검색 전략들의 그래프 저장소"),
+    ("N06", "neo4j (Python 드라이버)", "실험 하네스가 Neo4j에 Cypher 질의를 보내는 클라이언트"),
+    ("N07", "ranx", "검색 결과 RRF 합치기와 Recall·nDCG 계산"),
+    ("N08", "sentence-transformers", "BGE-M3 임베딩 모델을 로드해 dense 벡터를 만든다"),
+    ("N09", "BAAI/bge-m3", "로컬에서 도는 임베딩 모델"),
+    ("N10", "LightRAG", "여러 검색 전략 중 하나(추출 그래프)"),
+    ("N11", "openai-agents", "제품 런타임. 에이전트 루프가 우리 도구 함수를 부른다"),
+    ("N12", "litellm", "openai-agents에서 Claude 모델을 부를 때 쓰는 어댑터"),
+    ("N13", "gpt-6-luna", "가벼운 태스크에 OpenAI API로 부르는 모델"),
+    ("N14", "GitHub API", "정기 실행이 PR·issue를 연다"),
+    ("N15", "Codex CLI", "개발 중에 선별 시험을 돌릴 때만 쓴다. 운영에는 안 들어간다"),
+]
+
+PROMPT_V2 = PROMPT.replace(
+    "| L5 | 공급자 SDK | L2·L3을 부르는 클라이언트 |",
+    "| L5 | 공급자 SDK | L1·L2·L3을 부르는 클라이언트 (DB·검색 엔진 드라이버 포함) |").replace(
+    "- 등급은 **기술의 종류**로 매긴다. 운영에서 쓰는지 개발에서만 쓰는지는 등급이 아니다 (별도로 처리한다)",
+    "- 등급은 **이 프로젝트에서 그 기술을 쓰는 방식**으로 매긴다 (`items.json`의 `usage`). 같은 기술도 쓰임에 따라 등급이 달라질 수 있다")
+
+EXAMPLES = """
+## 예시 (다른 레포에서 이렇게 매겼다)
+
+| 등급 | 예시 |
+|---|---|
+| L0 | Python 3.12 |
+| L1 | `python:3.12-slim` · `vllm/vllm-openai` · llama.cpp `llama-server` · CUDA |
+| L2 | Bedrock `nova-pro` · `claude-sonnet-5` · `gpt-5.6-terra` · Jev |
+| L3 | Langfuse Cloud · Bedrock Guardrails · Finlife Open API · 국가법령정보 API |
+| L4 | fastapi · pydantic · uvicorn · jinja2 |
+| L5 | boto3 · anthropic · openai · langfuse(SDK) · google-genai · typesafe-sdk |
+| L6 | kiwipiepy · pdfplumber · torch · transformers |
+| L7 | pytest · ruff · k6 |
+| L8 | python-dotenv · tzdata · requests · httpx |
+"""
+
+
 def main():
     d = os.path.abspath(sys.argv[1])
     os.makedirs(d, exist_ok=True)
-    items = [{"id": i, "technology": t, "source": s} for i, t, s in ITEMS]
+    v2, ex = "--set" in sys.argv and "v2" in sys.argv, "--examples" in sys.argv
+    if v2:
+        items = [{"id": i, "technology": t, "usage": u} for i, t, u in ITEMS_V2]
+    else:
+        items = [{"id": i, "technology": t, "source": s} for i, t, s in ITEMS]
     random.Random(20260930).shuffle(items)  # 등급 순서대로 주지 않는다 — 순서 고정
-    open(os.path.join(d, "prompt.md"), "w", encoding="utf-8", newline="\n").write(PROMPT)
+    prompt = PROMPT_V2 if v2 else PROMPT
+    if ex:
+        prompt = prompt.replace("## 출력", EXAMPLES.strip() + "\n\n## 출력")
+    open(os.path.join(d, "prompt.md"), "w", encoding="utf-8", newline="\n").write(prompt)
     json.dump(items, open(os.path.join(d, "items.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print(d, len(items))
 

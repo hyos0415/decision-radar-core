@@ -35,9 +35,10 @@ repo 전체에서 기술을 뽑으면 수십 개가 나온다(pydantic·requests
 
 | # | 무엇 | v1.2 규칙 |
 |---|---|---|
-| V2-1 | 등급을 무엇으로 매기나 | **이 레포에서 쓰는 방식으로 매긴다** (v1.1 「기술의 종류로」를 대체). 같은 기술도 레포마다 등급이 다를 수 있다 — 예: GLiNER(NER 모델)를 토크나이저로만 쓴 레포에서는 모델(L2)이 아니라 그 기능의 등급이다 (사용자 사례). 그래서 단위는 사실상 (기술, repo)이고, 등급을 매기려면 **코드를 읽어야 한다** — 제품의 몫(overview 틈 ④)과 같은 자리 |
+| V2-1 | 등급을 무엇으로 매기나 | **이 레포에서 쓰는 방식으로 매긴다** (v1.1 「기술의 종류로」를 대체). 같은 기술도 레포마다 등급이 다를 수 있다 — 예: GLiNER(NER 모델)를 토크나이저로만 쓴 프로젝트에서는 모델(L2)이 아니라 그 기능의 등급(L6)이다 (사용자의 다른 프로젝트 사례 — 이 레포들 밖). 그래서 단위는 사실상 (기술, repo)이고, 등급을 매기려면 **코드를 읽어야 한다** — 제품의 몫(overview 틈 ④)과 같은 자리 |
 | — | 이유 | tier-screen에서 Luna·Haiku가 같은 L4 경계(pydantic·jinja2·uvicorn)에서 틀렸다. "뼈대인가 기능 하나인가"는 종류가 아니라 쓰임새의 질문이다 |
 | — | 쓰임새 정보가 없으면 | V1-U4(분류 불가)로 간다 |
+| V2-2 | DB·검색 엔진의 클라이언트 (예: PostgreSQL JDBC, elasticsearch-py, neo4j 드라이버) | **L5를 「L1·L2·L3을 부르는 클라이언트」로 넓힌다** (사용자 결정). v1의 L5 「L2·L3을 부르는 클라이언트」에는 L1(DB)을 부르는 드라이버가 들어갈 자리가 없었다 |
 
 ## 2. 축 1 — 기술 등급
 
@@ -50,7 +51,7 @@ repo 전체에서 기술을 뽑으면 수십 개가 나온다(pydantic·requests
 | L2 | 호스팅 모델 (v1.1: 호스팅·로컬) | 외부 API로 부르는 모델 (v1.1: 로컬 서빙 모델 포함) | Bedrock `nova-pro`(운영 기본) · `claude-sonnet-5` · `gpt-5.6-terra` · Jev | 확정 |
 | L3 | 호스팅 서비스 | 모델이 아닌 외부 서비스·공공 API | Langfuse Cloud · Bedrock Guardrails · Finlife API · 국가법령정보 API | 확정 |
 | L4 | 앱 프레임워크 | 앱의 뼈대 — 바꾸면 코드 전반이 바뀜 | fastapi · pydantic · uvicorn · jinja2 | 확정 |
-| L5 | 공급자 SDK | L2·L3을 부르는 클라이언트 | boto3 · anthropic · openai · google-genai · langfuse · typesafe-sdk | 확정 |
+| L5 | 공급자 SDK | L2·L3을 부르는 클라이언트 (v1.2: L1·L2·L3) | boto3 · anthropic · openai · google-genai · langfuse · typesafe-sdk | 확정 |
 | L6 | 도메인 라이브러리 | 특정 기능 하나를 맡음 | kiwipiepy · pdfplumber · torch·transformers | 확정 |
 | L7 | 개발·테스트 도구 | 운영에 안 들어감 | pytest · ruff · k6 | 확정 |
 | L8 | 유틸 | 작고 대체 쉬움 | python-dotenv · tzdata · requests · httpx | 확정 |

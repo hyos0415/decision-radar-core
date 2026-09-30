@@ -1,6 +1,6 @@
 """tier-screen 채점 — 결정론 (집합 일치). 정답지: gold-draft.md 표.
 
-실행: python eval/tier-screen/grade.py <모델 출력 파일>
+실행: python eval/tier-screen/grade.py <모델 출력 파일> [정답지 md — 기본 gold-draft.md]
 """
 
 import json
@@ -12,8 +12,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ORDER = [f"L{i}" for i in range(9)]
 
 
-def gold():
-    rows = re.findall(r"^\| (T\d\d) \| .*? \| (L\d) \|", open(os.path.join(HERE, "gold-draft.md"), encoding="utf-8").read(), re.M)
+def gold(path=None):
+    text = open(path or os.path.join(HERE, "gold-draft.md"), encoding="utf-8").read()
+    rows = re.findall(r"^\| (T\d\d) \| .*? \| (L\d) \|", text, re.M)
+    rows = rows or re.findall(r"^\| (N\d\d) \|.*\| (L\d) \|$", text, re.M)  # v2: 마지막 열 = 확정
     return {i: {t} for i, t in rows}
 
 
@@ -25,7 +27,7 @@ def parse(path):
 
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
-    g, out = gold(), parse(sys.argv[1])
+    g, out = gold(sys.argv[2] if len(sys.argv) > 2 else None), parse(sys.argv[1])
     ok, wrong, unsure, missing, over, under = [], [], [], [], [], []
     for i, want in sorted(g.items()):
         x = out.get(i)
@@ -46,7 +48,7 @@ def main():
     n = len(g)
     print(json.dumps({"n": n, "correct": len(ok), "wrong": len(wrong), "unsure": len(unsure), "missing": len(missing),
                       "over_tier": over, "under_tier": under,
-                      "pass": len(ok) >= 27 and len(unsure) <= 0.3 * n,
+                      "pass": len(ok) >= 27 and len(unsure) <= 0.3 * n if n == 34 else None,  # v2는 관찰 — 통과 기준 없음
                       "wrong_detail": wrong, "unsure_ids": unsure, "missing_ids": missing}, ensure_ascii=False, indent=1))
 
 
