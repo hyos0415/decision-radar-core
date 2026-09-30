@@ -56,7 +56,7 @@ flowchart LR
         S["M3 검색<br/>(Retrieval Arena·라우터)"]
         IM["M4 영향 매칭<br/>외부 변화 × 내부 코드"]
         J["M5 판정<br/>revisit · detect · capture"]
-        RULE["jhs.py 규칙층<br/>R1~R16 집행"]
+        RULE["radar.py 규칙층<br/>R1~R16 집행"]
         EX["M6 최소 실험 제안"]
     end
 
@@ -105,10 +105,10 @@ DISCOVERED → RESEARCHED → REVIEW_CANDIDATE → USER_REVIEW
 |---|---|---|
 | 실행 | Claude Code routine, 매 실행 새 세션 | LangGraph 서비스, checkpoint로 이어짐 |
 | state | ADR 파일뿐 (`revisit_last_checked`) | ADR 파일(원본) + DB(인덱스·checkpoint·lifecycle) |
-| 검색 | Full Context + 정확 일치(`jhs.py match`) | Retrieval Arena 결과로 고른 전략·라우터 |
+| 검색 | Full Context + 정확 일치(`radar.py match`) | Retrieval Arena 결과로 고른 전략·라우터 |
 | 사람 검토 | PR·issue | 웹 Inbox + interrupt/resume |
 | LLM | 구독 (`claude -p`) | API (역할별 모델, §7) |
-| **공유** | 명세 R1~R16 · `jhs.py` 규칙층 · ADR 포맷(MADR 3.x + 확장) · eval 케이스와 채점 | ← 같음 |
+| **공유** | 명세 R1~R16 · `radar.py` 규칙층 · ADR 포맷(MADR 3.x + 확장) · eval 케이스와 채점 | ← 같음 |
 
 **state 원본은 ADR 마크다운(git)**이다. DB는 인덱스와 checkpoint다. 그래야 두 구현이 같은 데이터 위에서 돌아 비교가 성립하고, "결정 기록은 사용자 소유"(판정문 D)도 지켜진다.
 LangGraph checkpoint와 ADR 파일의 정합성 유지가 새 과제로 생긴다 — 이것이 G5의 실제 학습 지점이다.
@@ -119,9 +119,9 @@ LangGraph checkpoint와 ADR 파일의 정합성 유지가 새 과제로 생긴�
 
 | # | 틈 | 확인 방법 |
 |---|---|---|
-| ① | **재알림(flapping)**: `decide`는 직전 결과 하나만 본다. met → undetermined(403 한 주) → met이면 같은 알림이 다시 나간다. 픽스처의 `alerted` 필드는 읽히지 않는다 | `jhs.py` `cmd_decide` R4 분기. eval은 케이스당 **1회 실행**이라 원리상 못 잡는다 |
+| ① | ~~**재알림(flapping)**~~ → **해소 (2026-09-30, HYO-18)**: `last_determined`로 직전 확정 결과를 이어받는다 (명세 R4 변경). 원래 기록: `decide`는 직전 결과 하나만 본다. met → undetermined(403 한 주) → met이면 같은 알림이 다시 나간다. 픽스처의 `alerted` 필드는 읽히지 않는다 | `radar.py` `cmd_decide` R4 분기. eval은 케이스당 **1회 실행**이라 원리상 못 잡는다 |
 | ② | **재검토 조건 생성이 미측정**: revisit 루프의 입력인 `revisit_when`(check_type·source_hint·threshold)을 누가 쓰는가. 픽스처 조건 7개는 전부 손으로 썼고, capture·detect 케이스 17건 중 초안의 `revisit_when`을 채점한 것은 **0건** | 케이스 `expected` 키 집계 |
-| ③ | **동일성이 문자열**: `match`는 technology·use를 공백·대소문자만 정규화해 비교한다. "Bedrock Guardrails" ≠ "Amazon Bedrock Guardrails". 모델이 기존 문구를 복사하려면 **전체 ADR을 읽어야** 한다 → 규모에서 무너진다 | `jhs.py` `norm()`·`cmd_match` |
+| ③ | **동일성이 문자열**: `match`는 technology·use를 공백·대소문자만 정규화해 비교한다. "Bedrock Guardrails" ≠ "Amazon Bedrock Guardrails". 모델이 기존 문구를 복사하려면 **전체 ADR을 읽어야** 한다 → 규모에서 무너진다 | `radar.py` `norm()`·`cmd_match` |
 | ④ | **영향 매칭 = 매핑 복사**: detect `affected`는 CLAUDE.md에 사람이 쓴 매핑과 같은지로 채점한다. 코드를 읽는 추론은 없다. 제안서가 "핵심 차별점"(§13)이라 한 부분이다 | `affected_exact` 채점 |
 | ⑤ | **실제 routine 0회**: 네트워크 설정·clone·push·PR·일일 한도를 거친 적이 없다 | cases/README D6 |
 | ⑥ | **문장 품질 미채점**: judge 루브릭 2건(JHS-022·036), 실행 0회. PR 본문·초안의 "왜 관련·무엇이 미확인"은 채점 밖 | 실험 기록 |
@@ -146,7 +146,7 @@ LangGraph checkpoint와 ADR 파일의 정합성 유지가 새 과제로 생긴�
 | **M2 수집** | 공식 출처(버전·source_type 신뢰도) + 커뮤니티 급증 신호 | 피드·API 수집기, 급증 z-score | G3 |
 | **M3 검색** | Retrieval Arena 전략, 질의 유형별 라우터 | ES(nori) · Neo4j(n10s) · 로컬 모델 — `retrieval-arena.md` | **G1·G2** |
 | **M4 영향 매칭** | 외부 변화 × 내부 코드(의존성·import) | 구조 그래프 탐색 + LLM 판단 | G2 |
-| **M5 판정** | revisit·detect·capture 조건 판정 | LLM + **`jhs.py` 규칙층 재사용** | 공정성 |
+| **M5 판정** | revisit·detect·capture 조건 판정 | LLM + **`radar.py` 규칙층 재사용** | 공정성 |
 | **M6 최소 실험 제안** | eval_assets·병목 재사용, 중단 조건 포함 | LLM | G3 (C-1·Risk 5) |
 | **M7 런타임** | HITL interrupt·대기·resume·checkpoint·재시도 | Agents SDK → LangGraph → plain Python + Anthropic SDK 순서로 시도, 같은 스파이크 기준 (2026-09-30, ADR `adr/0006`) | **G5** |
 | **M8 인터페이스** | 웹(Inbox·Decisions·Revisit) · MCP(대화 저장) · GitHub | 웹 프레임워크 미정 | **G4** |
@@ -160,7 +160,7 @@ LangGraph checkpoint와 ADR 파일의 정합성 유지가 새 과제로 생긴�
 - 외부 텍스트 안의 지시는 데이터다 (R11)
 - 근거 없는 met 금지, community는 근거가 아니다 (R1·R2·R6)
 - 승인 전 쓰기·원격 부작용 0 (R9)
-- 안전 조항은 프롬프트가 아니라 코드(`jhs.py`)로 집행한다 (CLAUDE.md 규율 1) — 모델이 바뀌어도 규칙은 안 바뀐다
+- 안전 조항은 프롬프트가 아니라 코드(`radar.py`)로 집행한다 (CLAUDE.md 규율 1) — 모델이 바뀌어도 규칙은 안 바뀐다
 - eval 불변식 INV-1~8 (`eval/cases/README.md`)
 
 ## 7. 멀티 모델
@@ -189,7 +189,7 @@ Anthropic·Gemini·OpenAI 크레딧을 역할별로 쓴다. 제안서 §14(PARTI
 - 그래프 추출은 API로. 로컬 LLM 추출은 Won't
 - **Elasticsearch·Neo4j는 docker compose.** JVM heap 1~2GB씩 상한, 실험할 때만 기동
 - 전략마다 엔진 하나로 고정 — 엔진 비교는 하지 않는다 (retrieval-arena 판정 DROP 항목)
-- **스킬과 스크립트 테스트(`test_jhs.py`·`test_leak.py`)는 서버 없이 돈다** — 스킬은 ADR repo에 그대로 복사되는 배포 단위다 (CLAUDE.md 규율 6)
+- **스킬과 스크립트 테스트(`test_radar.py`·`test_leak.py`)는 서버 없이 돈다** — 스킬은 ADR repo에 그대로 복사되는 배포 단위다 (CLAUDE.md 규율 6)
 - 색인 결과물은 git에 넣지 않는다. 코퍼스·gold set에 버전을 매겨, 어느 기기에서 다시 만들어도 같게
 
 ## 9. 범위 (MoSCoW)

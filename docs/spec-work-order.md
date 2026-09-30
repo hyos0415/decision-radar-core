@@ -122,7 +122,7 @@ revisit_last_checked:
 | R1 | **fallback** — 근거 URL을 이번 실행에서 확보하지 못했거나 기계 판정이 불가한 조건은 `undetermined`로 기록하고 `reason`을 적는다. `undetermined`는 알림 대상이 아니다 | U1 |
 | R2 | `met`은 **`source_type`이 community가 아닌** 근거 URL이 1개 이상 있을 때만 쓴다. community 출처만 있으면 R1 | U1·U4 |
 | R3 | 결과가 직전 `revisit_last_checked`와 **같으면 PR도 알림도 만들지 않는다.** 변화가 있는 조건이 하나라도 있을 때만 last_checked 갱신 PR을 연다 | U2 |
-| R4 | 알림(issue)은 결과가 `met`으로 **새로 바뀐** 조건에만 만든다 | U2 |
+| R4 | 알림(issue)은 결과가 `met`으로 **새로 바뀐** 조건에만 만든다 — **변경 (2026-09-30, HYO-18)**: "새로"는 직전 **확정** 결과(met/not_met) 기준이다. undetermined는 정보가 없으므로 건너뛴다 → met → undetermined → met은 알림 1번, met → not_met → met은 2번(확정된 되돌림은 새 사건). `revisit_last_checked.last_determined`로 집행 (`radar.py decide`) | U2 |
 | R5 | `check_type: human` 조건은 확인하지 않고 `undetermined`, reason=`human`으로 기록한다 | U3 |
 | R6 | evidence에 들어가는 URL은 `source_type`을 반드시 가진다. community는 evidence가 아니라 본문 Research Note로 간다 | U4 |
 | R7 | "같은 결정"의 동일성 키 = (`technology`, `affected` component, `use`). **셋 다 같을 때만** link/supersede 후보. 하나라도 다르면 신규 초안 + 관련 ADR 링크 | U5 |

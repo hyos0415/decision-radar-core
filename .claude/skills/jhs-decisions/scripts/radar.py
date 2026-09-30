@@ -36,6 +36,7 @@ STATUSES = {"proposed", "adopted", "rejected", "hold", "revisit", "superseded"}
 IN_SCOPE = {"rejected", "hold", "revisit"}  # R13
 CHECK_TYPES = {"web", "repo", "numeric", "human"}
 RESULTS = {"met", "not_met", "undetermined"}
+DETERMINED = {"met", "not_met"}
 SOURCE_TYPES = {"official_doc", "release_note", "repo", "paper", "issue_pr", "community"}
 OPS = {"<": lambda a, b: a < b, "<=": lambda a, b: a <= b,
        ">": lambda a, b: a > b, ">=": lambda a, b: a >= b, "==": lambda a, b: a == b}
@@ -166,6 +167,18 @@ def prior_map(fm):
     return {r.get("condition_id"): r for r in (fm.get("revisit_last_checked") or [])}
 
 
+def last_determined(prev):
+    """직전 확정 결과(met/not_met). undetermined를 거쳐도 이어받는다 (R4 개정).
+
+    `last_determined` 필드가 없는 옛 기록은 result가 확정값이면 그것을 쓴다 — undetermined였으면 모른다(None).
+    """
+    if prev is None:
+        return None
+    if "last_determined" in prev:
+        return prev["last_determined"]
+    return prev.get("result") if prev.get("result") in DETERMINED else None
+
+
 def cmd_decide(a):
     """이번 실행의 판정 결과 → 기록·알림 결정. 모델의 판정을 규칙으로 걸러낸다.
 
@@ -238,15 +251,19 @@ def cmd_decide(a):
         if res != "undetermined":
             reason = None
 
-        entry = {"condition_id": cond["id"], "checked_at": now, "result": res, "reason": reason,
-                 "evidence_urls": [e["url"] for e in ev] if res != "undetermined" else []}
         prev = prior_map(fm).get(cond["id"])
+        prev_det = last_determined(prev)
+        entry = {"condition_id": cond["id"], "checked_at": now, "result": res, "reason": reason,
+                 "evidence_urls": [e["url"] for e in ev] if res != "undetermined" else [],
+                 "last_determined": res if res in DETERMINED else prev_det}
         is_change = prev is None or prev.get("result") != res  # R3 (결과 기준), R15 (prior 없음 = 변화)
         decided.append({"adr": r["adr"], **entry, "changed": is_change,
                         "prior": None if prev is None else prev.get("result")})
         if is_change:
             changed.append((r["adr"], entry))
-        if res == "met" and (prev is None or prev.get("result") != "met"):  # R4
+        # R4 (2026-09-30 개정): 직전 **확정** 결과가 met이 아닐 때만 — undetermined는 정보가 없으니 건너뛴다.
+        # met → undetermined(403 한 주) → met에 알림이 두 번 나가던 재알림(틈 ①)을 막는다. met → not_met → met은 다시 알린다.
+        if res == "met" and prev_det != "met":
             alerts.append({"adr": r["adr"], "condition_id": cond["id"], "kind": "issue",
                            "evidence_urls": entry["evidence_urls"]})
 
@@ -259,11 +276,12 @@ def cmd_decide(a):
             if (aid, c.get("id")) in seen:
                 continue
             human = c.get("check_type") == "human"
+            prev = prior_map(fm).get(c.get("id"))
             entry = {"condition_id": c.get("id"), "checked_at": now, "result": "undetermined",
-                     "reason": "human" if human else "not checked", "evidence_urls": []}
+                     "reason": "human" if human else "not checked", "evidence_urls": [],
+                     "last_determined": last_determined(prev)}
             if not human:
                 overrides.append({"adr": aid, "condition_id": c.get("id"), "rule": "R1", "why": "결과 누락"})
-            prev = prior_map(fm).get(c.get("id"))
             is_change = prev is None or prev.get("result") != "undetermined"
             decided.append({"adr": aid, **entry, "changed": is_change, "prior": None if prev is None else prev.get("result")})
             if is_change:

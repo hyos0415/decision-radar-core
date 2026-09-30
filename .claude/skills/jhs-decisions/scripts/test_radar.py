@@ -283,6 +283,49 @@ def _(t):
     assert not [o for o in d["overrides"] if o["rule"] == "threshold"]  # 모델이 판정을 안 한 것은 뒤집기가 아니다
 
 
+# --- 여러 주에 걸친 재알림 (틈 ①, HYO-18) — eval은 케이스당 1회 실행이라 여기서만 잡힌다 ---
+LEANN = [("github.example/leann/releases", "release_note")]
+
+
+def weeks(t, seq):
+    """0004/c1의 주별 결과를 --apply로 이어서 기록하고 주마다 알림을 돌려준다."""
+    out = []
+    for i, res in enumerate(seq):
+        rp = os.path.join(t, f"w{i}.json")
+        json.dump(results({("0004", "c1"): (res, LEANN if res != "undetermined" else [], None)}),
+                  open(rp, "w", encoding="utf-8"))
+        d = run("decide", os.path.join(t, "adr"), rp, "--now", f"2026-10-{5 + 7 * i:02d}T09:07:00+09:00", "--apply")
+        out.append(alerts(d))
+    return out
+
+
+@case("재알림 met → undetermined → met → 알림 1번 (R4 개정)")
+def _(t):
+    assert weeks(t, ["met", "undetermined", "met"]) == [["0004/c1"], [], []]
+
+
+@case("met → not_met → met → 알림 2번 (확정된 되돌림은 새 사건)")
+def _(t):
+    assert weeks(t, ["met", "not_met", "met"]) == [["0004/c1"], [], ["0004/c1"]]
+
+
+@case("not_met → undetermined → met → 알림 (처음 met)")
+def _(t):
+    assert weeks(t, ["undetermined", "met"]) == [[], ["0004/c1"]]
+
+
+@case("옛 기록(last_determined 없음) met → undetermined → met → 재알림 없음")
+def _(t):
+    p = os.path.join(t, "adr", "0004-leann-index.md")
+    s = open(p, encoding="utf-8").read().replace(
+        "{condition_id: c1, checked_at: \"2026-09-21T09:07:00+09:00\", result: not_met",
+        "{condition_id: c1, checked_at: \"2026-09-21T09:07:00+09:00\", result: met")
+    open(p, "w", encoding="utf-8").write(s)
+    assert weeks(t, ["undetermined", "met"]) == [[], []]
+    s = open(p, encoding="utf-8").read()
+    assert "last_determined: met" in s, "undetermined 기록에 직전 확정 결과가 이어지지 않았다"
+
+
 @case("next-id")
 def _(t):
     assert run("next-id", os.path.join(t, "adr"))["next_id"] == "0006"

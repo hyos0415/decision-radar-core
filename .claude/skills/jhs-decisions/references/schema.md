@@ -45,7 +45,7 @@ revisit_last_checked:            # 재검토 루프만 쓴다. 사람은 손대�
 | `technology`·`use`·`affected` | 동일성 키. 기존 ADR과 비교할 때 `use`는 정규화 문자열 비교라서, 같은 용도면 **기존 ADR의 문구를 그대로** 쓴다 |
 | `evidence` | `{url, source_type}` 필수. `community`는 여기 올 수 없다 |
 | `revisit_when` | 조건마다 `id`·`check_type`·`condition`. human이 아니면 `source_hint`. numeric이면 `threshold` |
-| `revisit_last_checked` | `radar.py apply`만 쓴다. undetermined면 `reason` 필수 |
+| `revisit_last_checked` | `radar.py apply`만 쓴다. undetermined면 `reason` 필수. `last_determined`는 마지막 확정 결과(met/not_met)로, undetermined를 거쳐도 이어진다 — 알림 판정(R4)이 쓴다 |
 
 `radar.py validate <adr_dir>`가 위 규칙을 검사한다. human 조건은 오류가 아니라 **경고**다 (B1-2).
 
