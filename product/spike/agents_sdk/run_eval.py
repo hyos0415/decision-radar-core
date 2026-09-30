@@ -2,6 +2,7 @@
 
   python product/spike/agents_sdk/run_eval.py --stub                 # 기준 6케이스 + 음성 대조 2 (API 없음)
   python product/spike/agents_sdk/run_eval.py --stub JHS-037 --k 3
+  python product/spike/agents_sdk/run_eval.py --model litellm JHS-001 [--no-register]   # 실제 Claude (API 과금, .env 키)
 
 채점기는 한 벌이다 (비교 프로토콜 §4). 제품 trace를 스킬 transcript와 같은 모양으로 만들어 넘긴다.
 격리도 같다: radar.py는 작업 디렉터리의 사본(runroot)에서 돌린다 — 레포 경로에 닿는 호출은 answer_key_access에 걸린다.
@@ -20,11 +21,13 @@ import socket
 import subprocess
 import sys
 import tempfile
+import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from pipeline import ROOT, SKILL_RADAR, Ctx, revisit  # noqa: E402
 from stub_model import StubModel  # noqa: E402
+import models  # noqa: E402
 
 sys.path.insert(0, os.path.join(ROOT, "eval", "runner"))
 import run_case as rc  # noqa: E402
@@ -72,7 +75,14 @@ class NetGuard:
     """
 
     def __init__(self, allow=()):
-        self.allow, self.attempts = set(allow), []
+        self.allow, self.attempts, self.stacks = set(allow), [], {}
+
+    def _block(self, host):
+        self.attempts.append(host)
+        if host not in self.stacks:  # 호스트마다 첫 시도의 호출 위치 — 누가 밖으로 나가려 했나 (P5 진단)
+            self.stacks[host] = [f"{f.filename.split('site-packages')[-1]}:{f.lineno} {f.name}"
+                                 for f in traceback.extract_stack()[-16:-2]]
+        raise OSError(f"netguard: {host} 차단 (P5)")
 
     def _ok(self, host):
         try:
@@ -86,15 +96,13 @@ class NetGuard:
 
         def gai(host, *a, **k):
             if not guard._ok(str(host)):
-                guard.attempts.append(str(host))
-                raise OSError(f"netguard: {host} 차단 (P5)")
+                guard._block(str(host))
             return guard._gai(host, *a, **k)
 
         def conn(sock, addr):
             host = addr[0] if isinstance(addr, tuple) else str(addr)
             if not guard._ok(str(host)):
-                guard.attempts.append(str(host))
-                raise OSError(f"netguard: {host} 차단 (P5)")
+                guard._block(str(host))
             return guard._conn(sock, addr)
 
         socket.getaddrinfo, socket.socket.connect = gai, conn
@@ -120,7 +128,8 @@ def radar_unmodified():
 
 # ── 실행 1회 ─────────────────────────────────────────────────────────
 
-def run_one(case, model, model_name, out_dir, allow_hosts=(), radar_from_repo=False):
+def run_one(case, make_model, model_name, out_dir, allow_hosts=(), radar_from_repo=False, settings=None, shapes=None):
+    """make_model은 NetGuard 안에서 부른다 — 모델 라이브러리의 import·초기화 중 네트워크 시도도 P5에 잡힌다."""
     work = tempfile.mkdtemp(prefix="jhs-spike-")
     before = rc.build(case, work)
     radar_py = os.path.join(work, "runroot", "scripts", "radar.py")
@@ -148,7 +157,7 @@ def run_one(case, model, model_name, out_dir, allow_hosts=(), radar_from_repo=Fa
     crash = None
     with NetGuard(allow_hosts) as ng:
         try:
-            report, diag = asyncio.run(revisit(ctx, model, now))
+            report, diag = asyncio.run(revisit(ctx, make_model(), now, settings))
         except Exception as e:  # 파이프라인 자체가 죽으면 run_report 없음 → 채점에서 떨어진다
             report, diag, crash = None, {"p3_errors": []}, f"{type(e).__name__}: {e}"
     wall = (dt.datetime.now() - t0).total_seconds()
@@ -167,10 +176,15 @@ def run_one(case, model, model_name, out_dir, allow_hosts=(), radar_from_repo=Fa
         "P3_errors": diag["p3_errors"],
         "P4_radar_copy_identical": copy_same,
         "P5_net_attempts": ng.attempts,
+        "P5_net_stacks": ng.stacks,
         "P5_traces": tp.traces, "P5_spans": tp.spans,
         "crash": crash,
         "input_tokens": diag.get("input_tokens"), "output_tokens": diag.get("output_tokens"),
+        "model_calls": diag.get("model_calls"),
+        "request_shapes": shapes.shapes if shapes else None,
     }
+    if model_name != "stub" and diag.get("input_tokens") is not None:
+        g["spike"]["cost_usd"] = models.cost_usd(diag["input_tokens"], diag["output_tokens"])
     g["diag"].update(wall_s=round(wall, 2))
     json.dump(g, open(os.path.join(out_dir, "grade.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     shutil.copytree(work, os.path.join(out_dir, "work"))
@@ -185,13 +199,21 @@ def failed(g):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cases", nargs="*", help="기본: 기준 6케이스 (+ --stub면 음성 대조)")
-    ap.add_argument("--stub", action="store_true", help="스텁 모델 (API 없음). 지금은 이것만 된다")
+    ap.add_argument("--stub", action="store_true", help="스텁 모델 (API 없음) — --model stub과 같다")
+    ap.add_argument("--model", choices=["stub", "litellm"], default=None)
+    ap.add_argument("--no-register", dest="register", action="store_false",
+                    help="litellm 모델 표 등록을 끈다 — 어댑터 기본값 재현용. 기본은 등록 (사용자 결정 2026-09-30: 네이티브 구조화 출력)")
     ap.add_argument("--k", type=int, default=1)
     a = ap.parse_args()
-    if not a.stub:
-        sys.exit("실제 모델 실행은 아직 없다 — API 실험은 파이프라인 뒤 (사용자 2026-09-30). --stub")
+    kind = a.model or ("stub" if a.stub else None)
+    if kind is None:
+        sys.exit("--stub 또는 --model litellm")
+    if kind == "litellm" and not a.cases:
+        sys.exit("실제 모델은 케이스를 명시한다 — 과금 (API)")
+    stub = kind == "stub"
+    label = "stub" if stub else ("litellm-registered" if a.register else "litellm-default")
 
-    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S") + "-agents_sdk-stub"
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S") + f"-agents_sdk-{label}"
     root = os.path.join(rc.EVAL, "runs", stamp)
     p4 = radar_unmodified()
     rows = []
@@ -202,18 +224,25 @@ def main():
         for i in range(a.k):
             out = os.path.join(root, f"{cid}-{i + 1}")
             os.makedirs(out)
-            script = {**SCRIPT["base"], **SCRIPT["cases"].get(cid, {})}
-            g = run_one(case, StubModel(script), "stub", out)
+            if stub:
+                script = {**SCRIPT["base"], **SCRIPT["cases"].get(cid, {})}
+                g = run_one(case, lambda: StubModel(script), "stub", out)
+            else:
+                shapes = models.RequestShapes()
+                g = run_one(case, lambda: models.make_litellm(a.register, shapes), f"anthropic/{models.MODEL}", out,
+                            allow_hosts=("api.anthropic.com",), settings=models.settings(), shapes=shapes)
             rows.append(("case", cid, g))
             print(json.dumps({"case": cid, "run": i + 1, "pass": g["pass"], "safety_pass": g["safety_pass"],
-                              "failed": failed(g), **g["spike"], "tool_calls": g["diag"]["tool_calls"]}, ensure_ascii=False))
+                              "failed": failed(g), **{k: v for k, v in g["spike"].items() if k not in ("request_shapes", "P5_net_stacks")},
+                              "tool_calls": g["diag"]["tool_calls"]}, ensure_ascii=False))
 
     ctrl_ok = True
-    if not a.cases:  # 음성 대조 — 채점기가 제품 trace를 무는지
+    if stub and not a.cases:  # 음성 대조 — 채점기가 제품 trace를 무는지
         for name, c in SCRIPT["controls"].items():
             out = os.path.join(root, name)
             os.makedirs(out)
-            g = run_one(rc.load_case(c["case"]), StubModel({**SCRIPT["base"], **c["script"]}), "stub", out,
+            sc = {**SCRIPT["base"], **c["script"]}
+            g = run_one(rc.load_case(c["case"]), lambda: StubModel(sc), "stub", out,
                         radar_from_repo=c.get("radar") == "repo")
             missing = [m for m in c["must_fail"] if m not in failed(g)]
             p3 = [e["kind"] for e in g["spike"]["P3_errors"]]
@@ -228,11 +257,13 @@ def main():
         "P1_pass": f"{sum(g['pass'] for g in graded)}/{len(graded)}",
         "P2_safety_cases": {cid: all(g["pass"] for k, c, g in rows if c == cid) for cid in sorted(SAFETY_CASES & set(cases))},
         "P3_errors": sum(len(g["spike"]["P3_errors"]) for g in graded),
-        "P3_note": "스텁은 P3를 잴 수 없다 — 어댑터 400은 실제 모델에서만",
+        "P3_note": "스텁은 P3를 잴 수 없다 — 어댑터 400은 실제 모델에서만" if stub else None,
+        "P3_error_kinds": [(e["kind"], e.get("type"), e.get("message", "")[:160]) for g in graded for e in g["spike"]["P3_errors"]][:6],
+        "cost_usd": round(sum(g["spike"].get("cost_usd") or 0 for g in graded), 5) if not stub else None,
         "P4": {**p4, "copies_identical": all(g["spike"]["P4_radar_copy_identical"] for g in graded)},
         "P5": {"net_attempts": sum(len(g["spike"]["P5_net_attempts"]) for g in graded),
                "traces": sum(g["spike"]["P5_traces"] for g in graded)},
-        "controls_caught": ctrl_ok if not a.cases else None,
+        "controls_caught": ctrl_ok if stub and not a.cases else None,
     }
     print(json.dumps(summary, ensure_ascii=False, indent=1))
     ok = all(g["pass"] for g in graded) and ctrl_ok and p4["ok"] and summary["P5"]["net_attempts"] == 0 and summary["P5"]["traces"] == 0
