@@ -44,6 +44,7 @@ revisit_when:
 4. 통합 UX로 실제로 계속 쓰고 싶다
 5. AI 엔지니어로서 state 관리·툴콜·LangGraph를 필요한 곳에서 직접 다뤄 보기 — 최근 프로젝트에서 이런 기술 도입을 스스로 모두 기각했다
    - **변경 (2026-09-30, 사용자 — 목표 재정의)**: 5의 핵심은 **에이전트를 직접 만들어 보기**(state 관리·툴콜·며칠 걸치는 흐름)다. LangGraph는 그 수단 하나였다 — 설계를 LangGraph 전제로 시작해서 그렇게 적었다. 런타임은 **OpenAI Agents SDK → LangGraph → plain Python + Anthropic SDK 순서로 시도**한다 — 같은 스파이크 통과 기준을 셋에 똑같이 적용하고, 앞 후보가 기준을 넘지 못하면 다음으로 간다 (ADR `adr/0006`, proposed). 목적 1~4와 안 C는 바뀌지 않으므로 새 재판정이 아니라 변경으로 남긴다
+   - **변경 (2026-09-30, 사용자 — 같은 날 두 번째)**: 순차 시도를 버리고 **Agents SDK와 LangGraph를 둘 다 만들어 같은 모델(Sonnet 5.5)·같은 기준으로 비교**한다. 현업 에이전트 작업은 LangChain·LangGraph 계열이 가장 많고(PyPI 월간 다운로드 langgraph ≈ 4,365만 vs openai-agents ≈ 1,207만, pypistats 2026-09-30; 채용 공고 한 표본에서 LangChain 계열 39.9% — 최다지만 과반 아님, community 출처), 배우고 싶은 것은 Agents SDK가 그것과 **어디서 다른가**다. LangGraph를 직접 다뤄 보는 원래 5의 문구가 수단으로서 다시 살아난다. plain Python + Anthropic SDK는 둘 다 기준을 못 넘을 때의 예비
 
 질문이 "제품이 필요한가"에서 **"제품과 스킬 중 무엇이 어디서 나은지 재 보고 싶다"**로 바뀌었다. 다른 질문이라 다른 판정이 필요하다.
 
