@@ -33,3 +33,31 @@
 - 정답 라벨은 Claude 초안을 사용자가 받아들인 정책 표다 — "Claude식 판단"과 가까운 모델이 유리할 수 있다
 - 하네스 교란: Codex 안의 Luna다. 제품 배정의 최종 확인은 API로 따로 (ADR `adr/0007`)
 - k=1 스모크다 (CLAUDE.md 규율 5). "Luna가 충분하다"가 아니라 "선별을 통과했다"까지만 말한다
+
+---
+
+## 참고 실행 — Claude Haiku 4.5 (2026-09-30, 사용자 요청)
+
+> 등록한 규칙은 "Luna 불통과 시에만 Haiku"였다. 이 실행은 **판정 규칙을 바꾸지 않는 참고 실행**이다 (사용자 요청). Luna 판정(통과)은 그대로다.
+
+- 실행: `claude -p --model haiku --setting-sources project --tools Read` (Claude Code 2.1.284 → `claude-haiku-4-5-20251001`) · k=1 · 3턴 · 31,176 토큰(구독, API 환산 $0.09)
+- 입력: 같은 `make_run.py` 산출물 (items.json 바이트 동일 확인). 세션 기록상 두 파일만 읽음
+- 원자료: `eval/runs/20260930-tier-screen-haiku/`
+
+| | Luna | Haiku |
+|---|---|---|
+| 정답 | 27 | **30** |
+| 오답 | 6 | 4 |
+| 보류 | 1 | 0 |
+| 과대 등급 (→ 소음) | 3 (torch·requests·httpx) | 1 (uvicorn → L1) |
+| 과소 등급 (→ 놓침) | 3 (pydantic·uvicorn·jinja2) | 3 (llama-server → L2 · pydantic · jinja2) |
+| 토큰 | 11,509 | 31,176 |
+
+**짝 비교** (같은 34항목): Luna만 틀림(보류 포함) 4개 — torch · requests · httpx · typesafe-sdk(보류) / Haiku만 틀림 1개 — llama-server. 둘 다 틀림: pydantic · jinja2 · uvicorn(서로 다른 오답).
+불일치 5개 중 4:1 → McNemar 정확 이항검정 p ≈ 0.375. **이 표본으로는 두 모델을 가를 수 없다** (k=1, n=34).
+
+읽는 법:
+- 두 모델이 **같은 자리(pydantic·jinja2·uvicorn = L4 경계)**에서 틀렸다 — 모델 문제보다 정의 문제라는 해석을 보강한다
+- Haiku만의 오답(llama-server → L2)은 정의로 반박된다 (L1 「서빙 엔진」). Luna만의 오답 셋은 정의가 모호한 자리다(torch는 L1 「GPU 스택」으로도 읽힌다, requests·httpx는 L6/L8 경계)
+- Luna의 오답은 과대 등급(소음 쪽)이 더 많다 — 헤드라인이 소음 비율이라 불리한 방향이지만 3 대 1은 k=1에서 가를 수 없는 차이다
+- 가격은 Luna가 10배 싸다 (입력 $0.10 vs $1.00 / 1M, ADR 0007)
