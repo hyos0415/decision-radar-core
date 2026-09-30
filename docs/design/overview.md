@@ -21,9 +21,11 @@
 | G2 | 리트리버 전략과 라우팅 — **이 태스크에 최적인 검색 방법은 무엇인가** | §9·§11·§12, RQ1·2·3 |
 | G3 | 스킬이 무너지는, 아직 관측하지 못한 지점 | 실험 기록 「다음에 부술 곳」 |
 | G4 | 통합 UX로 실제로 계속 쓰는가 | §20·Phase 6, 판정문 반대 논거 E |
-| G5 | state 관리·툴콜·LangGraph를 필요한 곳에서 직접 다뤄 보기 | §16·Phase 4, RQ7 |
+| G5 | state 관리·툴콜·LangGraph를 필요한 곳에서 직접 다뤄 보기 — **변경 (2026-09-30): 에이전트를 직접 만들어 보기. 런타임은 Agents SDK → LangGraph → plain Python 순서로 시도 (ADR `adr/0006`)** | §16·Phase 4, RQ7 |
 
 **원칙**: LangGraph·그래프 DB 도입은 "써보고 싶어서"가 아니라 **"스킬이 여기서 무너졌고, 이것이 이만큼 고쳤다"**로 정당화한다 (제안서 §27 H: 기술이 재미있다는 이유만으로 복잡한 Agent를 만들지 않는다).
+
+> **변경 (2026-09-30)**: 런타임은 OpenAI Agents SDK → LangGraph → plain Python + Anthropic SDK 순서로 시도한다(같은 스파이크 통과 기준 — ADR `adr/0006`). 이 문서의 이하 「LangGraph」 표기는 **M7 런타임**을 뜻한다 — 원래 기록을 지우지 않으려고 본문은 고치지 않았다. 재판정 기록 목표 5의 변경과 같다.
 
 ### 통합한 아이디어
 
@@ -146,7 +148,7 @@ LangGraph checkpoint와 ADR 파일의 정합성 유지가 새 과제로 생긴�
 | **M4 영향 매칭** | 외부 변화 × 내부 코드(의존성·import) | 구조 그래프 탐색 + LLM 판단 | G2 |
 | **M5 판정** | revisit·detect·capture 조건 판정 | LLM + **`jhs.py` 규칙층 재사용** | 공정성 |
 | **M6 최소 실험 제안** | eval_assets·병목 재사용, 중단 조건 포함 | LLM | G3 (C-1·Risk 5) |
-| **M7 런타임** | HITL interrupt·대기·resume·checkpoint·재시도 | LangGraph | **G5** |
+| **M7 런타임** | HITL interrupt·대기·resume·checkpoint·재시도 | Agents SDK → LangGraph → plain Python + Anthropic SDK 순서로 시도, 같은 스파이크 기준 (2026-09-30, ADR `adr/0006`) | **G5** |
 | **M8 인터페이스** | 웹(Inbox·Decisions·Revisit) · MCP(대화 저장) · GitHub | 웹 프레임워크 미정 | **G4** |
 | **M9 eval·관측** | 공용 채점 어댑터 · trace(툴콜·토큰·지연) · 비용 | 기존 `eval/runner` 확장 | **G3** |
 
