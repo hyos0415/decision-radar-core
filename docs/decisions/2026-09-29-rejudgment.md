@@ -28,6 +28,7 @@ revisit_when:
 
 > 2026-09-29 · 원 판정: `2026-09-29-coroner-verdict.md` (Build a Skill, 서비스 축 보류)
 > **status는 사람만 바꾼다(R8).** `proposed`로 작성 → **2026-09-29 사용자가 채택(`adopted`)**.
+> **변경 (2026-09-30, HYO-19)**: 재검토 조건 c1~c3의 **확인은 ADR 레포의 `adr/0010`에서** 한다 — 이 파일은 `radar.py`가 읽는 ADR 디렉터리 밖이라 조건을 아무도 확인하지 않았다. 0010은 이 frontmatter를 그대로 옮기고 조건마다 `watch: always`를 단 것이다. 결정을 바꿀 때는 **두 곳을 같이** 고친다 (전문은 여기, 재검토 기록은 0010)
 
 ## Context and Problem Statement
 

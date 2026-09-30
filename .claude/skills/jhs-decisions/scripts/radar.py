@@ -34,6 +34,7 @@ except ImportError:  # 조용히 넘어가지 않는다 — 이 스크립트 없
 
 STATUSES = {"proposed", "adopted", "rejected", "hold", "revisit", "superseded"}
 IN_SCOPE = {"rejected", "hold", "revisit"}  # R13
+WATCH = {"always"}  # R13 개정 (2026-09-30, HYO-19): 조건에 watch: always가 있으면 status와 상관없이 확인한다
 CHECK_TYPES = {"web", "repo", "numeric", "human"}
 RESULTS = {"met", "not_met", "undetermined"}
 DETERMINED = {"met", "not_met"}
@@ -70,16 +71,34 @@ def load_all(adr_dir):
     return adrs
 
 
+def watched(cond):
+    return (cond or {}).get("watch") == "always"
+
+
+def in_scope(fm, cond):
+    """R13 (2026-09-30 개정): status가 rejected·hold·revisit이거나, 조건에 watch: always가 붙었으면 확인 대상.
+
+    adopted·proposed ADR의 조건은 기본으로 확인하지 않는다 — 채택한 뒤에도 볼 조건만 쓰는 사람이 표시한다.
+    표시를 빠뜨리면 validate가 경고한다.
+    """
+    return (fm or {}).get("status") in IN_SCOPE or watched(cond)
+
+
+def scoped_conditions(fm):
+    return [c for c in (fm or {}).get("revisit_when") or [] if in_scope(fm, c)]
+
+
 def cmd_list(a):
     rows = []
     for x in load_all(a.adr_dir):
         fm = x["fm"] or {}
-        if a.in_scope and fm.get("status") not in IN_SCOPE:
+        conds = scoped_conditions(fm) if a.in_scope else (fm.get("revisit_when") or [])
+        if a.in_scope and fm.get("status") not in IN_SCOPE and not conds:
             continue
         rows.append({"id": x["id"], "file": x["file"], "status": fm.get("status"),
                      "technology": fm.get("technology"), "use": fm.get("use"),
                      "affected": fm.get("affected") or [],
-                     "revisit_when": fm.get("revisit_when") or [],
+                     "revisit_when": conds,
                      "revisit_last_checked": fm.get("revisit_last_checked") or []})
     out(rows)
 
@@ -111,6 +130,10 @@ def validate_fm(fm):
             errs.append(f"{cid}: check_type 값이 {sorted(CHECK_TYPES)} 밖")
         if c.get("check_type") == "human":
             warns.append(f"{cid}: 사람만 판정 가능 — 재검토 루프가 확인하지 않는다 (B1-2, R5)")
+        if "watch" in c and c.get("watch") not in WATCH:
+            errs.append(f"{cid}: watch 값은 {sorted(WATCH)}뿐: {c.get('watch')!r}")
+        if fm.get("status") in ("adopted", "proposed") and not watched(c):
+            warns.append(f"{cid}: {fm.get('status')} ADR의 조건 — watch: always가 없으면 재검토 루프가 확인하지 않는다 (R13)")
         if c.get("check_type") == "numeric":
             t = c.get("threshold") or {}
             if not (t.get("metric") and t.get("op") in OPS and isinstance(t.get("value"), (int, float))):
@@ -202,12 +225,12 @@ def cmd_decide(a):
             overrides.append({"adr": r.get("adr"), "rule": "unknown_adr", "action": "dropped"})
             continue
         fm = adr["fm"] or {}
-        if fm.get("status") not in IN_SCOPE:  # R13
-            overrides.append({"adr": r["adr"], "rule": "R13", "action": "dropped", "status": fm.get("status")})
-            continue
         cond = {c.get("id"): c for c in fm.get("revisit_when") or []}.get(r.get("condition_id"))
         if not cond:
             overrides.append({"adr": r["adr"], "condition_id": r.get("condition_id"), "rule": "unknown_condition", "action": "dropped"})
+            continue
+        if not in_scope(fm, cond):  # R13 — 조건 단위 (watch: always 개정)
+            overrides.append({"adr": r["adr"], "condition_id": cond["id"], "rule": "R13", "action": "dropped", "status": fm.get("status")})
             continue
         seen.add((r["adr"], cond["id"]))
         res, reason = r.get("result"), r.get("reason")
@@ -270,9 +293,7 @@ def cmd_decide(a):
     # 확인 범위 안인데 결과가 안 온 조건 — 조용히 빠지지 않게 undetermined로 채운다 (R1)
     for aid, x in by_adr.items():
         fm = x["fm"] or {}
-        if fm.get("status") not in IN_SCOPE:
-            continue
-        for c in fm.get("revisit_when") or []:
+        for c in scoped_conditions(fm):
             if (aid, c.get("id")) in seen:
                 continue
             human = c.get("check_type") == "human"

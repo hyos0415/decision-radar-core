@@ -45,7 +45,7 @@ description: 기술 결정 기록(ADR)을 쌓고 다시 꺼내 쓰는 스킬. �
 
 ## 흐름 1 — revisit (재검토 조건 확인)
 
-1. `radar.py list $RADAR_ADR_DIR --in-scope` — 확인 대상은 `rejected`·`hold`·`revisit`뿐 (R13). adopted·proposed·superseded는 **읽지도 확인하지도 않는다**.
+1. `radar.py list $RADAR_ADR_DIR --in-scope` — 확인 대상은 `rejected`·`hold`·`revisit` ADR의 조건, 그리고 **`watch: always`가 붙은 조건**(status 무관) (R13). 목록에 나온 조건만 확인한다 — 목록 밖 ADR·조건은 **읽지도 확인하지도 않는다**.
 2. 대상 조건마다:
    - `human` → 확인하지 않는다. `{"result": "undetermined", "reason": "human"}` (R5). repo에 "요구가 완화됐다" 같은 메모가 있어도 마찬가지다.
    - `web` → `source_hint`를 먼저 연다. 실패(403·없음)하면 검색으로 1차 출처를 찾아본다. **1차 출처(community가 아닌 것)로 확인되지 않으면 `undetermined`**, reason에 무엇이 실패했는지 적는다.

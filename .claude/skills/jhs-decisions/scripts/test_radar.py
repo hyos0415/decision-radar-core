@@ -76,6 +76,9 @@ def case(name):
         except AssertionError as e:
             failures.append(name)
             print(f"  FAIL {name}: {e}")
+        except Exception as e:  # 단언 전에 터진 것도 실패로 센다 — 여기서 멈추면 뒤 케이스가 안 돈다 (2026-09-30)
+            failures.append(name)
+            print(f"  FAIL {name}: {type(e).__name__}: {e}")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
         return fn
@@ -324,6 +327,57 @@ def _(t):
     assert weeks(t, ["undetermined", "met"]) == [[], []]
     s = open(p, encoding="utf-8").read()
     assert "last_determined: met" in s, "undetermined 기록에 직전 확정 결과가 이어지지 않았다"
+
+
+def watch_0003(t, value="always"):
+    """픽스처 사본의 adopted 0003/c1에 watch를 단다 (R13 개정, HYO-19)."""
+    p = next(os.path.join(t, "adr", f) for f in os.listdir(os.path.join(t, "adr")) if f.startswith("0003"))
+    s = open(p, encoding="utf-8").read()
+    anchor = "    source_hint: docs.cloudvendor.example/guardrails/pii-patterns\n"
+    assert anchor in s, "픽스처 0003/c1 모양이 바뀌었다"
+    open(p, "w", encoding="utf-8").write(s.replace(anchor, anchor + f"    watch: {value}\n"))
+
+
+PII = {"adr": "0003", "condition_id": "c1", "result": "met",
+       "evidence": [{"url": "docs.cloudvendor.example/guardrails/pii-patterns", "source_type": "official_doc"}]}
+
+
+@case("R13 개정: adopted 0003/c1에 watch: always → 확인 대상, met → 알림 (첫 실행이라 PR)")
+def _(t):
+    watch_0003(t)
+    d = decide(t, results() + [PII])
+    assert d["adrs_checked"] == ["0001", "0002", "0003", "0004"], d["adrs_checked"]
+    assert alerts(d) == ["0003/c1"] and d["pr_needed"] is True
+    assert not [o for o in d["overrides"] if o.get("rule") == "R13"], d["overrides"]
+
+
+@case("R13 개정: watch 조건 결과가 안 오면 undetermined(not checked)로 채움 — 조용히 빠지지 않는다")
+def _(t):
+    watch_0003(t)
+    d = decide(t, results())
+    r = result_of(d, "0003/c1")
+    assert r["result"] == "undetermined" and r["reason"] == "not checked", r
+    assert any(o.get("rule") == "R1" and o.get("adr") == "0003" for o in d["overrides"]), d["overrides"]
+
+
+@case("R13 개정: list --in-scope — watch 없는 adopted는 빠지고, 달면 그 조건만 나온다")
+def _(t):
+    ids = [a["id"] for a in run("list", os.path.join(t, "adr"), "--in-scope")]
+    assert ids == ["0001", "0002", "0004"], ids
+    watch_0003(t)
+    rows = {a["id"]: a for a in run("list", os.path.join(t, "adr"), "--in-scope")}
+    assert sorted(rows) == ["0001", "0002", "0003", "0004"] and [c["id"] for c in rows["0003"]["revisit_when"]] == ["c1"]
+
+
+@case("R13 개정: validate — adopted 조건에 watch 없으면 경고, 이상한 값이면 오류")
+def _(t):
+    v = run("validate", os.path.join(t, "adr"))
+    a3 = next(a for a in v["adrs"] if a["id"] == "0003")
+    assert v["ok"] and any("watch: always" in w for w in a3["warnings"]), a3
+    watch_0003(t, "sometimes")
+    v = run("validate", os.path.join(t, "adr"))
+    a3 = next(a for a in v["adrs"] if a["id"] == "0003")
+    assert not v["ok"] and any("watch 값" in e for e in a3["errors"]), a3
 
 
 @case("next-id")
