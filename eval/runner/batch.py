@@ -61,6 +61,7 @@ def job(case, i, root, model, py):
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8")  # Windows cp949 콘솔에서 요약 출력(—)이 크래시 (2026-09-30 스모크)
     ap = argparse.ArgumentParser()
     ap.add_argument("--flow", default="revisit")
     ap.add_argument("--cases")
