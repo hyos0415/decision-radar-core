@@ -1,7 +1,18 @@
-# 제품 의존성 — 버전은 설치할 때 고정한다 (2026-09-30, Python 3.12)
-openai-agents==0.22.3
-openai==3.22.1
+# 제품 의존성 — 버전은 설치할 때 고정한다 (2026-09-30, Python 3.12). 메인 .venv 하나에 같이 설치된다 (pip check 통과)
 PyYAML==6.0.3
 
-# litellm — 미해결 충돌 (2026-09-30): openai-agents 0.22.3은 openai>=3, litellm 최신(1.103.1)은 openai<3.
-# 스텁 파이프라인에는 필요 없다. 실제 모델 실행(P3) 전에 경로를 정한다 — spike/agents_sdk/README.md
+# 런타임 1 — OpenAI Agents SDK
+openai-agents==0.22.3
+openai==3.22.1
+
+# 런타임 2 — LangGraph (+ LangChain v1 create_agent, 공식 Claude 통합)
+langgraph==1.2.12
+langgraph-checkpoint==4.2.0
+langgraph-checkpoint-sqlite==3.1.1
+langchain==1.4.3
+langchain-core==1.6.6
+langchain-anthropic==1.7.5
+anthropic==1.9.0
+
+# litellm — Agents SDK의 Claude 경로. 선언 충돌(litellm 1.103.1은 openai<3)이라 메인 .venv에 넣지 않는다.
+# 별도 venv에 설치 순서로 맞춘다: spike/agents_sdk/README.md 「실제 모델(LiteLLM) 준비」 — litellm==1.103.1 후 openai==3.22.1
