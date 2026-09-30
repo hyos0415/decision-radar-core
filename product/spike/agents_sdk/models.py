@@ -16,27 +16,12 @@ import os
 from agents import ModelSettings
 from openai.types.shared import Reasoning
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-MODEL = "claude-sonnet-5-5"
-PRICE = {"input": 2.00, "output": 10.00}  # $/MTok — claude-api 스킬 모델 표 (cached 2026-09-25)
-
-
-def load_dotenv(path=os.path.join(ROOT, ".env")):
-    """KEY=VALUE 줄만 읽는다. os.environ에 넣지 않는다 — radar.py 하위 프로세스에 키가 흘러가지 않게."""
-    out = {}
-    if os.path.exists(path):
-        for line in open(path, encoding="utf-8"):
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                out[k.strip()] = v.strip().strip('"').strip("'")
-    return out
+from common.env import EFFORT, MODEL, anthropic_key, cost_usd, load_dotenv  # noqa: F401  (cost_usd·load_dotenv: 옛 호출부 호환)
 
 
 def settings():
     """비교 모드: effort medium (비교 프로토콜 P1, e2 결정)."""
-    return ModelSettings(reasoning=Reasoning(effort="medium"), max_tokens=16000)
+    return ModelSettings(reasoning=Reasoning(effort=EFFORT), max_tokens=16000)
 
 
 class RequestShapes:
@@ -80,9 +65,7 @@ def make_litellm(register=True, shapes=None):
     import litellm
     from agents.extensions.models.litellm_model import LitellmModel
 
-    key = load_dotenv().get("ANTHROPIC_API_KEY")
-    if not key:
-        raise SystemExit(".env에 ANTHROPIC_API_KEY가 없다")
+    key = anthropic_key()
     if register:
         base = dict(litellm.model_cost["claude-sonnet-5"])
         base["supports_forced_tool_use"] = False  # Sonnet 5.5 — 강제 tool_choice 400 (claude-api 문서)
@@ -90,7 +73,3 @@ def make_litellm(register=True, shapes=None):
     if shapes is not None:
         litellm.callbacks = [shapes.logger()]
     return LitellmModel(model=f"anthropic/{MODEL}", api_key=key)
-
-
-def cost_usd(input_tokens, output_tokens):
-    return round(input_tokens / 1e6 * PRICE["input"] + output_tokens / 1e6 * PRICE["output"], 5)

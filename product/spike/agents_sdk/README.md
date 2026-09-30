@@ -10,14 +10,13 @@ capture:  1턴  대화 → match_adr(radar.py match) → propose_adr(초안, nee
 
 | 파일 | 무엇 |
 |---|---|
-| `pipeline.py` | 흐름. 코드가 순서를 쥐고 모델은 조건 하나만 판정한다 (`Verdict` 구조화 출력). human 조건은 모델에게 묻지 않는다 |
-| `capture_flow.py` | capture 2턴. `propose_adr`만 `needs_approval` — 승인 전에는 실행되지 않는다 |
-| `capture_resume.py` | 2턴을 **다른 프로세스**로 돌리는 진입점 (P6). 1턴 객체 없이 상태 파일 하나만 받는다 |
-| `guard.py` | NetGuard · 트레이스 카운터 — 턴이 도는 프로세스마다 켠다 |
-| `stub_model.py` | 정해진 답을 돌려주는 가짜 `Model` (revisit `StubModel`, capture `CaptureStub`) — API 없음 |
-| `stub_script.json` | 스텁의 답 + 음성 대조 7개 (revisit 5 · capture 2) |
-| `run_eval.py` | eval 어댑터. `eval/runner/run_case.py`의 `build`·`grade`를 **그대로** 쓴다 |
-| `models.py` | 실제 모델 연결 — LiteLLM 어댑터 + 요청 모양 기록 + `.env` 읽기(키를 `os.environ`에 넣지 않음) |
+| `runtime.py` | 두 흐름. revisit은 코드가 순서를 쥐고 모델은 조건 하나만 판정 (`Verdict`). capture는 `propose_adr`만 `needs_approval` — 승인 전에는 실행되지 않는다 |
+| `resume.py` | capture 2턴을 **다른 프로세스**로 돌리는 진입점 (P6). 1턴 객체 없이 상태 파일 하나만 받는다 |
+| `stub_model.py` | 정해진 답을 돌려주는 가짜 `Model` — 판단은 `common/stub_policy.py`, 여기는 Responses 형식으로 바꾸기만 |
+| `models.py` | 실제 모델 연결 — LiteLLM 어댑터 + 요청 모양 기록 |
+| `run_eval.py` | `common/eval_adapter.py`를 이 런타임으로 부르는 얇은 진입점 |
+
+프롬프트·스키마·도구 본체·보고서·스텁 판단·가드·채점 어댑터·스텁 대본은 **`../common/`** — LangGraph(`../langgraph_spike/`)와 한 벌이다 (2026-09-30 리팩터링, 스텁 결과 전후 동일).
 
 ```bash
 python -m venv .venv && .venv/Scripts/pip install -r product/requirements.txt   # 레포 루트에서

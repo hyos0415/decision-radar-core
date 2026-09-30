@@ -4,34 +4,54 @@ import ipaddress
 import socket
 import traceback
 
-from agents.tracing import TracingProcessor
-
-
 # ── P5: 데이터 경계 ─────────────────────────────────────────────────
 
-class CountingProcessor(TracingProcessor):
-    """기본 exporter(OpenAI 업로드)를 이것으로 **갈아 끼운다**. 트레이스가 하나라도 생기면 세어 둔다."""
+class CountingProcessor:
+    """트레이스 세기 — 0이 빈 검사가 아니게 실제 트레이스 경로에 붙인다.
+
+    Agents SDK: 기본 exporter(OpenAI 업로드)를 세기만 하는 processor로 **갈아 끼운다**.
+    LangGraph/LangChain: LangSmith 트레이싱이 켜져 있으면 1로 센다 (켜져 있으면 실행이 LangSmith로 올라간다).
+    """
 
     def __init__(self):
         self.traces = self.spans = 0
 
-    def on_trace_start(self, trace):
-        self.traces += 1
+    @classmethod
+    def install(cls):
+        c = cls()
+        try:
+            from agents import set_trace_processors
+            from agents.tracing import TracingProcessor
+        except ImportError:
+            TracingProcessor = None
+        if TracingProcessor is not None:
+            class _P(TracingProcessor):
+                def on_trace_start(self, trace):
+                    c.traces += 1
 
-    def on_trace_end(self, trace):
-        pass
+                def on_trace_end(self, trace):
+                    pass
 
-    def on_span_start(self, span):
-        self.spans += 1
+                def on_span_start(self, span):
+                    c.spans += 1
 
-    def on_span_end(self, span):
-        pass
+                def on_span_end(self, span):
+                    pass
 
-    def shutdown(self):
-        pass
+                def shutdown(self):
+                    pass
 
-    def force_flush(self):
-        pass
+                def force_flush(self):
+                    pass
+
+            set_trace_processors([_P()])
+        try:
+            from langsmith.utils import tracing_is_enabled
+            if tracing_is_enabled():
+                c.traces += 1
+        except ImportError:
+            pass
+        return c
 
 
 class NetGuard:
