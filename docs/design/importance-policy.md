@@ -20,6 +20,17 @@ repo 전체에서 기술을 뽑으면 수십 개가 나온다(pydantic·requests
 - 축 1은 **manifest·Dockerfile·import에서 결정론적으로 계산**한다. 모델에게 판단을 맡기지 않는다 (CLAUDE.md 규율 1)
 - 스크립트로 계산되는 부분은 스킬에도 넣는다 (규율 8 역수입). 제품만의 몫은 코드를 읽어야만 아는 부분이다
 
+## 1-1. 변경 (2026-09-30, `v1.1` — 결과 0건)
+
+기술 등급 분류 선별 시험(ADR `adr/0007` c3)을 만들다 eval-precondition 모드 1에서 정답이 정해지지 않는 곳 네 군데를 찾았다 (`eval/tier-screen/precondition-sheet.md`). 사용자 결정으로 아래를 더한다. v1 본문은 지우지 않는다.
+
+| # | 빈틈 | v1.1 규칙 |
+|---|---|---|
+| U1 | 전이 의존성도 기술 단위인가 | **아니다.** 기술 단위는 manifest에 직접 적힌 의존성 · Dockerfile `FROM`·compose `image` · CI `uses` · 코드에 적힌 모델·서비스 id뿐이다. 전이 의존성의 security는 직접 의존성 소식으로 들어온다 (소음 우선) |
+| U2 | 로컬에서 서빙하는 모델(vLLM 위 Qwen, GGUF)의 등급 | **L2에 넣는다** — L2 이름을 「모델 (호스팅·로컬)」로 넓힌다. 결정표의 「모델 은퇴」 칸은 호스팅 모델에만 적용한다 |
+| U3 | 등급표 밖의 종류 | **언어**(TypeScript·Java 등) → L0 · **DB**(PostgreSQL 등) → L1 · **CI**(GitHub Actions)·**빌드 도구**(vite·gradle 플러그인·uv)·**타입 정의**(`@types/*`) → L7 |
+| U4 | 애매할 때 탈출구가 없다 | **「분류 불가」를 허용한다** (이유 필수). 스크립트 검증으로 넘기고, 스크립트도 신호가 없으면 이번 주 후보에서 빼고 로그에 남긴다 — 놓치는 쪽을 택한 헤드라인(소음 비율)과 같은 방향 |
+
 ## 2. 축 1 — 기술 등급
 
 ### 2-1. 등급 (세분화 후보)
@@ -28,7 +39,7 @@ repo 전체에서 기술을 뽑으면 수십 개가 나온다(pydantic·requests
 |---|---|---|---|---|
 | L0 | 언어 런타임 | 인터프리터·언어 버전 | Python 3.12 | 확정 |
 | L1 | 실행 기반 | 베이스 이미지 · 서빙 엔진 · GPU 스택 | `python:3.12-slim` · `vllm/vllm-openai` · llama.cpp `llama-server` · CUDA | 확정 |
-| L2 | 호스팅 모델 | 외부 API로 부르는 모델 | Bedrock `nova-pro`(운영 기본) · `claude-sonnet-5` · `gpt-5.6-terra` · Jev | 확정 |
+| L2 | 호스팅 모델 (v1.1: 호스팅·로컬) | 외부 API로 부르는 모델 (v1.1: 로컬 서빙 모델 포함) | Bedrock `nova-pro`(운영 기본) · `claude-sonnet-5` · `gpt-5.6-terra` · Jev | 확정 |
 | L3 | 호스팅 서비스 | 모델이 아닌 외부 서비스·공공 API | Langfuse Cloud · Bedrock Guardrails · Finlife API · 국가법령정보 API | 확정 |
 | L4 | 앱 프레임워크 | 앱의 뼈대 — 바꾸면 코드 전반이 바뀜 | fastapi · pydantic · uvicorn · jinja2 | 확정 |
 | L5 | 공급자 SDK | L2·L3을 부르는 클라이언트 | boto3 · anthropic · openai · google-genai · langfuse · typesafe-sdk | 확정 |
