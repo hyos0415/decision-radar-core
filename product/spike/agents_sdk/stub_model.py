@@ -90,3 +90,44 @@ class StubModel(Model):
 
     def stream_response(self, *a, **k):
         raise NotImplementedError("스텁은 스트리밍을 쓰지 않는다")
+
+
+def _msg(stub, obj):
+    return ResponseOutputMessage(type="message", id=stub._id("msg"), role="assistant", status="completed",
+                                 content=[ResponseOutputText(type="output_text", text=json.dumps(obj, ensure_ascii=False), annotations=[])])
+
+
+def _call(stub, name, args):
+    return ResponseFunctionToolCall(type="function_call", id=stub._id("fc"), call_id=stub._id("call"),
+                                    name=name, arguments=json.dumps(args, ensure_ascii=False))
+
+
+class CaptureStub(StubModel):
+    """capture용 정해진 답. script = {"match": {...}, "draft": {...}, "force_propose": bool}
+
+    match_adr 결과를 보고 exact가 있으면 link 후보로 끝내고, 없으면(또는 force_propose) 초안을 제안한다.
+    제안이 실행(승인)되든 거부되든 그 결과를 받으면 끝낸다. 호출 이름은 입력 기록에서 call_id로 찾는다 —
+    2턴은 다른 프로세스에서 복원한 상태로 들어오므로 스텁은 자기 기억이 아니라 입력만 보고 판단한다.
+    """
+
+    async def get_response(self, system_instructions, input, model_settings, tools, output_schema, handoffs, tracing, **kw):
+        items = input if isinstance(input, list) else [{"role": "user", "content": input}]
+        names = {_get(i, "call_id"): _get(i, "name") for i in items if _get(i, "type") == "function_call"}
+        outs = [(names.get(_get(i, "call_id")), _get(i, "output")) for i in items if _get(i, "type") == "function_call_output"]
+        s = self.script
+        if not outs:
+            out = [_call(self, "match_adr", s["match"])]
+        elif outs[-1][0] == "match_adr":
+            exact = json.loads(outs[-1][1]).get("exact") or []
+            if exact and not s.get("force_propose"):
+                out = [_msg(self, {"link_candidates": exact, "note": "같은 3중 키 — 새 초안 대신 link 후보"})]
+            else:
+                out = [_call(self, "propose_adr", {"draft": s["draft"]})]
+        else:
+            try:  # 잘린 JSON을 note에 넣지 않는다 — run_case.extract_report는 문자열 안 중괄호도 센다
+                res = json.loads(outs[-1][1])
+                note = f"저장: {res.get('id')}" if isinstance(res, dict) and res.get("written") else "제안 결과 받음"
+            except (json.JSONDecodeError, TypeError):
+                note = "제안이 실행되지 않음 (거부)"
+            out = [_msg(self, {"link_candidates": [], "note": note})]
+        return ModelResponse(output=out, usage=Usage(), response_id=None)

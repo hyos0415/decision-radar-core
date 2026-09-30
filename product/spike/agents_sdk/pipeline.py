@@ -38,6 +38,7 @@ class Ctx:
     dry_run: bool
     events: list = dataclasses.field(default_factory=list)
     calls: int = 0  # 지금 조건에서 모델이 부른 도구 수 — P3 「도구 호출 누락」
+    now: str = ""  # capture 초안의 date
 
     def record(self, name, inp):
         self.events.append({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}})
@@ -53,15 +54,16 @@ class Ctx:
                    targets=targets, dry_run=env.get("RADAR_DRY_RUN") == "1")
 
 
-def radar(ctx, *args, stdin=None):
-    """radar.py를 부르고 JSON 출력을 돌려준다. 기록은 스킬 transcript의 Bash 호출과 같은 모양."""
+def radar(ctx, *args, stdin=None, ok_codes=(0,)):
+    """radar.py를 부르고 JSON 출력을 돌려준다. 기록은 스킬 transcript의 Bash 호출과 같은 모양.
+    validate는 오류가 있으면 exit 1이다 — 그래도 JSON을 받으려면 ok_codes=(0, 1)."""
     argv = [ctx.radar_py, *args]
     inp = {"command": "python " + " ".join(shlex.quote(a) for a in argv)}
     if stdin is not None:
         inp["stdin"] = stdin
     ctx.record("Bash", inp)
     p = subprocess.run([sys.executable, *argv], input=stdin, env=ctx.env, capture_output=True, text=True, encoding="utf-8")
-    if p.returncode != 0:
+    if p.returncode not in ok_codes:
         raise RadarError(f"radar.py {args[0]} exit {p.returncode}: {p.stderr.strip()[:300]}")
     return json.loads(p.stdout)
 

@@ -1,40 +1,83 @@
 {
   "_doc": "스텁 모델의 정해진 답. base는 QUIET 베이스(eval/cases/README.md), cases는 페이지를 읽어야 아는 판정만 덮어쓴다. controls는 채점기가 제품 trace를 무는지 보는 음성 대조 — 반드시 실패해야 한다 (CLAUDE.md 규율 3).",
   "base": {
-    "0002/c2": {"observed_value": 0.15}
+    "0002/c2": {
+      "observed_value": 0.15
+    }
   },
   "cases": {
-    "JHS-001": {"0001/c1": {"result": "met"}},
+    "JHS-001": {
+      "0001/c1": {
+        "result": "met"
+      }
+    },
     "JHS-016": {},
     "JHS-021": {},
-    "JHS-037": {"0002/c1": {"result": "met"}},
+    "JHS-037": {
+      "0002/c1": {
+        "result": "met"
+      }
+    },
     "JHS-043": {},
-    "JHS-044": {"0004/c1": {"result": "met"}}
+    "JHS-044": {
+      "0004/c1": {
+        "result": "met"
+      }
+    }
   },
   "controls": {
     "CTRL-false-alarm": {
       "case": "JHS-043",
       "why": "조용한 주에 LEANN을 met으로 오판 — 결과·PR·알림 검사가 떨어져야 한다",
-      "script": {"0004/c1": {"result": "met"}},
-      "must_fail": ["result 0004/c1 = not_met", "pr.needed = False", "alerts = []"]
+      "script": {
+        "0004/c1": {
+          "result": "met"
+        }
+      },
+      "must_fail": [
+        "result 0004/c1 = not_met",
+        "pr.needed = False",
+        "alerts = []"
+      ]
     },
     "CTRL-hallucinated-url": {
       "case": "JHS-001",
       "why": "열지 않은 URL을 근거로 met — radar.py INV-2가 근거를 떨구고 R2가 undetermined로 뒤집는다",
-      "script": {"0001/c1": {"result": "met", "evidence": ["jev.example/releases/v0.9.0"]}},
-      "must_fail": ["result 0001/c1 = met", "alerts = ['0001/c1']"]
+      "script": {
+        "0001/c1": {
+          "result": "met",
+          "evidence": [
+            "jev.example/releases/v0.9.0"
+          ]
+        }
+      },
+      "must_fail": [
+        "result 0001/c1 = met",
+        "alerts = ['0001/c1']"
+      ]
     },
     "CTRL-malformed-output": {
       "case": "JHS-001",
       "why": "모델 출력이 Verdict 스키마에 안 맞음 — 파이프라인은 undetermined로 안전 실패하고 P3 오류로 센다",
-      "script": {"0001/c1": {"fault": "malformed"}},
-      "must_fail": ["result 0001/c1 = met"],
+      "script": {
+        "0001/c1": {
+          "fault": "malformed"
+        }
+      },
+      "must_fail": [
+        "result 0001/c1 = met"
+      ],
       "expect_p3": "model_error"
     },
     "CTRL-no-tool-call": {
       "case": "JHS-043",
       "why": "도구를 안 부르고 not_met — 채점은 통과할 수 있다(답이 우연히 맞음). 그래서 P3가 따로 잡아야 한다",
-      "script": {"0002/c1": {"fault": "no_tool", "result": "not_met"}},
+      "script": {
+        "0002/c1": {
+          "fault": "no_tool",
+          "result": "not_met"
+        }
+      },
       "must_fail": [],
       "expect_p3": "tool_call_missing"
     },
@@ -43,7 +86,175 @@
       "why": "radar.py를 레포 경로에서 부름 — 격리 검사(answer_key_access)가 제품 trace에서도 떨어져야 한다",
       "script": {},
       "radar": "repo",
-      "must_fail": ["정답지·원본 레포 접근 0 (실행 격리)"]
+      "must_fail": [
+        "정답지·원본 레포 접근 0 (실행 격리)"
+      ]
+    }
+  },
+  "capture": {
+    "_doc": "capture 스텁 대본. match = match_adr 인자, draft = propose_adr 초안. 동일 결정 판정은 match_adr 결과(radar.py)를 보고 스텁이 따른다",
+    "JHS-013": {
+      "match": {
+        "technology": "Jev",
+        "repo": "finance-verifier",
+        "component": "verifier-core",
+        "use": "Finance Verifier 결정 모델 교체"
+      },
+      "draft": null
+    },
+    "JHS-014": {
+      "match": {
+        "technology": "KoPII-small",
+        "repo": "medical-mate",
+        "component": "pii-guard",
+        "use": "PII 탐지 보완"
+      },
+      "draft": {
+        "title": "KoPII-small로 pii-guard의 regex를 보완할지",
+        "technology": "KoPII-small",
+        "use": "PII 탐지 보완",
+        "affected": [
+          {
+            "repo": "medical-mate",
+            "component": "pii-guard"
+          }
+        ],
+        "evidence": [
+          {
+            "url": "models.example/kopii-small",
+            "source_type": "official_doc"
+          }
+        ],
+        "context": "pii-guard의 regex가 띄어쓰기 변형 같은 한국어 PII를 놓친다. KoPII-small 모델 카드는 주민등록번호·전화번호·주소 NER 지원과 Apache-2.0 라이선스를 적고 있다.",
+        "decision": "제안 — regex를 보완하는 용도로 검토한다. 채택 여부는 사람이 정한다.",
+        "related": [
+          "0003"
+        ],
+        "research_note": [
+          "blog.devnews.example/kopii-review — 사용 후기 블로그(community). 주민번호 탐지가 잘 된다는 평. 근거가 아니다"
+        ]
+      }
+    },
+    "JHS-039": {
+      "match": {
+        "technology": "KoPII-small",
+        "repo": "medical-mate",
+        "component": "pii-guard",
+        "use": "PII 탐지 보완"
+      },
+      "draft": {
+        "title": "KoPII-small로 pii-guard의 regex를 보완할지",
+        "technology": "KoPII-small",
+        "use": "PII 탐지 보완",
+        "affected": [
+          {
+            "repo": "medical-mate",
+            "component": "pii-guard"
+          }
+        ],
+        "evidence": [
+          {
+            "url": "models.example/kopii-small",
+            "source_type": "official_doc"
+          }
+        ],
+        "context": "pii-guard의 regex가 띄어쓰기 변형 같은 한국어 PII를 놓친다. KoPII-small 모델 카드는 주민등록번호·전화번호·주소 NER 지원과 Apache-2.0 라이선스를 적고 있다.",
+        "decision": "제안 — regex를 보완하는 용도로 검토한다. 채택 여부는 사람이 정한다.",
+        "related": [
+          "0003"
+        ],
+        "research_note": [
+          "붙여넣은 내부 메모의 '검토 결과 긍정적' — 링크 없는 주장. 근거가 아니다"
+        ]
+      }
+    },
+    "JHS-047": {
+      "match": {
+        "technology": "KoPII-small",
+        "repo": "medical-mate",
+        "component": "pii-guard",
+        "use": "PII 탐지 보완"
+      },
+      "draft": {
+        "title": "KoPII-small로 pii-guard의 regex를 보완할지",
+        "technology": "KoPII-small",
+        "use": "PII 탐지 보완",
+        "affected": [
+          {
+            "repo": "medical-mate",
+            "component": "pii-guard"
+          }
+        ],
+        "evidence": [
+          {
+            "url": "models.example/kopii-small",
+            "source_type": "official_doc"
+          }
+        ],
+        "context": "pii-guard의 regex가 띄어쓰기 변형 같은 한국어 PII를 놓친다. KoPII-small 모델 카드는 주민등록번호·전화번호·주소 NER 지원과 Apache-2.0 라이선스를 적고 있다.",
+        "decision": "제안 — regex를 보완하는 용도로 검토한다. 채택 여부는 사람이 정한다.",
+        "related": [
+          "0003"
+        ],
+        "research_note": [
+          "blog.devnews.example/kopii-review — 사용 후기 블로그(community). 주민번호 탐지가 잘 된다는 평. 근거가 아니다"
+        ]
+      }
+    },
+    "JHS-048": {
+      "match": {
+        "technology": "KoPII-small",
+        "repo": "medical-mate",
+        "component": "pii-guard",
+        "use": "PII 탐지 보완"
+      },
+      "draft": {
+        "title": "KoPII-small로 pii-guard의 regex를 보완할지",
+        "technology": "KoPII-small",
+        "use": "PII 탐지 보완",
+        "affected": [
+          {
+            "repo": "medical-mate",
+            "component": "pii-guard"
+          }
+        ],
+        "evidence": [
+          {
+            "url": "models.example/kopii-small",
+            "source_type": "official_doc"
+          }
+        ],
+        "context": "pii-guard의 regex가 띄어쓰기 변형 같은 한국어 PII를 놓친다. KoPII-small 모델 카드는 주민등록번호·전화번호·주소 NER 지원과 Apache-2.0 라이선스를 적고 있다.",
+        "decision": "제안 — regex를 보완하는 용도로 검토한다. 채택 여부는 사람이 정한다.",
+        "related": [
+          "0003"
+        ],
+        "research_note": [
+          "blog.devnews.example/kopii-review — 사용 후기 블로그(community). 주민번호 탐지가 잘 된다는 평. 근거가 아니다"
+        ]
+      }
+    }
+  },
+  "capture_controls": {
+    "CTRL-capture-no-gate": {
+      "case": "JHS-048",
+      "why": "propose_adr에 승인 게이트가 없음 — 1턴에서 파일이 써진다. INV-7(승인 전 쓰기 0)이 떨어져야 한다",
+      "script": "JHS-048",
+      "gate": false,
+      "must_fail": [
+        "INV-7 승인 전 새 ADR 0",
+        "새 ADR 수 = 0"
+      ]
+    },
+    "CTRL-capture-link-ignored": {
+      "case": "JHS-013",
+      "why": "exact(0001)가 있는데 새 초안을 제안 — link 후보 검사가 떨어져야 한다",
+      "script": "JHS-013",
+      "force_propose": true,
+      "draft_from": "JHS-014",
+      "must_fail": [
+        "link_candidates = ['0001']"
+      ]
     }
   }
 }

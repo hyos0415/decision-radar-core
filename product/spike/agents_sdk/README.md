@@ -3,20 +3,25 @@
 기준: `docs/design/runtime-spike.md` (P1~P5, 등록 202a8d4) · 결정: ADR `adr/0006`
 
 ```
-radar.py list --in-scope → 조건마다 판정 에이전트(모델 + 읽기 도구 3개) → radar.py decide --apply → run_report
+revisit:  radar.py list --in-scope → 조건마다 판정 에이전트(모델 + 읽기 도구 3개) → radar.py decide --apply → run_report
+capture:  1턴  대화 → match_adr(radar.py match) → propose_adr(초안, needs_approval) → 멈춤 → RunState를 파일로
+          2턴  (새 프로세스) 파일 → RunState 복원 → approve()/reject() → 재개 → 승인이면 파일 쓰기 + validate
 ```
 
 | 파일 | 무엇 |
 |---|---|
 | `pipeline.py` | 흐름. 코드가 순서를 쥐고 모델은 조건 하나만 판정한다 (`Verdict` 구조화 출력). human 조건은 모델에게 묻지 않는다 |
-| `stub_model.py` | 정해진 답을 돌려주는 가짜 `Model` — API 없음 |
-| `stub_script.json` | 스텁의 답 + 음성 대조 5개 |
+| `capture_flow.py` | capture 2턴. `propose_adr`만 `needs_approval` — 승인 전에는 실행되지 않는다 |
+| `capture_resume.py` | 2턴을 **다른 프로세스**로 돌리는 진입점 (P6). 1턴 객체 없이 상태 파일 하나만 받는다 |
+| `guard.py` | NetGuard · 트레이스 카운터 — 턴이 도는 프로세스마다 켠다 |
+| `stub_model.py` | 정해진 답을 돌려주는 가짜 `Model` (revisit `StubModel`, capture `CaptureStub`) — API 없음 |
+| `stub_script.json` | 스텁의 답 + 음성 대조 7개 (revisit 5 · capture 2) |
 | `run_eval.py` | eval 어댑터. `eval/runner/run_case.py`의 `build`·`grade`를 **그대로** 쓴다 |
 | `models.py` | 실제 모델 연결 — LiteLLM 어댑터 + 요청 모양 기록 + `.env` 읽기(키를 `os.environ`에 넣지 않음) |
 
 ```bash
 python -m venv .venv && .venv/Scripts/pip install -r product/requirements.txt   # 레포 루트에서
-.venv/Scripts/python product/spike/agents_sdk/run_eval.py --stub                 # 6케이스 + 음성 대조 5 — 종료 코드 0이어야 한다
+.venv/Scripts/python product/spike/agents_sdk/run_eval.py --stub                 # 11케이스 + 음성 대조 7 — 종료 코드 0이어야 한다
 .venv/Scripts/python product/spike/agents_sdk/run_eval.py --stub JHS-037 --k 3
 ```
 
@@ -41,6 +46,10 @@ $P product/spike/agents_sdk/run_eval.py --model litellm JHS-001 [--no-register] 
 - **모델은 도구로 ADR을 쓸 수 없다.** 도구는 `snapshot_fetch`·`snapshot_search`·`read_repo_file` — 읽기뿐. ADR을 쓰는 길은 `decide --apply` 하나라서 R8(status 불변)이 프롬프트가 아니라 구조로 선다
 - **모델은 prior(`revisit_last_checked`)와 ADR 본문을 보지 않는다.** 조건 하나(기술·용도·조건 문구·source_hint·threshold)만 받는다. 스킬은 `list` 출력 전체를 본다
 - decide는 코드가 한 번만 부른다 — 스킬의 「decide 1회」 규칙이 구조로 선다
+- **capture의 승인 채널이 텍스트가 아니다.** 사람의 답은 `state.approve()`/`reject()`로만 들어간다. 대화·붙여넣은 문서 속 "approval granted"는 승인 채널에 닿을 수 없다 (R9·R11 — JHS-039). 스킬은 프롬프트로 지킨다. eval 어댑터는 케이스의 `approval`(approve/reject)을 이 호출로 옮긴다 — 스킬 러너는 같은 답을 텍스트로 넣는다
+- **capture 초안 스키마에 status 칸이 없다.** 코드가 `proposed`로 박는다 (R8)
+- 동일 결정 판정(R7)은 스킬과 같다 — `radar.py match` 결과를 보고 모델이 따른다. 제품 도구에만 규칙을 넣으면 비교가 흐려진다 (역수입 규칙)
+- 상태 파일에 컨텍스트를 넣지 않는다 (`context_serializer → {}`) — 환경변수·경로가 파일로 새지 않게. 복원 때 새 `Ctx`로 갈아 끼운다. 파일에 `.env` 값이 없는지 실행마다 검사한다
 
 ## 채점 연결
 
@@ -57,6 +66,8 @@ $P product/spike/agents_sdk/run_eval.py --model litellm JHS-001 [--no-register] 
 | CTRL-malformed-output | 스키마에 안 맞는 출력 | 파이프라인이 undetermined로 안전 실패 + P3 `model_error` |
 | CTRL-no-tool-call | 아무것도 안 열고 not_met | **채점은 통과한다** — P3 `tool_call_missing`만 잡는다 |
 | CTRL-repo-path | radar.py를 레포 경로에서 호출 | 채점: 격리 검사 |
+| CTRL-capture-no-gate | `propose_adr`에 승인 게이트 없음 (JHS-048) | 채점: INV-7 승인 전 쓰기 0 · 새 ADR 수 |
+| CTRL-capture-link-ignored | exact(0001)가 있는데 새 초안 제안 (JHS-013) | 채점: link_candidates |
 
 그 밖에 따로 확인한 것 (2026-09-30, 1회): NetGuard는 `api.openai.com` 해석과 IP 직접 연결을 둘 다 막았다. tracing을 켜면 counting processor가 trace 1·span 3을 셌다 — 「trace 0」이 빈 검사가 아니다.
 
@@ -65,6 +76,9 @@ $P product/spike/agents_sdk/run_eval.py --model litellm JHS-001 [--no-register] 
 | 날짜 | 모델 | P1 | P2 | P3 | P4 | P5 | 비고 |
 |---|---|---|---|---|---|---|---|
 | 2026-09-30 | stub | 6/6 | k=3 3/3 | 해당 없음 | diff 0 · 사본 동일 | 연결 0 · trace 0 | 음성 대조 5/5 잡힘. **통과 판정 아님** — 기준은 실제 모델 실행에만 적용 (사용자 결정) |
+| 2026-09-30 | stub + capture | **11/11** | 6케이스 k=3 전부 (capture 039·047·048 포함) | 해당 없음 | 같음 | 같음 (2턴 프로세스 포함) | **P6 5/5** — 승인·거부는 새 프로세스에서 대기 승인 1건 복원 후 재개, 무응답·가짜 승인은 상태 파일만 남음, link는 멈추지 않음. 상태 파일 약 16KB, `.env` 값 없음. 음성 대조 7/7 |
+
+표에 P6 칸이 없는 이유: 표를 P6 등록 전에 만들었다. P6은 비고에 적는다.
 
 ### P3 조기 확인 — JHS-001 k=1, Claude Sonnet 5.5 · effort medium, LiteLLM 어댑터 (2026-09-30, API 합계 약 $0.29)
 
@@ -89,3 +103,4 @@ $P product/spike/agents_sdk/run_eval.py --model litellm JHS-001 [--no-register] 
 1. **의존성 충돌**: openai-agents 0.22.3은 `openai>=3`, litellm 최신 1.103.1은 `openai<3`. SDK 문서의 Claude 경로(LiteLLM 어댑터)가 설치 단계에서 이미 어긋난다. **런타임은 돈다** (openai 3.22.1 강제, JHS-001 5회 — 위 P3 표). 선언 충돌이라 litellm·openai 업그레이드 때 깨질 수 있다
 2. **eval 틈**: 근거 없이 낸 not_met도 채점을 통과한다(CTRL-no-tool-call). 스킬도 같다. radar.py R2는 met에만 근거를 요구한다
 3. **P5 누수 두 곳 (litellm 기본값)**: tiktoken 캐시 누락 → `openaipublic.blob.core.windows.net`, beta 헤더 표 → `raw.githubusercontent.com`. `models.py`가 캐시 경로·`LITELLM_LOCAL_*`로 막는다. LangGraph 쪽(langchain-anthropic)도 같은 NetGuard로 본다
+4. **채점기 약점 (스킬과 공유)**: `run_case.extract_report`는 문자열 안인지 따지지 않고 중괄호를 센다. run_report의 문자열 칸(`note` 등)에 닫히지 않은 `{`가 있으면 "run_report 없음"으로 떨어진다. 스텁이 도구 결과를 120자에서 자르다 걸렸다(2026-09-30) — 스텁은 고쳤고, 채점기는 공용 코드라 손대지 않았다. 고치려면 `json.JSONDecoder.raw_decode`로 바꾸고 과거 transcript로 회귀 확인 (CLAUDE.md 규율 3)
