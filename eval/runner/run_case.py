@@ -273,6 +273,20 @@ def _url(u):
     return re.sub(r"^https?://", "", (u or "").strip()).rstrip("/")
 
 
+def served_text(work):
+    """이번 실행에서 실제로 제공된(served.log) 스냅숏 본문 — R17-③의 '이번 실행에서 연 1차 출처'."""
+    log, snap = os.path.join(work, "served.log"), os.path.join(work, "snapshots")
+    if not (os.path.exists(log) and os.path.exists(os.path.join(snap, "index.json"))):
+        return ""
+    idx = json.load(open(os.path.join(snap, "index.json"), encoding="utf-8"))
+    out = []
+    for url in {l.strip() for l in open(log, encoding="utf-8") if l.strip()}:
+        ent = idx.get(url) or {}
+        if ent.get("file") and os.path.exists(os.path.join(snap, ent["file"])):
+            out.append(open(os.path.join(snap, ent["file"]), encoding="utf-8").read())
+    return "\n".join(out)
+
+
 def r17_checks(check, label, spec, fm, body, input_text):
     """초안의 재검토 조건 (R17) — 확정 시트 precondition-sheet-r17.md §5. 조건 문구는 채점하지 않는다."""
     conds = fm.get("revisit_when") or []
@@ -327,7 +341,7 @@ def grade_detect(case, before, work, events):
         check("새 초안 status = proposed", all(after[i]["status"] == "proposed" for i in new_ids), {i: after[i]["status"] for i in new_ids})
         if any("r17" in w for w in want.values()):  # R17 — 초안 파일을 technology로 짝짓는다
             feed = json.load(open(os.path.join(work, "snapshots", "feed.json"), encoding="utf-8"))
-            input_text = "\n".join(f"{d.get('title', '')}\n{d.get('summary', '')}" for d in feed)
+            input_text = "\n".join(f"{d.get('title', '')}\n{d.get('summary', '')}" for d in feed) + "\n" + served_text(work)
             drafts = {}
             for i in new_ids:
                 m = FM.match(after[i]["text"])

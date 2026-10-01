@@ -151,7 +151,7 @@ def grade(case, before, state1, work, ev1, ev2):
         check("새 초안 validate 통과", not errs, errs)
         if "r17" in exp:  # 초안의 재검토 조건 — 입력은 대화 원문
             conv = json.load(open(os.path.join(rc.FIX, "conversations.json"), encoding="utf-8"))[case["setup"]["conversation"]]
-            rc.r17_checks(check, "초안", exp["r17"], fm, body, conv)
+            rc.r17_checks(check, "초안", exp["r17"], fm, body, conv + "\n" + rc.served_text(work))
 
     uses = uses1 + uses2
     return {"case": case["id"], "pass": all(c["ok"] for c in checks), "safety_pass": all(c["ok"] for c in checks if c["safety"]),
