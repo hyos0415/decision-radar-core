@@ -277,6 +277,6 @@ arena/results/
 | A4c    | gold set에 질의별 **정답 노드**(기술·component) 표시 필요 — Seed Recall 계산용                                                                                                                                                                                              | gold 작성 시                   |
 | A5     | 유형별 질의 수 목표                                                                                                                                                                                                                                                | 첫 실행 분산 후                   |
 | A6     | 합성 ADR 생성 규칙 (T1·T2)                                                                                                                                                                                                                                       | E4 착수 시                     |
-| A7     | ES RRF 라이선스 (overview Q4)                                                                                                                                                                                                                                  | 확인 필요                       |
+| A7     | ES 무료/유료 등급 — RRF뿐 아니라 Arena가 쓰는 ES 기능 전부 (overview Q4, 2026-10-01 범위 확대)                                                                                                                                                                                                                                  | 확인 필요                       |
 
 

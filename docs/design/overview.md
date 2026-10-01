@@ -259,10 +259,10 @@ MoSCoW = **M**ust(없으면 실패) · **S**hould(중요하지만 없어도 성�
 
 | # | 질문 | 누가 |
 |---|---|---|
-| Q1 | 집 M1의 RAM — ES·Neo4j·임베딩 모델을 함께 띄울 수 있는가 (16GB로 기억) | 사용자 확인 |
+| ~~Q1~~ | ~~집 M1의 RAM~~ → **16GB** (사용자 확인 2026-10-01). ES·Neo4j heap 각 1GB 상한, 임베딩은 미리 계산해 두고 모델을 상주시키지 않는다 | 해결 |
 | ~~Q2~~ | ~~Gemini 크레딧 형태~~ → **AI Studio API 키** (`GEMINI_API_KEY`) | 해결 |
 | ~~Q3~~ | ~~구조 그래프와 온톨로지의 경계~~ → **그래프 하나, 모드 둘(ablation)**: 구조만 vs +온톨로지 계층(isA·altLabel·추론). SHACL은 검색이 아니라 적재 전 검증 | 해결 (2026-09-29) |
-| Q4 | ES의 RRF가 라이선스 등급에서 쓸 수 있는가 — 안 되면 fusion만 `ranx` | 확인 필요 |
+| Q4 | ES의 RRF가 라이선스 등급에서 쓸 수 있는가 — 안 되면 fusion만 `ranx` — **변경 (2026-10-01, 사용자): 범위를 넓힌다 — Arena가 ES에 기대는 기능 전부(nori·BM25·kNN·RRF/retriever·그 밖의 것)가 무료(self-managed Basic) 등급에 드는지. HYO-31(docker compose) 전에 조사** | 조사 (다음 세션) |
 | Q5 | 재판정 결정 기록 — 이 문서가 확정되면 `docs/decisions/`에 | E1 |
 | Q6 | 웹 프레임워크 | E6 착수 전 |
 
