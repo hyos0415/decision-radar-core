@@ -176,6 +176,13 @@ def test_page_hash_ignores_build_ids():
     assert pa.text == "Sep 30 Sonnet 5.5 released"
 
 
+def test_vendor_markdown_page_kept_verbatim():
+    md = b"# Changelog\n\n<h2 id=\"v072\">v0.7.2 (2026-09-26)</h2>\n\n* add `http2` extra\n"
+    it = vendor.parse_page(md, "typesafe", "https://docs.typesafe.ai/sdk/python/changelog.md", 0, "markdown")
+    assert "v0.7.2 (2026-09-26)" in it.text and it.text.startswith("# Changelog")   # 태그를 지우지 않는다
+    assert it.meta["format"] == "markdown"
+
+
 def test_vendor_rss_include_filter():
     rss = b"""<rss><channel>
       <item><title>Amazon Bedrock adds X</title><link>https://aws/1</link><guid>1</guid><description>d</description></item>

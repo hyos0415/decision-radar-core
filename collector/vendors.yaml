@@ -36,6 +36,14 @@ vendors:
     match: [gemini, google-genai]
     feeds:
       - {kind: page, url: "https://ai.google.dev/gemini-api/docs/changelog"}
+  typesafe:
+    match: [jev, typesafe]
+    feeds:
+      # Mintlify 문서라 페이지마다 .md 원문이 있다 (llms.txt) — HTML이 아니라 그대로 비교한다
+      # 확인 (2026-10-02): finance_verifier가 쓰는 모델 ID `jev-1.13.0`이 이 페이지의 Current models와 같다
+      - {kind: page, format: markdown, url: "https://docs.typesafe.ai/models.md"}               # 모델 버전·가격·한도
+      # SDK 변경 기록(/sdk/python/changelog)은 넣지 않는다 — PyPI가 가리키는 typesafe-ai/typesafe-sdk-python의
+      # 릴리스가 GitHub 의존성 통로로 이미 들어온다 (중복)
   # ADR의 오픈소스 기술 — 대상 repo 의존성이 아니라서 GitHub 의존성 통로에 안 잡힌다 (2026-10-02 첫 실행에서 「경로 없음」)
   leann:
     match: [leann]

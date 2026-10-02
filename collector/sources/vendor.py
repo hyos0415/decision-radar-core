@@ -70,11 +70,13 @@ def parse_feed(body, vendor, url, include=None, since_ts=0):
     return out
 
 
-def parse_page(body, vendor, url, now):
-    text = html_to_text(body.decode("utf-8", "replace"))
+def parse_page(body, vendor, url, now, fmt="html"):
+    raw = body.decode("utf-8", "replace")
+    text = raw.strip() if fmt == "markdown" else html_to_text(raw)
     return Item(id=f"vendor-page:{vendor}:{url}", source="vendor", channels=[f"vendor:{vendor}"],
                 title=f"[{vendor}] {url}", url=url, created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
-                text=text, meta={"vendor": vendor, "kind": "page", "text_hash": text_hash(text), "text_chars": len(text)})
+                text=text, links=extract_links(raw) if fmt == "markdown" else [],
+                meta={"vendor": vendor, "kind": "page", "format": fmt, "text_hash": text_hash(text), "text_chars": len(text)})
 
 
 def collect(cfg, fetcher, now=None, names=None, only=None):
@@ -91,8 +93,10 @@ def collect(cfg, fetcher, now=None, names=None, only=None):
                 report["failed"].append({"vendor": vendor, "url": f["url"], "status": st})
                 continue
             if f["kind"] == "page":
-                it = parse_page(body, vendor, f["url"], now)
-                if it.meta["text_chars"] < 2000:   # 자바스크립트로 그리는 페이지는 본문이 거의 없다 → 비교 불가
+                fmt = f.get("format", "html")
+                it = parse_page(body, vendor, f["url"], now, fmt)
+                # 자바스크립트로 그리는 HTML 페이지는 본문이 거의 없다 → 비교 불가. markdown 원문은 짧아도 정상
+                if fmt == "html" and it.meta["text_chars"] < 2000:
                     report["failed"].append({"vendor": vendor, "url": f["url"], "status": "page text too short"})
                 items.append(it)
             else:

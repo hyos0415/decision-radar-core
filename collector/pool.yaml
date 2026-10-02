@@ -33,6 +33,9 @@ github:
     vllm: vllm-project/vllm
     llama.cpp: ggml-org/llama.cpp
     k6: grafana/k6
+    # PyPI로 찾으면 Python 클라이언트 repo가 나온다 — 우리가 띄우는 건 서버다 (infra/)
+    elasticsearch: elastic/elasticsearch
+    neo4j: neo4j/neo4j
 
 huggingface:
   trending_limit: 100
