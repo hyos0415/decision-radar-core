@@ -289,7 +289,7 @@ self-managed 구독 표(elastic.co/subscriptions, 2026-10-01 원본 파싱):
 | # | 질문 | 누가 |
 |---|---|---|
 | ~~D1~~ | ~~프로필 정의 · importance-policy와의 결합 · 전략 비교 사전 등록~~ → §2-2 프로필 · §2-3 두 레인 · 예측은 한 줄만(격자 없음) (2026-10-02) | 해결 |
-| D2 | S4 `index_options` (`flat` · `hnsw` · `int8_hnsw` · `bbq_hnsw`) | 사용자 |
+| ~~D2~~ | ~~S4 `index_options`~~ → `hnsw` (float) · Should 변형 `S4.int8`·`S4.bbq` · dev 진단 `flat` 계열 (`retrieval-arena.md` §6 변경, 2026-10-02) | 해결 |
 | D3 | 수집기를 어디서 돌리나 (로컬 · cloud routine · 기타) | 구현 시 |
 | D4 | 수집 요일·시각 | 구현 시 |
 | D5 | Reddit 공식 API 신청 | 사용자 |

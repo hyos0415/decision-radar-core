@@ -139,6 +139,33 @@ K는 지금 `jhs.py match`가 문자열 일치로 하는 일이다. 규모에서
 - **SHACL은 전략이 아니다** — 그래프 적재 전 검증. 검증에서 떨어진 데이터는 어느 그래프 전략에도 들어가지 않는다
 - **S10 라우터는 S0\~S9의 dev 결과가 나온 뒤에** 등록한다. 라우터는 test를 본 적이 없어야 한다
 
+**변경 (2026-10-02, 사용자 결정 — 결과 0건): S4 색인 설정 고정 · 양자화 변형 추가**
+
+등록 때 S4의 고정 설정은 「임베딩 모델 · 유사도」뿐이었다. 색인 방식을 적지 않으면 ES 기본값이 라이선스·버전에 따라 바뀐다 — Basic의 9.1+에서는 384차원 이상이면 `bbq_hnsw`(1비트 양자화), 9.4+는 라이선스가 허락하면 `bbq_disk`(Enterprise). §7-2 규칙 4(고정 설정은 등록 때 확정)에 따라 결과를 보기 전에 정한다. 위 표의 S4 행은 바꾸지 않는다.
+
+| 항목 | 고정값 |
+|---|---|
+| S4 `index_options` | **`hnsw`** (float32, 양자화 없음) |
+| HNSW 파라미터 | `m` · `ef_construction` · `num_candidates` · `k`는 HYO-35 착수 때 dev에서 정하고 test 전에 고정한다 (모든 S4 변형이 같은 값) |
+| 유사도 | `cosine` (dense_vector 기본) |
+| `_source` 벡터 | `index.mapping.exclude_source_vectors` 값을 명시한다 (9.2+ 기본은 제외) — 색인 크기 측정 경계에 영향 |
+| ES 버전 · 라이선스 | 이미지 버전 고정 · `xpack.license.self_generated.type=basic` (`doc-pipeline.md` §7) |
+
+이유: `S4.leann`이 「임베딩·청크는 같고 index만 LEANN(HNSW 백엔드)」로 등록돼 있다. S4도 float HNSW면 둘 사이에 **「벡터를 저장하나, 질의 때 다시 계산하나」 하나만 다르다.** 양자화를 쓰면 ES가 원본 float을 디스크에 그대로 두어(int8 약 +25%, BBQ +3.1%) 크기 비교가 왜곡된다.
+
+**Should 변형** — S4와 같은 임베딩·청크·HNSW 파라미터, 양자화만 바꾼다:
+
+| ID | `index_options` | 묻는 것 |
+|---|---|---|
+| `S4.int8` | `int8_hnsw` | 손실이 가장 작은 압축(ES 9.0 기본값)이 우리 데이터에서 얼마를 잃나 |
+| `S4.bbq` | `bbq_hnsw`, 재채점 `oversample` **3.0을 명시** | 지금 Basic 기본값(가장 공격적인 압축)을 그대로 쓰면 얼마를 잃나 |
+
+- 뺀 것: `int4_hnsw`(둘 사이라 새로 알려 주는 게 적다) · `bbq_disk`(Enterprise)
+- 잴 것: gold 대비 Recall@k·nDCG@10 · `flat` 대비 ANN recall@10 · 메모리 · 디스크 크기 · 지연 p50
+- 이 변형들은 54칸 적중률에 넣지 않는다 — 기준이 BM25가 아니라 S4다 (`S4.leann`과 같은 취급)
+
+**진단 (전략이 아니라 확인 작업, dev에서 한 번)**: `flat` · `int8_flat` · `bbq_flat`을 같은 질의로 돌려 손실을 나눈다 — `flat` 대 `hnsw` = 근사만의 손실, `flat` 대 `*_flat` = 양자화만의 손실, `flat` 대 `*_hnsw` = 둘을 합친 손실. ANN recall이 품질 차이의 상한이다 (`study-notes.md` HNSW · 벡터 양자화)
+
 ## 7. 사전 등록
 
 ### 7-1. 예측 격자 (필수, 가벼움)
