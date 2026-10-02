@@ -10,6 +10,7 @@ import time
 
 from .. import feeds
 from ..item import Item, extract_links, html_to_text, text_hash
+from . import github
 
 _ROW = re.compile(r"^\|\s*([^|]+?)\s*\|")
 
@@ -85,8 +86,19 @@ def collect(cfg, fetcher, now=None, names=None, only=None):
     if only:
         picked = {v: n for v, n in picked.items() if v in only}
     items, report = [], {"requests": 0, "failed": [], "picked": picked, "no_route": missing, "excluded": excluded}
+    headers = None
+    window = cfg.get("release_window_days", 8)
     for vendor in picked:
         for f in cfg["vendors"][vendor]["feeds"]:
+            if f["kind"] == "github_releases":
+                if headers is None:
+                    fetcher.min_interval.setdefault("api.github.com", 2.1)
+                    headers, _ = github.api_headers()
+                for it in github.fetch_releases(f["repo"], fetcher, headers, now - window * 86400, report,
+                                                f"vendor:{vendor}", {"vendor": vendor}):
+                    it.source = "vendor"
+                    items.append(it)
+                continue
             report["requests"] += 1
             st, body = fetcher.get(f["url"])
             if st != 200:

@@ -134,6 +134,31 @@ def test_github_repo_from_pypi_skips_sponsors():
     assert github.repo_from_pypi_info(only_sponsor) is None
 
 
+def _rel(tag, iso):
+    return {"tag_name": tag, "name": tag, "html_url": f"https://github.com/o/r/releases/tag/{tag}",
+            "published_at": iso, "body": "fix <https://example.com/x>", "prerelease": False, "draft": False}
+
+
+def test_github_releases_paginate_until_window():
+    # releases.atom은 10건뿐 — llama.cpp는 하루치도 안 됐다 (2026-10-02). API는 창을 벗어날 때까지 넘긴다
+    since = time.mktime((2026, 9, 25, 0, 0, 0, 0, 0, 0)) - time.timezone
+    page1 = [_rel(f"b{i}", "2026-10-01T00:00:00Z") for i in range(100)]          # 전부 창 안
+    page2 = [_rel("b100", "2026-09-30T00:00:00Z"), _rel("old", "2026-09-01T00:00:00Z")]
+
+    class F:
+        calls = []
+        def get_json(self, url, headers=None):
+            self.calls.append(url)
+            return page1 if url.endswith("&page=1") else page2   # "page=1" in url은 per_page=100에도 걸린다
+    f = F()
+    rep = {"requests": 0, "failed": []}
+    items = github.fetch_releases("o/r", f, {}, since, rep, "dependency-releases")
+    assert len(f.calls) == 2, f.calls                       # 100건이 다 창 안이라 2쪽까지
+    assert len(items) == 101 and all(i.id.startswith("github-release:o/r@") for i in items)
+    assert "old" not in {i.meta["tag"] for i in items}       # 창 밖은 버린다
+    assert items[0].links == ["https://example.com/x"]
+
+
 def test_hf_parsers():
     ms = huggingface.parse_models([{"id": "fastino/GLiNER2.5-Decide", "trendingScore": 207, "likes": 10,
                                     "pipeline_tag": "token-classification", "createdAt": "2026-09-24T00:00:00Z"}],

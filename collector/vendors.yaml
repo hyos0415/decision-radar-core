@@ -2,7 +2,7 @@
 # 「어느 벤더를 볼지」는 규칙이 뽑는다: 대상 repo CLAUDE.md 「외부 모델·서비스」 ∪ 재검토 조건이 살아 있는 ADR의 기술.
 # 규칙이 뽑은 이름이 아래 어느 벤더의 match에도 안 걸리면 「경로 없음」으로 보고한다.
 #
-# 경로 종류: atom (GitHub releases 등) · rss (include로 거른다) · page (본문 텍스트를 받아 해시 — 비교는 스냅숏 단계)
+# 경로 종류: github_releases (REST API — releases.atom은 최근 10건뿐이라 쓰지 않는다) · atom · rss (include로 거른다) · page (본문 텍스트를 받아 해시 — 비교는 스냅숏 단계)
 version: 1
 vendors:
   anthropic:
@@ -10,13 +10,13 @@ vendors:
     feeds:
       - {kind: page, url: "https://docs.claude.com/en/release-notes/api"}
       - {kind: page, url: "https://docs.claude.com/en/docs/about-claude/model-deprecations"}
-      - {kind: atom, url: "https://github.com/anthropics/claude-code/releases.atom"}
+      - {kind: github_releases, repo: anthropics/claude-code}
   openai:
     match: [openai, gpt]
     feeds:
       - {kind: page, url: "https://platform.openai.com/docs/changelog"}
       - {kind: page, url: "https://platform.openai.com/docs/deprecations"}
-      - {kind: atom, url: "https://github.com/openai/openai-agents-python/releases.atom"}
+      - {kind: github_releases, repo: openai/openai-agents-python}
   aws-bedrock:
     match: [bedrock]
     feeds:
@@ -25,13 +25,13 @@ vendors:
   langfuse:
     match: [langfuse]
     feeds:
-      - {kind: atom, url: "https://github.com/langfuse/langfuse/releases.atom"}
+      - {kind: github_releases, repo: langfuse/langfuse}
       - {kind: page, url: "https://langfuse.com/changelog"}
   langchain:
     match: [langsmith, langgraph, langchain]
     feeds:
-      - {kind: atom, url: "https://github.com/langchain-ai/langsmith-sdk/releases.atom"}
-      - {kind: atom, url: "https://github.com/langchain-ai/langgraph/releases.atom"}
+      - {kind: github_releases, repo: langchain-ai/langsmith-sdk}
+      - {kind: github_releases, repo: langchain-ai/langgraph}
   google-gemini:
     match: [gemini, google-genai]
     feeds:
@@ -48,11 +48,11 @@ vendors:
   leann:
     match: [leann]
     feeds:
-      - {kind: atom, url: "https://github.com/StarTrail-org/LEANN/releases.atom"}   # yichuan-w/LEANN에서 옮겨짐
+      - {kind: github_releases, repo: StarTrail-org/LEANN}   # yichuan-w/LEANN에서 옮겨짐
   kb-arena:
     match: [kb-arena]
     feeds:
-      - {kind: atom, url: "https://github.com/xmpuspus/kb-arena/releases.atom"}
+      - {kind: github_releases, repo: xmpuspus/kb-arena}
 
 # 일부러 뺀 것 (사용자 결정 2026-10-02) — 규칙이 뽑아도 「경로 없음」 대신 「제외」로 보고한다
 excluded:

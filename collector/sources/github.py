@@ -141,7 +141,7 @@ def parse_releases(body, repo, dep):
     return out
 
 
-def releases(cfg, fetcher, claude_md_texts, report, since_ts):
+def releases(cfg, fetcher, claude_md_texts, report, since_ts, headers):
     deps = []
     for repo_name, text in claude_md_texts.items():
         for d in dependencies_from_claude_md(text):
@@ -156,16 +156,48 @@ def releases(cfg, fetcher, claude_md_texts, report, since_ts):
         if repo in seen:
             continue
         seen.add(repo)
-        report["requests"] += 1
-        st, body = fetcher.get(f"https://github.com/{repo}/releases.atom")
-        if st != 200:
-            report["failed"].append({"channel": "dependency-releases", "repo": repo, "status": st})
-            continue
-        for it in parse_releases(body, repo, dep):
-            if not it.created_at or _ts(it.created_at) >= since_ts:
-                items.append(it)
+        items += fetch_releases(repo, fetcher, headers, since_ts, report, "dependency-releases", {"dependency": dep})
     report["dependencies"] = {"total": len(deps), "repos": len(seen), "unresolved": unresolved}
     return items
+
+
+# releases.atom은 최근 10건뿐이다 — llama.cpp는 하루치도 안 되고 litellm은 4일 (2026-10-02 실측).
+# REST API는 100건씩 지난 기간까지 넘겨 받을 수 있고 전체 이력이 있어 놓친 주도 다시 받는다.
+def parse_api_releases(rels, repo, channel, meta=None):
+    out = []
+    for r in rels:
+        tag = r.get("tag_name") or ""
+        body = r.get("body") or ""
+        out.append(Item(
+            id=f"github-release:{repo.lower()}@{tag}", source="github", channels=[channel],
+            title=f"{repo} {r.get('name') or tag}", url=r.get("html_url") or "",
+            created_at=r.get("published_at") or r.get("created_at") or "", text=body, links=extract_links(body),
+            meta={"repo": repo, "tag": tag, "prerelease": r.get("prerelease"), "draft": r.get("draft"), **(meta or {})}))
+    return out
+
+
+def fetch_releases(repo, fetcher, headers, since_ts, report, channel, meta=None, max_pages=10):
+    items, page = [], 1
+    while page <= max_pages:
+        report["requests"] += 1
+        try:
+            rels = fetcher.get_json(f"{API}/repos/{repo}/releases?per_page=100&page={page}", headers)
+        except Exception as e:  # noqa: BLE001
+            report["failed"].append({"channel": channel, "repo": repo, "error": str(e)[:200]})
+            return items
+        fresh = [r for r in rels if _ts(r.get("published_at") or r.get("created_at") or "") >= since_ts]
+        items += parse_api_releases(fresh, repo, channel, meta)
+        # 최신순이라 창보다 오래된 게 하나라도 나오면 끝. 100건이 다 창 안이면 다음 쪽
+        if len(rels) < 100 or len(fresh) < len(rels):
+            return items
+        page += 1
+    report["failed"].append({"channel": channel, "repo": repo, "error": f"truncated at {max_pages} pages"})
+    return items
+
+
+def api_headers():
+    tok = token()
+    return {"Accept": "application/vnd.github+json", **({"Authorization": f"Bearer {tok}"} if tok else {})}, bool(tok)
 
 
 def _ts(iso):
@@ -178,11 +210,12 @@ def _ts(iso):
 def collect(cfg, fetcher, now=None, claude_md_texts=None):
     now = now or time.time()
     fetcher.min_interval.setdefault("api.github.com", cfg.get("min_interval_s", 2.1))
-    tok = token()
-    headers = {"Accept": "application/vnd.github+json", **({"Authorization": f"Bearer {tok}"} if tok else {})}
-    items, report = [], {"requests": 0, "failed": [], "authenticated": bool(tok)}
+    headers, authed = api_headers()
+    items, report = [], {"requests": 0, "failed": [], "authenticated": authed}
     for channel, q in queries(cfg, now):
         items += search(cfg, fetcher, q, channel, report, headers)
     if claude_md_texts:
-        items += releases(cfg, fetcher, claude_md_texts, report, since_ts=now - 7 * 86400)
+        # 하루 겹치게 받는다 — 같은 릴리스는 id가 같아 스냅숏 단계에서 합쳐진다
+        window = cfg.get("release_window_days", 8)
+        items += releases(cfg, fetcher, claude_md_texts, report, now - window * 86400, headers)
     return items, report
