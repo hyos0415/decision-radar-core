@@ -1,0 +1,60 @@
+# Retrieval Arena 엔진 (HYO-31). 로컬 실험 전용 — 포트는 127.0.0.1에만 연다.
+# 실험할 때만 띄운다:  docker compose -f infra/compose.yaml up -d
+# 끄기:               docker compose -f infra/compose.yaml stop
+# 기준: M1 16GB. JVM heap 1GB씩 (overview Q1), 컨테이너 메모리 상한 2GB씩.
+name: jhs-arena
+
+services:
+  elasticsearch:
+    build:
+      context: ./elasticsearch
+      args:
+        ES_VERSION: "9.5.4"
+    image: jhs-arena/elasticsearch-nori:9.5.4
+    environment:
+      - discovery.type=single-node
+      # trial이면 유료 기능(RRF 등)에 기대는 코드가 한 달 뒤에 조용히 깨진다 → basic을 명시 (doc-pipeline §7)
+      - xpack.license.self_generated.type=basic
+      # 로컬 전용이라 보안을 끈다. 외부에 열지 않는다
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+  neo4j:
+    # n10s 최신 릴리스가 따라가는 버전에 맞춘다 (n10s 5.26.0 ↔ Neo4j 5.26 LTS). 2026.x는 n10s가 아직 안 따라왔다
+    # NEO4J_PLUGINS는 첫 기동 때 인터넷에서 맞는 n10s를 받아 neo4j-plugins 볼륨에 둔다 (2026-10-02: jar 날짜 2025-09-02 = 5.26.0)
+    image: neo4j:5.26.31
+    environment:
+      - NEO4J_AUTH=none
+      - NEO4J_PLUGINS=["n10s"]
+      - NEO4J_server_memory_heap_initial__size=1g
+      - NEO4J_server_memory_heap_max__size=1g
+      - NEO4J_server_memory_pagecache_size=512m
+      # n10s가 RDF를 받으려면 필요하다
+      - NEO4J_dbms_security_procedures_unrestricted=n10s.*
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-plugins:/plugins
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+volumes:
+  es-data:
+  neo4j-data:
+  neo4j-plugins:

@@ -258,6 +258,7 @@ self-managed 구독 표(elastic.co/subscriptions, 2026-10-01 원본 파싱):
 - **dense_vector 기본값이 라이선스·버전에 따라 바뀐다**: 9.4+는 「라이선스가 허락하면 `bbq_disk`(Enterprise)」, 9.1+는 384차원 이상이면 `bbq_hnsw`. S4는 `index_options`를 명시해야 한다 (사용자 결정 대기 — `S4.leann` 비교와 얽힌다)
 - 9.2+는 벡터를 `_source`에서 기본 제외한다(`index.mapping.exclude_source_vectors`) — 색인 크기 측정 경계에 영향, 고정할 설정
 - 최신 9.5.4 (2026-10-01). 이미지 버전을 고정한다
+- **실측 (2026-10-02, `infra/smoke.py` — ES 9.5.4 Basic, Windows Docker)**: 위 등급표대로 되는 것은 다 되고(nori · BM25 k1·b · `hnsw`·`int8_hnsw`·`bbq_hnsw`·`*_flat` 색인과 kNN), RRF retriever는 `security_exception: current license is non-compliant for [Reciprocal Rank Fusion (RRF)]`로 막힌다. `index_options`를 적지 않으면 1024차원에서 **`bbq_hnsw`**가 걸린다. **`bbq_disk`는 매핑 생성은 통과하고 문서를 넣을 때 403**이 난다 — 빈 인덱스 검색은 200 + 빈 결과라, bulk 오류를 보지 않는 코드는 조용히 빈 색인을 만든다 (`infra/README.md`)
 - OpenSearch는 2.19부터 RRF가 무료지만 전환하지 않는다 — 엔진 비교는 Won't, 이 문제는 직접 구현으로 풀린다
 
 ## 8. 운영
