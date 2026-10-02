@@ -9,6 +9,15 @@ python -m collector.run --sources vendor --only aws-bedrock --out <폴더>   # A
 python collector/tests/test_collector.py                                    # 오프라인 테스트
 ```
 
+**정기 실행 (2026-10-02~)**: 이 Windows PC의 작업 스케줄러 — 화 16:00 전체 · 목 16:00 AWS만. `--out` 없이 돌면 `collector/out/<UTC 시각>-<label>/`에 쌓인다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File collector\schedule_windows.ps1 -WeeklyDay Tuesday -WeeklyTime 16:00 -AwsDay Thursday -AwsTime 16:00
+powershell -ExecutionPolicy Bypass -File collector\schedule_windows.ps1 -Remove     # 해제
+```
+
+M1으로 옮길 때는 같은 두 명령을 `launchd`(StartCalendarInterval — 잠자기 중 놓친 실행은 깨어날 때 돈다)로 등록하면 된다.
+
 출력: `items.jsonl`(항목 한 줄에 하나) + `run.json`(출처별 요청 수·실패·건수·벤더 규칙 결과·200이 아닌 응답). 주간 스냅숏으로 얼리고 지난 주와 비교하는 일은 HYO-72가 한다.
 
 ## 기준은 설정 파일에 있다

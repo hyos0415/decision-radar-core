@@ -55,10 +55,14 @@ def adr_technologies():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="collector.run")
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", help="출력 폴더. 없으면 --out-root 아래 <UTC 시각>-<label>")
+    ap.add_argument("--out-root", default=str(HERE / "out"))
+    ap.add_argument("--label", default="weekly", help="예약 실행 구분 (weekly · aws)")
     ap.add_argument("--sources", default=",".join(SOURCES))
     ap.add_argument("--only", default="", help="vendor: 이 벤더만 (쉼표)")
     a = ap.parse_args(argv)
+    if not a.out:
+        a.out = str(Path(a.out_root) / f"{time.strftime('%Y%m%d-%H%M', time.gmtime())}-{a.label}")
 
     pool = load_yaml(HERE / "pool.yaml")
     vendors_cfg = load_yaml(HERE / "vendors.yaml")
@@ -107,7 +111,7 @@ def main(argv=None):
     run["http"] = {"requests": len(fetcher.log),
                    "non_200": [{"url": u, "status": s, "attempts": n} for u, s, n in fetcher.log if s != 200]}
     (out / "run.json").write_text(json.dumps(run, ensure_ascii=False, indent=1), encoding="utf-8", newline="\n")
-    print(f"→ {out} ({len(all_items)} items)")
+    print(f"-> {out} ({len(all_items)} items)")
     return 0 if not any("crash" in r for r in run["sources"].values()) else 1
 
 

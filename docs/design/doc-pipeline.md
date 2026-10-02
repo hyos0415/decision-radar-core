@@ -265,9 +265,10 @@ self-managed 구독 표(elastic.co/subscriptions, 2026-10-01 원본 파싱):
 
 | 항목 | 값 |
 |---|---|
-| 주기 | 주 1회, 같은 요일·시각 (AWS What's New만 주 2회) |
+| 주기 | **화요일 16:00 KST** 주 1회 + AWS What's New만 **목요일 16:00** 한 번 더 (D4, 사용자 결정 2026-10-02 — 월·금은 연휴로 쉴 수 있다) |
 | 요청 | Reddit 약 11 · GitHub 5 + 의존성 수 · HN 1~2 · HF 15 · 벤더 10여 |
-| 실행 위치 | 미정 — cloud routine은 공유 IP라 Reddit 429·차단 위험이 크다 (§11) |
+| 실행 위치 | **로컬 — 지금은 교육장 Windows PC, 나중에 M1(외장 SSD)으로 이관** (D3, 사용자 결정 2026-10-02). 작업 스케줄러 `collector/schedule_windows.ps1`, 로그온 중에만, 놓친 시각은 다음에 켜질 때 바로 실행(StartWhenAvailable). 내 IP라 Reddit 차단 위험이 없다. 기각한 안: GitHub Actions·cloud routine·Lightsail(데이터센터 IP라 Reddit 위험은 같고, Lightsail은 서버 관리가 붙는다 — 제품 웹을 띄울 E6 때 다시 본다) · Airflow(상시 서버가 필요해 규모에 비해 무겁다 — 학습용 Could) |
+| 놓친 주 | PC가 꺼져 있어 못 돈 주는 Reddit·HF trending·벤더 페이지가 영구 손실이다(§3-1). `run.json`의 시각으로 드러난다. 월요일 routine은 지난 화요일 스냅숏(6일 전)을 읽는다 |
 | 4주 뒤 다시 볼 것 | Reddit 작은 서브레딧의 flair 컷 · HN 기준선 · Reddit 고유 기여 · `t=week` 대 `t=day` |
 
 ## 9. 기각한 안
@@ -291,8 +292,8 @@ self-managed 구독 표(elastic.co/subscriptions, 2026-10-01 원본 파싱):
 |---|---|---|
 | ~~D1~~ | ~~프로필 정의 · importance-policy와의 결합 · 전략 비교 사전 등록~~ → §2-2 프로필 · §2-3 두 레인 · 예측은 한 줄만(격자 없음) (2026-10-02) | 해결 |
 | ~~D2~~ | ~~S4 `index_options`~~ → `hnsw` (float) · Should 변형 `S4.int8`·`S4.bbq` · dev 진단 `flat` 계열 (`retrieval-arena.md` §6 변경, 2026-10-02) | 해결 |
-| D3 | 수집기를 어디서 돌리나 (로컬 · cloud routine · 기타) | 구현 시 |
-| D4 | 수집 요일·시각 | 구현 시 |
+| ~~D3~~ | ~~수집기를 어디서 돌리나~~ → 로컬 Windows PC, 나중에 M1 (§8) | 해결 (2026-10-02) |
+| ~~D4~~ | ~~수집 요일·시각~~ → 화 16:00 + AWS 목 16:00 (§8) | 해결 (2026-10-02) |
 | D5 | Reddit 공식 API 신청 | 사용자 |
 | D6 | C-DOC 규모 티어(T1·T2)를 스냅숏 누적 주 수로 다시 정의할지 | HYO-32 착수 시 |
 
