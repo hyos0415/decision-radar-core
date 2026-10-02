@@ -1,0 +1,58 @@
+# 벤더 → 경로 매핑 (손으로 관리, docs/design/doc-pipeline.md §4-5 혼합 방식)
+# 「어느 벤더를 볼지」는 규칙이 뽑는다: 대상 repo CLAUDE.md 「외부 모델·서비스」 ∪ 재검토 조건이 살아 있는 ADR의 기술.
+# 규칙이 뽑은 이름이 아래 어느 벤더의 match에도 안 걸리면 「경로 없음」으로 보고한다.
+#
+# 경로 종류: atom (GitHub releases 등) · rss (include로 거른다) · page (본문 텍스트를 받아 해시 — 비교는 스냅숏 단계)
+version: 1
+vendors:
+  anthropic:
+    match: [anthropic, claude]
+    feeds:
+      - {kind: page, url: "https://docs.claude.com/en/release-notes/api"}
+      - {kind: page, url: "https://docs.claude.com/en/docs/about-claude/model-deprecations"}
+      - {kind: atom, url: "https://github.com/anthropics/claude-code/releases.atom"}
+  openai:
+    match: [openai, gpt]
+    feeds:
+      - {kind: page, url: "https://platform.openai.com/docs/changelog"}
+      - {kind: page, url: "https://platform.openai.com/docs/deprecations"}
+      - {kind: atom, url: "https://github.com/openai/openai-agents-python/releases.atom"}
+  aws-bedrock:
+    match: [bedrock]
+    feeds:
+      # 100건 ≈ 9일 분량이라 주 2회 돌린다 (run.py --sources vendor --only aws-bedrock)
+      - {kind: rss, url: "https://aws.amazon.com/about-aws/whats-new/recent/feed/", include: "(?i)bedrock"}
+  langfuse:
+    match: [langfuse]
+    feeds:
+      - {kind: atom, url: "https://github.com/langfuse/langfuse/releases.atom"}
+      - {kind: page, url: "https://langfuse.com/changelog"}
+  langchain:
+    match: [langsmith, langgraph, langchain]
+    feeds:
+      - {kind: atom, url: "https://github.com/langchain-ai/langsmith-sdk/releases.atom"}
+      - {kind: atom, url: "https://github.com/langchain-ai/langgraph/releases.atom"}
+  google-gemini:
+    match: [gemini, google-genai]
+    feeds:
+      - {kind: page, url: "https://ai.google.dev/gemini-api/docs/changelog"}
+  # ADR의 오픈소스 기술 — 대상 repo 의존성이 아니라서 GitHub 의존성 통로에 안 잡힌다 (2026-10-02 첫 실행에서 「경로 없음」)
+  leann:
+    match: [leann]
+    feeds:
+      - {kind: atom, url: "https://github.com/StarTrail-org/LEANN/releases.atom"}   # yichuan-w/LEANN에서 옮겨짐
+  kb-arena:
+    match: [kb-arena]
+    feeds:
+      - {kind: atom, url: "https://github.com/xmpuspus/kb-arena/releases.atom"}
+
+# 일부러 뺀 것 (사용자 결정 2026-10-02) — 규칙이 뽑아도 「경로 없음」 대신 「제외」로 보고한다
+excluded:
+  - {match: [nvidia], why: "모델 페이지가 자바스크립트 렌더링이라 비교 불가 · eval 비교용"}
+  - {match: [금융감독원, finlife], why: "데이터 의존성 — 바뀌면 fineprint 수집이 깨지며 레포에서 드러남"}
+  - {match: [국가법령정보, 법령], why: "데이터 의존성"}
+
+# 벤더가 아닌 것 — 규칙 입력에 섞여 들어오지만 볼 경로가 없는 게 정상이다
+not_vendor:
+  - {match: [localhost, 127.0.0.1, 로컬 전용], why: "로컬 서빙 모델 — 호스팅 벤더가 아니다 (공개 모델 소식은 HF 통로)"}
+  - {match: [decision radar], why: "이 프로젝트 자신 (ADR 0010)"}

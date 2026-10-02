@@ -1,0 +1,48 @@
+# 출처 풀 — 수집 기준 (docs/design/doc-pipeline.md §4, 2026-10-02 사용자 결정)
+# 기준을 바꾸면 이 파일을 고치고 version을 올린다. 결과를 본 뒤 바꾸면 doc-pipeline에 `변경`으로 남긴다.
+version: 1
+
+reddit:
+  min_interval_s: 61          # 8초면 429, 60초면 통과 (probe 2026-10-02)
+  limit: 100
+  subreddits:
+    - name: LocalLLaMA
+      flairs: [New Model, News, Resources]   # 상한 100을 넘기려는 용도 (범위를 넓힌다)
+    - name: LLMDevs
+      flairs: [Tools, News, Resource]        # flair 검색은 부분 일치 — 글 ID로 중복 제거
+    - name: LangChain
+    - name: Rag
+    - name: vectordatabase
+
+hn:
+  min_points: 25
+  lag_days: 2                 # 점수가 쌓일 시간. 「2~9일 전에 올라온 글」을 받는다
+  window_days: 7
+
+github:
+  min_interval_s: 2.1         # 검색 API 분당 30회
+  new_repos:                  # 통로 ① 새로 뜬 것
+    created_within_days: 7
+    min_stars: 100
+  slow_growers:               # 통로 ② 천천히 뜬 것 (생긴 지 8~30일)
+    created_from_days: 30
+    created_to_days: 7
+    min_stars: 500
+  # 의존성 → GitHub repo. PyPI의 project_urls로 못 찾는 것만 적는다
+  dependency_repos:
+    vllm: vllm-project/vllm
+    llama.cpp: ggml-org/llama.cpp
+    k6: grafana/k6
+
+huggingface:
+  trending_limit: 100
+  task_limit: 20
+  tasks:
+    - text-generation
+    - feature-extraction
+    - sentence-similarity
+    - token-classification
+    - text-classification
+    - text-ranking
+    - image-text-to-text      # 멀티모달 — 사용자 관심사이자 확장할 영역
+  daily_papers_days: 7

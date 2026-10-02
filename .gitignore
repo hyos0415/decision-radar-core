@@ -8,3 +8,6 @@ venv/
 .env
 .env.*
 !.env.example
+
+# 수집기 출력 (원자료 — 스냅숏 저장은 HYO-72에서 정한다)
+collector/out/
