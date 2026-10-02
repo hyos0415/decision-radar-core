@@ -23,6 +23,8 @@
 | **C-DOC**  | 외부 문서   | 릴리스 노트·공식 문서·가격표·모델 카드·issue — **버전·날짜·source\_type 메타데이터 필수** | 영어 위주  | **헤딩 기준** (2026-09-29 결정) · 길이 상한 미정                            |
 | **C-CODE** | 대상 repo | CLAUDE.md 스택 절·manifest·코드(import 관계)                          | 혼합     | **함수 단위** (2026-09-29 결정) · 함수가 없는 파일(CLAUDE.md·manifest) 처리 미정 |
 
+**변경 (2026-10-02, 사용자 결정 — 결과 0건)**: C-DOC을 「실제 대상 기술 문서」(이미 스택에 있는 기술)로만 두면 B·D·H 질의(정답 = 아직 쓰지 않는 기술)의 정답 문서가 코퍼스 밖에 있다. C-DOC은 **수집 파이프라인(`doc-pipeline.md`, 에픽 E9)의 주간 스냅숏과 거기서 확인한 1차 출처**로 채운다. 코퍼스 버전 = 스냅숏 버전. 규모 티어(T1·T2)를 스냅숏 누적 주 수로 다시 정의할지는 HYO-32 착수 때 정한다(`doc-pipeline.md` §11 D6).
+
 
 ### 청크 정책 `chunk-policy@v1` (2026-09-29 결정, 상한 값은 미정)
 
@@ -277,6 +279,6 @@ arena/results/
 | A4c    | gold set에 질의별 **정답 노드**(기술·component) 표시 필요 — Seed Recall 계산용                                                                                                                                                                                              | gold 작성 시                   |
 | A5     | 유형별 질의 수 목표                                                                                                                                                                                                                                                | 첫 실행 분산 후                   |
 | A6     | 합성 ADR 생성 규칙 (T1·T2)                                                                                                                                                                                                                                       | E4 착수 시                     |
-| A7     | ES 무료/유료 등급 — RRF뿐 아니라 Arena가 쓰는 ES 기능 전부 (overview Q4, 2026-10-01 범위 확대)                                                                                                                                                                                                                                  | 확인 필요                       |
+| ~~A7~~ | ~~ES 무료/유료 등급 — RRF뿐 아니라 Arena가 쓰는 ES 기능 전부 (overview Q4, 2026-10-01 범위 확대)~~ → BM25·nori·dense_vector·kNN은 무료(Basic), **RRF·linear retriever는 Enterprise** → fusion은 `ranx` + 직접 구현한 RRF로 대조. S4 `index_options`는 명시해야 한다(기본값이 라이선스·버전에 따라 바뀜) — `doc-pipeline.md` §7 | 해결 (2026-10-02) · `index_options`는 사용자 |
 
 
