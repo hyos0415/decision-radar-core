@@ -212,13 +212,14 @@ MoSCoW = **M**ust(없으면 실패) · **S**hould(중요하지만 없어도 성�
 | | LangGraph 코어 — revisit·detect, interrupt·resume·checkpoint, 규칙층 재사용 | G5 |
 | | 최소 웹 — Inbox + Decisions | G4 |
 | | 실사용 비교 측정 | G4 |
+| | **수집 파이프라인 (M2) 기본** — 제한된 출처 풀(Reddit RSS · HN · GitHub · HF · 벤더 피드) → 프로필 필터 → 2단계 1차 출처 확인 → 주간 스냅숏. **변경 (2026-10-02, 사용자 결정)**: Should에서 Must로. C-DOC 코퍼스(E4)와 detect 흐름(E5)이 둘 다 이 결과를 받는다. 급증 통계는 아래 Should에 남는다 · 에픽 E9 | G2·G3 |
 | **Should** | 온톨로지 계층 — 구조 그래프와 **같은 Neo4j 그래프**에 클래스 계층·별칭·추론을 얹는 모드 (ablation) · Reranker · LightRAG | G2 |
 | | SHACL 검증 — 그래프 적재 전 품질 관문 (검색 전략이 아님) | G2 |
 | | 라우터 (단일 전략 결과 후) | G2 |
-| | trend-radar 급증 통계 → M2 | 통합 |
+| | trend-radar 급증 통계 → M2 (주간 z-score — 기본 수집 위에 얹는다) | 통합 |
 | | capture via MCP · 최소 실험 제안(M6) · 실제 페이지 소음 스냅숏 | G3·G4 |
 | | 역할별 멀티 모델 + 최적화 모드 실험 (§14) | G5 |
-| **Could** | ChatGPT 저장 경로 · GitHub Actions 실험 실행 · Agentic retrieval · 블로그 연재 | |
+| **Could** | ChatGPT 저장 경로 · GitHub Actions 실험 실행 · Agentic retrieval · 블로그 연재 · 규제 출처 (HYO-68 — 신호만, 판단은 사람) | |
 | **Won't** | multi-user·인증·SaaS · symbol 단위 영향 분석 · 한국어 뉴스 코퍼스(NIKL) · MS GraphRAG·Graphiti · SHACL을 넘는 OWL 추론 · retriever·라우터 학습(fine-tuning) · 로컬 LLM 그래프 추출 · 엔진 간 비교 · desktop 앱 | |
 
 ## 10. 일정 제약 (2개월)
@@ -237,23 +238,35 @@ MoSCoW = **M**ust(없으면 실패) · **S**hould(중요하지만 없어도 성�
 
 이 표는 가설이다. W4 게이트를 못 넘으면 제품 실사용 기간이 줄어든다 — 그때 줄이는 순서는 Should부터.
 
+**변경 (2026-10-02, 사용자 결정 — 실사용 결과 0건인 시점)**: 스킬 실사용이 W1이 아니라 **2026-10-05(월) routine 첫 실제 실행**부터 시작한다(HYO-21). 위 표대로 제품 실사용을 W5(10/27)에 켜면 스킬 4주(10/5~11/1)와 겹친다 — 비교 프로토콜 §7·§9는 두 도구를 같이 켜는 것을 금지한다(알림이 겹쳐 행동을 어느 도구에 귀속할지 가를 수 없다). 그래서 **두 기간의 길이(4주씩)를 지키고 날짜를 민다**:
+
+| 기간 | 날짜 | 도구 |
+|---|---|---|
+| 스킬 실사용 | 2026-10-05 ~ 11-01 (4주) | 스킬 routine |
+| W4 게이트 | 2026-10-26 (그대로) | — |
+| 제품 실사용 | **2026-11-02 ~ 11-29** (4주) | 제품. 스킬 routine은 11/2에 끈다 (HYO-55) |
+| 비교 판정 · 포트폴리오 | 11-30 이후 | — |
+
+전체가 약 1주 늘어난다. 게이트(10/26)와 제품 실사용 시작(11/2) 사이 1주는 게이트에서 나온 문제를 고치는 데 쓴다. 기각한 안: 스킬 기간을 3주로 줄이기(기준선이 짧아지고 두 기간 길이가 달라진다) · 둘을 같이 켜기(프로토콜 재등록 필요, 귀속 문제는 남는다).
+
 ## 11. 에픽
 
 > **등록됨 (2026-09-29)** — 계획·상태의 원본은 **Linear 프로젝트 Decision Radar**(팀 HYO), 코드 작업은 GitHub Issue + Milestone(에픽별).
 > GitHub Issue 제목은 Linear 키로 시작하고(`[HYO-18] …`), Linear 이슈에는 GitHub Issue 링크가 붙어 있다.
-> 에픽 키: E0 HYO-9 · E1 HYO-10 · E2 HYO-14 · E3 HYO-23 · E4 HYO-30 · E5 HYO-41 · E6 HYO-49 · E7 HYO-54 · E8 HYO-58
+> 에픽 키: E0 HYO-9 · E1 HYO-10 · E2 HYO-14 · E3 HYO-23 · E4 HYO-30 · E5 HYO-41 · E6 HYO-49 · E7 HYO-54 · E8 HYO-58 · E9 HYO-69 (2026-10-02 추가)
 
 | 에픽 | 내용 | 주 |
 |---|---|---|
 | E0 기반 정비 | 이관·git·격리 검사·LF·test_leak | ✅ 완료 |
-| E1 재판정·비교 설계 | 이 문서 + `retrieval-arena.md` + `comparison-protocol.md` + 재판정 결정 기록 | W1 |
+| E1 재판정·비교 설계 | 이 문서 + `retrieval-arena.md` + `comparison-protocol.md` + 재판정 결정 기록 | ✅ 완료 (Linear Done 2026-10-02) |
 | E2 실제 데이터·기준선 | 실제 ADR repo · §4 왼쪽 열 수정 · routine 켜기 | W1 |
 | E3 공용 eval·스킬 한계 지도 | 어댑터 · 다른 회사 judge · 규모 sweep · Haiku · 라이브 쿼리 | W1–4 |
 | E4 Retrieval Arena | 하네스 · 전략 · (Should) 라우터 | W2–8 |
 | E5 에이전트 코어 | LangGraph · 규칙층 재사용 · W4 게이트 | W2–4 |
 | E6 웹 UX | Inbox · Decisions · (Should) MCP capture | W3–5 |
-| E7 실사용 비교 | 측정 · 판정 | W5–8 |
-| E8 경력·포트폴리오 | 이력서 문장 · 블로그 · 공개 전환 | W8 |
+| E7 실사용 비교 | 측정 · 판정 | W5–8 → **변경 (2026-10-02)**: 제품 실사용 11/2~11/29 (§10) |
+| E8 경력·포트폴리오 | 이력서 문장 · 블로그 · 공개 전환 | W8 → **변경 (2026-10-02)**: 11/30 이후 (§10) |
+| E9 수집 파이프라인 (M2) | **추가 (2026-10-02, 사용자 결정)**: 출처 어댑터 · 프로필 필터 · 1차 출처 확인 · 주간 스냅숏 (Must) · 급증 통계 HYO-47 (Should) · 규제 HYO-68 (Could). E4 C-DOC(HYO-32)와 E5 detect(HYO-42)가 결과를 받는다 | W2–4 |
 
 ## 12. 열린 질문
 
@@ -263,7 +276,7 @@ MoSCoW = **M**ust(없으면 실패) · **S**hould(중요하지만 없어도 성�
 | ~~Q2~~ | ~~Gemini 크레딧 형태~~ → **AI Studio API 키** (`GEMINI_API_KEY`) | 해결 |
 | ~~Q3~~ | ~~구조 그래프와 온톨로지의 경계~~ → **그래프 하나, 모드 둘(ablation)**: 구조만 vs +온톨로지 계층(isA·altLabel·추론). SHACL은 검색이 아니라 적재 전 검증 | 해결 (2026-09-29) |
 | Q4 | ES의 RRF가 라이선스 등급에서 쓸 수 있는가 — 안 되면 fusion만 `ranx` — **변경 (2026-10-01, 사용자): 범위를 넓힌다 — Arena가 ES에 기대는 기능 전부(nori·BM25·kNN·RRF/retriever·그 밖의 것)가 무료(self-managed Basic) 등급에 드는지. HYO-31(docker compose) 전에 조사** | 조사 (다음 세션) |
-| Q5 | 재판정 결정 기록 — 이 문서가 확정되면 `docs/decisions/`에 | E1 |
+| ~~Q5~~ | ~~재판정 결정 기록 — 이 문서가 확정되면 `docs/decisions/`에~~ → `docs/decisions/2026-09-29-rejudgment.md` (HYO-13, 31973b0) | 해결 (2026-09-29) |
 | Q6 | 웹 프레임워크 | E6 착수 전 |
 
 ## 관련 문서
