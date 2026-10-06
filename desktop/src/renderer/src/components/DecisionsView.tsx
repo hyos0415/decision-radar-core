@@ -7,11 +7,11 @@ import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 
-const COLS = 'grid-cols-[48px_minmax(0,1fr)_96px_56px_136px_80px]'
+const COLS = 'grid-cols-[44px_minmax(0,1fr)_84px_52px_120px_76px]'
 const FILTERS: { key: string; label: string }[] = [
   { key: 'all', label: '전체' },
   { key: 'proposed', label: '제안' },
-  { key: 'accepted', label: '채택' },
+  { key: 'adopted', label: '채택' },
   { key: 'hold', label: '보류' },
   { key: 'rejected', label: '기각' }
 ]
@@ -60,7 +60,7 @@ function Panel({
   }, [id])
 
   return (
-    <div className="flex h-full w-[420px] shrink-0 flex-col border-l">
+    <div className="flex h-full w-[380px] shrink-0 flex-col border-l">
       <div className="flex h-11 shrink-0 items-center justify-between border-b px-4">
         <span className="font-mono text-xs text-muted-foreground">{id}</span>
         <Button variant="ghost" size="icon" className="size-7" onClick={onClose} aria-label="닫기">
@@ -110,7 +110,7 @@ function Panel({
             </ul>
           )}
 
-          <div className="mt-5 mb-1.5 flex items-baseline justify-between">
+          <div className="mt-5 mb-1.5 flex flex-wrap items-baseline justify-between gap-x-3">
             <span className="font-mono text-xs">{d.file}</span>
             <span className="text-[11px] text-muted-foreground">상태는 ADR 파일에서 사람이 바꾼다</span>
           </div>
@@ -151,7 +151,7 @@ export function DecisionsView({
     const needle = q.trim().toLowerCase()
     return (items ?? []).filter(
       (d) =>
-        (status === 'all' || d.status === status) &&
+        (status === 'all' || d.status === status || (status === 'adopted' && d.status === 'accepted')) &&
         (!needle ||
           `${d.id} ${d.title} ${d.technology}`.toLowerCase().includes(needle))
     )

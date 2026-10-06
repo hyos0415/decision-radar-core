@@ -104,8 +104,11 @@ if (!app.requestSingleInstanceLock()) {
     if (process.platform === 'win32') app.setAppUserModelId('decision-radar')
 
     ipcMain.handle('backend:get', () => getStatus())
+    // 모든 창에 보낸다 — capture 창은 백엔드 준비 전에 만들어지므로 메인 창에만 보내면 계속 '기동 중'에 머문다
     onStatus((s) => {
-      if (win && !win.isDestroyed()) win.webContents.send('backend:status', s)
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed()) w.webContents.send('backend:status', s)
+      }
     })
 
     ipcMain.handle('info:get', () => ({

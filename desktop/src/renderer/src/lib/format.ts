@@ -2,7 +2,9 @@ import type { RevisitSummary } from './api'
 
 export const STATUS_LABEL: Record<string, string> = {
   proposed: '제안',
+  adopted: '채택', // 스킬 schema.md의 값
   accepted: '채택',
+  revisit: '재검토',
   rejected: '기각',
   hold: '보류',
   superseded: '대체됨'

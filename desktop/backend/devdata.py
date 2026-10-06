@@ -36,6 +36,8 @@ def ensure_snapshots(data_dir):
     try:
         run_case.build(DEV_CASE, work)
         shutil.copytree(os.path.join(work, "snapshots"), dst)
+        for r in ("finance-verifier", "medical-mate"):  # repo 출처(jev_eval·corpus 슬롯)는 대상 repo 안에 파일로 놓인다
+            shutil.copytree(os.path.join(work, r), os.path.join(data_dir, r), dirs_exist_ok=True)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return True

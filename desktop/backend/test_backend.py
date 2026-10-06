@@ -208,6 +208,9 @@ def scenario_m2(data):
     check("revisit: 0001 c1 충족 알림", any(a["adr"] == "0001" and a["condition"] == "c1" and a["result"] == "met" for a in r["alerts"]), r["alerts"])
     d1 = c.get("/decisions/0001").json()
     check("decisions: 0001 c1 최근 결과 met", next(x for x in d1["revisit"] if x["id"] == "c1")["last"]["result"] == "met")
+    failed = [f"{d['id']}/{x['id']}" for d in c.get("/decisions").json()["items"] for x in d["revisit"]
+              if (x["last"] or {}).get("reason") and str(x["last"]["reason"]).startswith("fetch_failed")]
+    check("revisit: 출처를 다 읽음 (fetch_failed 없음)", not failed, failed)
     check("revisit 뒤 대기 항목은 안 낡음", c.get(f"/inbox/{pending}").json()["changes"] == [], c.get(f"/inbox/{pending}").json()["changes"])
 
     # detect — 초안을 쓴다 → 대기 항목은 낡는다
