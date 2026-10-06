@@ -206,13 +206,13 @@ def draft2():
     return AdrDraft.model_validate(th.draft2())
 
 
-def approve(w, h, ex, draft=D1, item="it-1", baseline=None, hold=False, kind="capture"):
+def approve(w, h, ex, draft=D1, item="it-1", baseline=None, hold=False, kind="capture", run_id=None):
     """capture 승인 한 번 — 멈출 때(또는 재개 직전)의 지문을 근거로 쓰고 내보낸다 (capture_turn2가 하는 일)."""
     ctx = w.ctx()
     fp = baseline or h.fingerprint_for(ctx).compute(ctx, h.scope_of(draft))
     if hold:
-        return h.write_adr(ctx, item, kind, draft, lifecycle="REVIEW_CANDIDATE", final_lifecycle="REVIEW_CANDIDATE", by="graph", exporter=ex, hold_export=True)
-    return h.write_adr(ctx, item, kind, draft, approval={"decision": "approve", "fingerprint": fp}, exporter=ex)
+        return h.write_adr(ctx, item, kind, draft, lifecycle="REVIEW_CANDIDATE", final_lifecycle="REVIEW_CANDIDATE", by="graph", exporter=ex, hold_export=True, run_id=run_id)
+    return h.write_adr(ctx, item, kind, draft, approval={"decision": "approve", "fingerprint": fp}, exporter=ex, run_id=run_id)
 
 
 def baseline(w, h, draft=D1, name=None):
@@ -611,6 +611,106 @@ def e_detect_review_needs_exporter(h, X, w):
     return r["export"]["state"] == "review" and raised and "0006-kopii-small.md" in w.adrs() and w.item("d-1")["export"]["state"] == "review", r
 
 
+# 같은 실행에서 제품이 직접 내보낸 변화는 지문 비교에서 넘긴다 (설계 §5-2 「구현에서 정한 것」 ①) ──────────
+
+def draft3():
+    d = th.draft2()
+    d.update(title="BarOCR로 영수증을 읽을지", technology="BarOCR", use="영수증 OCR")
+    return AdrDraft.model_validate(d)
+
+
+def draft_same_tech():
+    """D1과 같은 기술·component, 다른 use — B′의 match(overlap)에 앞선 초안의 ADR이 걸린다"""
+    d = json.loads(json.dumps(th.KOPII["draft"]))
+    d.update(title="KoPII-small을 다른 용도로도 쓸지", use="요약 전 마스킹")
+    return AdrDraft.model_validate(d)
+
+
+def _detect_batch(w, h, ex, runs, drafts=None):
+    """detect 초안 여러 개를 쓰고(검토 대기) 돌려준다 — runs[i]가 i번째 초안의 run_id"""
+    drafts = drafts or [D1, draft2(), draft3()]
+    for i, (r, d) in enumerate(zip(runs, drafts), 1):
+        approve(w, h, ex, draft=d, item=f"d-{i}", hold=True, kind="detect", run_id=r)
+
+
+def _approve_all(w, h, X, n):
+    return [h.review_item(w.ctx(), f"d-{i}", "approve", exporter=w.ex(X)) for i in range(1, n + 1)]
+
+
+@scen
+def e_same_run_chain_no_stale(h, X, w):
+    """같은 실행 detect 초안 3개를 연달아 승인 → stale 없이 전부 내보내진다 (A′). 넘긴 것은 별도 파일 history에 남는다"""
+    ex = w.ex(X)
+    _detect_batch(w, h, ex, ["run-A"] * 3)
+    rs = _approve_all(w, h, X, 3)
+    its = [w.item(f"d-{i}") for i in (1, 2, 3)]
+    skipped = [[e for e in it["history"] if e.get("event") == "own_exports_skipped"] for it in its]
+    ok = (all(r["state"] == "exported" for r in rs) and w.count() == 3 and w.lhead() == w.rhead()
+          and all(it["export"] == {"state": "done"} and it["run_id"] == "run-A" for it in its)
+          and not skipped[0] and skipped[1][0]["adrs"] == ["0006-kopii-small.md"]
+          and skipped[2][0]["adrs"] == ["0006-kopii-small.md", "0007-fooner.md"])
+    return ok, rs
+
+
+@scen
+def e_same_run_chain_related_fingerprint(h, X, w):
+    """B′(RADAR_FINGERPRINT=related)도 같다 — 앞선 초안과 같은 기술이라 match 결과에 그 ADR이 새로 걸려도 넘긴다"""
+    w.extra_env["RADAR_FINGERPRINT"] = "related"
+    ex = w.ex(X)
+    _detect_batch(w, h, ex, ["run-A"] * 2, drafts=[D1, draft_same_tech()])
+    fp = w.item("d-2")["fingerprint"]
+    rs = _approve_all(w, h, X, 2)
+    ok = fp["impl"] == "related" and all(r["state"] == "exported" for r in rs) and w.count() == 2
+    return ok, rs
+
+
+@scen
+def e_same_run_but_human_edited(h, X, w):
+    """같은 실행이지만 그 사이 사람이 첫 초안의 ADR을 고쳤다(내보낸 해시와 다르다) → 둘째는 stale — 바깥 변화다"""
+    ex = w.ex(X)
+    _detect_batch(w, h, ex, ["run-A"] * 2)
+    r1 = h.review_item(w.ctx(), "d-1", "approve", exporter=w.ex(X))
+    w.human_push(lambda d: th.sub_file(os.path.join(d, "docs", "adr", "0006-kopii-small.md"), "status: proposed", "status: adopted"), "사람이 0006을 adopted로")
+    r2 = h.review_item(w.ctx(), "d-2", "approve", exporter=w.ex(X))
+    ok = (r1["state"] == "exported" and r2["state"] == "stale" and any("0006" in l for l in r2["changes"])
+          and w.count() == 2 and w.item("d-2")["export"]["state"] == "stale")
+    return ok, (r1, r2)
+
+
+@scen
+def e_other_run_is_outside_change(h, X, w):
+    """다른 실행이 내보낸 ADR은 바깥 변화다 — run_id가 다르거나 둘 중 하나라도 없으면 stale (다른 실행 = 다른 판단 맥락)"""
+    ex = w.ex(X)
+    _detect_batch(w, h, ex, ["run-A", "run-B"], drafts=[D1, draft2()])
+    r1 = h.review_item(w.ctx(), "d-1", "approve", exporter=w.ex(X))
+    r2 = h.review_item(w.ctx(), "d-2", "approve", exporter=w.ex(X))
+    ok1 = r1["state"] == "exported" and r2["state"] == "stale" and any("새 ADR 0006" in l for l in r2["changes"]) and w.count() == 1
+    w2 = GWorld()  # run_id가 없는 항목(capture·옛 항목)끼리는 같은 실행이 아니다 — None == None으로 넘기지 않는다
+    _detect_batch(w2, h, w2.ex(X), [None, None], drafts=[D1, draft2()])
+    q1 = h.review_item(w2.ctx(), "d-1", "approve", exporter=w2.ex(X))
+    q2 = h.review_item(w2.ctx(), "d-2", "approve", exporter=w2.ex(X))
+    ok2 = q1["state"] == "exported" and q2["state"] == "stale" and w2.count() == 1
+    w2.cleanup()
+    return ok1 and ok2, (r2.get("changes"), q2.get("changes"))
+
+
+@scen
+def e_same_run_plus_outside_change(h, X, w):
+    """같은 실행의 내보내기에 바깥 변화(사람이 0003 status 변경)가 섞이면 stale — 차이 요약에는 바깥 변화만 있다 (A′·B′)"""
+    out = []
+    for name in ("all", "related"):
+        ww = GWorld(extra_env={"RADAR_FINGERPRINT": name})
+        _detect_batch(ww, h, ww.ex(X), ["run-A"] * 2, drafts=[D1, draft_same_tech()])
+        r1 = h.review_item(ww.ctx(), "d-1", "approve", exporter=ww.ex(X))
+        ww.human_push(_status_change, "사람이 0003을 rejected로")
+        r2 = h.review_item(ww.ctx(), "d-2", "approve", exporter=ww.ex(X))
+        ch = r2.get("changes") or []
+        out.append((name, r1["state"] == "exported" and r2["state"] == "stale" and len(ch) == 1 and "0003" in ch[0]
+                    and "0006" not in " ".join(ch) and ww.count() == 2, ch))
+        ww.cleanup()
+    return all(ok for _, ok, _ in out), out
+
+
 class CountingProc:
     """subprocess 대역 — git 호출 수를 센다 (실제 실행은 넘긴다)."""
 
@@ -820,7 +920,7 @@ MUTANTS = [
      ["e_push_race_recovers", "e_push_race_then_stale"]),
     ("원격 앞섬인데 재검사 생략 (publish가 check를 안 부름)", "export", [("if check is not None:  # MUT:recheck", "if False:  # MUT:recheck")],
      ["e_remote_ahead_different_fingerprint", "e_push_race_then_stale"]),
-    ("원격 앞섬인데 재검사 생략 (지문이 늘 같다고 함)", "hitl", [("if old is not None and fp.same(old, new):  # MUT:recheck_same", "if True:  # MUT:recheck_same")],
+    ("원격 앞섬인데 재검사 생략 (지문이 늘 같다고 함)", "hitl", [("if old is not None and fp.same(old, cmp_new):  # MUT:recheck_same", "if True:  # MUT:recheck_same")],
      ["e_remote_ahead_different_fingerprint", "e_push_race_then_stale"]),
     ("eval·dry-run에서 내보냄 (exporter_for가 dry-run을 안 본다)", "hitl", [('and not ctx.dry_run:  # MUT:exporter_for', ':  # MUT:exporter_for'), ("GitExporter(repo_root(ctx), dry_run=ctx.dry_run,", "GitExporter(repo_root(ctx), dry_run=False,")],
      ["e_dry_run_never_exports", "e_dry_run_graph_no_git"]),
@@ -830,6 +930,17 @@ MUTANTS = [
     ("기존 ADR 수정 허용", "export", [("if ALLOW_ADR.match(rel) and self.is_tracked(rel):  # MUT:existing_adr", "if False:  # MUT:existing_adr"), ('if ALLOW_ADR.match(rel) and st != "A":  # MUT:adr_added_only', "if False:  # MUT:adr_added_only")],
      ["e_existing_adr_cannot_change"]),
     ("push 거부돼도 로컬 커밋을 안 되돌림", "export", [('if self._out("rev-parse", "HEAD") == sha:  # MUT:undo', "if False:  # MUT:undo")], ["e_push_race_recovers", "e_push_race_then_stale"]),
+    ("같은 실행 판별에서 run_id 무시 (남이 내보낸 새 ADR이면 다 넘김)", "hitl", [('if not isinstance(wi, dict) or o.get("run_id") != rid:  # MUT:own_run', "if not isinstance(wi, dict):  # MUT:own_run")],
+     ["e_other_run_is_outside_change"]),
+    ("run_id가 없어도 같은 실행으로 봄 (None == None)", "hitl", [("if not rid or old is None:", "if old is None:")], ["e_other_run_is_outside_change"]),
+    ("내보낸 내용 해시 확인 생략 (사람이 고쳐도 넘김)", "hitl", [('and path and os.path.exists(path) and _file_hash(path) == wi.get("content_hash")):  # MUT:own_hash', "and True):  # MUT:own_hash")],
+     ["e_same_run_but_human_edited"]),
+    ("B′: match 결과에서 앞선 내보내기의 번호를 안 뺌", "hitl", [('out["match"][k] = [i for i in ids if i != n[:4]]', "pass")], ["e_same_run_chain_related_fingerprint"]),
+    ("B′: match가 아직 안 내보낸 로컬 초안을 세상으로 봄", "hitl", [('return {"exact": sorted(exact - own), "overlap": sorted(overlap - own), "related": sorted(related - own)}', 'return {"exact": sorted(exact), "overlap": sorted(overlap), "related": sorted(related)}')],
+     ["e_same_run_chain_related_fingerprint"]),
+    ("같은 실행 넘기기 전체 끔 (회귀 — 기능 없음)", "hitl", [("own = sorted(_own_exports(ctx, item, old, new))", "own = []")], ["e_same_run_chain_no_stale"]),
+    ("넘길 때 바깥 변화까지 같이 삼킴 (own이 있으면 늘 같다고 함)", "hitl", [("if old is not None and fp.same(old, cmp_new):  # MUT:recheck_same", "if old is not None and (fp.same(old, cmp_new) or own):  # MUT:recheck_same")],
+     ["e_same_run_plus_outside_change"]),
     ("같은 번호가 들어와도 커밋", "hitl", [("if taken:  # 그 사이 같은 번호의 다른 ADR이", "if False:  # 그 사이 같은 번호의 다른 ADR이")], ["e_sync_blocks"]),
 ]
 

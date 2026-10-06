@@ -250,7 +250,10 @@ class RelatedMatchFingerprint(Fingerprint):
             exact |= set(m["exact"])
             overlap |= set(m["overlap"])
             related |= {r["id"] for r in m["related"]}
-        return {"exact": sorted(exact), "overlap": sorted(overlap), "related": sorted(related)}
+        # match는 radar.py가 폴더를 통째로 읽어 아직 내보내지 않은 로컬 초안(자기 자신 포함)도 돌려준다 — 파일 해시 쪽(_adr_files)처럼 세상으로 보지 않는다.
+        # 안 그러면 B′에서는 내보내기를 켜자마자 자기 초안이 match에 걸려 매번 「낡음」이다
+        own = {n[:4] for n in pending_names(ctx)}
+        return {"exact": sorted(exact - own), "overlap": sorted(overlap - own), "related": sorted(related - own)}
 
     def compute(self, ctx, scope):
         match = self._match(ctx, scope)
@@ -661,12 +664,14 @@ def _complete(ctx, item, errs, final_lifecycle, exporter, event="adr_written"):
 
 
 def write_adr(ctx, item_id, kind, draft, *, lifecycle="USER_REVIEW", final_lifecycle="DONE", by="human",
-              approval=None, after=None, exporter=None, hold_export=False):
+              approval=None, after=None, exporter=None, hold_export=False, run_id=None):
     """승인된 초안을 쓴다 — 1 번호 → 2 별도 파일에 의도 → 3 ADR 파일 + validate → 4 완료. 각 단계 뒤 파일은 닫혀 있다.
 
     approval: {"decision": "approve"|"edit", "fingerprint": 승인 근거 지문, "draft_hash_original": edit 전 초안의 해시}.
     내보내기를 켰으면(exporter_for) 승인된 쓰기가 끝나는 대로 main에 커밋·push한다 (결정 8). hold_export=True(detect)면 쓰기까지만 하고
     항목을 검토 대기(USER_REVIEW · export.state=review)로 둔다 — 사람이 `review_item`으로 답하면 그때 내보내거나 지운다.
+    run_id는 「같은 실행」의 기록이다(detect 한 번이 초안 여러 개에 같은 값을 준다) — 별도 파일에 남아, 같은 실행의 다른 항목이 내보낸 ADR을
+    재개 검사에서 넘기는 근거가 된다 (`_own_exports`). 없으면(capture) 어떤 내보내기도 넘기지 않는다.
     이미 의도가 있으면 새로 쓰지 않고 회복한다 (그래프가 같은 도구 노드를 다시 돌려도 ADR이 두 개가 되지 않는다 — S3).
     """
     approval = approval or {}
@@ -685,6 +690,8 @@ def write_adr(ctx, item_id, kind, draft, *, lifecycle="USER_REVIEW", final_lifec
     path = os.path.join(os.path.abspath(ctx.adr_dir), f"{nid}-{ops.slug(draft.technology)}.md")
 
     item = item or new_item(ctx, item_id, kind, lifecycle)
+    if run_id:
+        item["run_id"] = run_id
     if hold_export and ex.active:
         lifecycle = "USER_REVIEW"
     item["lifecycle"] = lifecycle
@@ -880,15 +887,64 @@ def _hold(ctx, item, state, kind, reason, **detail):
     save_item(ctx, item)
 
 
+def _own_exports(ctx, item, old, new):
+    """같은 실행에서 **제품이 직접 내보낸** 새 ADR의 파일 이름 — 지문 비교에서 넘긴다 (설계 §5-2 「구현에서 정한 것」 ①).
+    이름·시간 같은 추측이 아니라 별도 파일의 기록으로 가린다. 넘기려면 이름 하나마다 다음이 전부 맞아야 한다:
+      1. 그 이름이 승인 근거 지문(old)에는 없고 지금(new)에만 있다 — 지문 차이의 「새 ADR」이다
+      2. 다른 항목의 별도 파일이 그 ADR을 썼다 (write_intent.path) · 쓰기가 끝났고 내보내기가 끝났다 (export.state=done)
+      3. 그 항목의 run_id가 이 항목의 run_id와 같다 (둘 다 있어야 한다 — 없으면 같은 실행으로 보지 않는다)
+      4. 지금 파일의 해시가 내보낼 때 적어 둔 content_hash와 같다 — 사람이 그 뒤 고쳤으면 바깥 변화다"""
+    rid = item.get("run_id")
+    if not rid or old is None:
+        return set()
+    cand = set(new.get("files", {})) - set(old.get("files", {}))
+    if not cand:
+        return set()
+    d, own = items_dir(ctx), set()
+    for f in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+        if not f.endswith(".yaml") or f[:-5] == item["id"]:
+            continue
+        try:
+            o = yaml.safe_load(open(os.path.join(d, f), encoding="utf-8").read()) or {}
+        except (yaml.YAMLError, OSError):
+            continue
+        wi = o.get("write_intent") if isinstance(o, dict) else None
+        if not isinstance(wi, dict) or o.get("run_id") != rid:  # MUT:own_run
+            continue
+        name = os.path.basename(wi.get("path") or "")
+        path = _abs(ctx, wi["path"]) if wi.get("path") else None
+        if (name in cand and wi.get("state") == "done" and (o.get("export") or {}).get("state") == "done"
+                and path and os.path.exists(path) and _file_hash(path) == wi.get("content_hash")):  # MUT:own_hash
+            own.add(name)
+    return own
+
+
+def _without(new, old, names):
+    """new에서 names의 ADR(과 그 번호가 match 결과에 새로 낀 것)을 뺀 사본 — 비교와 차이 요약에만 쓰고 저장하지 않는다."""
+    out = copy.deepcopy(new)
+    for n in names:
+        out.get("files", {}).pop(n, None)
+        out.get("detail", {}).pop(n, None)
+        out.get("meta", {}).pop(n, None)
+        for k, ids in (out.get("match") or {}).items():
+            if n[:4] in ids and n[:4] not in (old.get("match") or {}).get(k, []):
+                out["match"][k] = [i for i in ids if i != n[:4]]
+    return out
+
+
 def _stale_info(ctx, item):
-    """재개 검사 — 승인 근거 지문과 지금 세상(내보내지 않은 로컬 초안 제외)을 비교한다. 같으면 None."""
+    """재개 검사 — 승인 근거 지문과 지금 세상(내보내지 않은 로컬 초안 제외)을 비교한다. 같으면 None.
+    같은 실행에서 제품이 내보낸 새 ADR은 비교에서 넘긴다 (`_own_exports`) — A′·B′ 둘 다. new_fp는 넘기기 전의 온전한 세상이다.
+    바깥 변화는 없고 넘긴 것만 있었으면 {"state": "same", "own_exports": [...]}."""
     old = item.get("fingerprint")
     fp = fingerprint_for(ctx, (old or {}).get("impl"))
     new = fp.compute(_quiet(ctx), item.get("scope") or {})
-    if old is not None and fp.same(old, new):  # MUT:recheck_same
-        return None
-    changes = fp.diff(old, new) if old is not None else ["승인 근거 지문이 없다 — 무엇이 바뀌었는지 비교할 수 없다"]
-    return {"state": "stale", "changes": changes, "new_fp": new}
+    own = sorted(_own_exports(ctx, item, old, new))
+    cmp_new = _without(new, old, own) if own else new
+    if old is not None and fp.same(old, cmp_new):  # MUT:recheck_same
+        return {"state": "same", "own_exports": own} if own else None
+    changes = fp.diff(old, cmp_new) if old is not None else ["승인 근거 지문이 없다 — 무엇이 바뀌었는지 비교할 수 없다"]
+    return {"state": "stale", "changes": changes, "new_fp": new, "own_exports": own}
 
 
 def export_item(ctx, item_id, exporter=None, *, answer=None):
@@ -913,6 +969,7 @@ def export_item(ctx, item_id, exporter=None, *, answer=None):
 
     snap = copy.deepcopy(item)
     accepted = {"fp": None}
+    skipped = set()  # 지문 비교에서 넘긴 같은 실행의 내보내기 — 커밋하는 별도 파일의 history에 남긴다
     paths = [wi["path"], _rel(ctx, item_path(ctx, item_id))]
 
     def check():
@@ -921,6 +978,9 @@ def export_item(ctx, item_id, exporter=None, *, answer=None):
             return {"state": "blocked", "reason": "number_taken", "files": taken}
         info = _stale_info(ctx, item)
         if info is None:
+            return None
+        if info["state"] == "same":  # 바깥 변화는 없고 같은 실행의 내보내기만 있다 — 기록해 두고 넘긴다
+            skipped.update(info["own_exports"])
             return None
         if answer == "continue" and accepted["fp"] in (None, info["new_fp"]):
             accepted["fp"] = info["new_fp"]
@@ -931,6 +991,8 @@ def export_item(ctx, item_id, exporter=None, *, answer=None):
         if accepted["fp"] is not None:
             item["fingerprint"] = accepted["fp"]
             item["history"].append(_event(ctx, event="stale_accepted", by="human"))
+        if skipped:
+            item["history"].append(_event(ctx, event="own_exports_skipped", adrs=sorted(skipped), run_id=item.get("run_id"), by="graph"))
         item["lifecycle"] = "DONE"
         item["export"] = {"state": "done"}
         item.pop("attention", None)
