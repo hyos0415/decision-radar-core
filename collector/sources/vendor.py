@@ -73,7 +73,7 @@ def parse_feed(body, vendor, url, include=None, since_ts=0):
 
 def parse_page(body, vendor, url, now, fmt="html"):
     raw = body.decode("utf-8", "replace")
-    text = raw.strip() if fmt == "markdown" else html_to_text(raw)
+    text = raw.strip() if fmt == "markdown" else html_to_text(raw, lines=True)
     return Item(id=f"vendor-page:{vendor}:{url}", source="vendor", channels=[f"vendor:{vendor}"],
                 title=f"[{vendor}] {url}", url=url, created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
                 text=text, links=extract_links(raw) if fmt == "markdown" else [],

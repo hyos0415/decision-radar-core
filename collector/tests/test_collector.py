@@ -198,7 +198,15 @@ def test_page_hash_ignores_build_ids():
     pa = vendor.parse_page(a, "anthropic", "https://x", 0)
     pb = vendor.parse_page(b, "anthropic", "https://x", 0)
     assert pa.meta["text_hash"] == pb.meta["text_hash"]
-    assert pa.text == "Sep 30 Sonnet 5.5 released"
+    assert pa.text == "Sep 30\nSonnet 5.5 released"     # 블록마다 한 줄 — 페이지는 줄 단위로 비교한다 (HYO-72)
+
+
+def test_page_text_lines_and_untruncated():
+    body = ("<ul><li>Added <b>batch</b>&nbsp;API</li>\n  <li>Deprecated  x</li></ul><p>" + "z" * 9000 + "</p>").encode()
+    it = vendor.parse_page(body, "anthropic", "https://x", 0)
+    assert it.text.split("\n")[:2] == ["Added batch API", "Deprecated x"], it.text[:60]
+    assert len(it.to_dict()["text"]) == it.meta["text_chars"] > 9000      # 페이지는 TEXT_MAX에서 자르지 않는다
+    assert html_to_text("<p>a</p><p>b</p>") == "a b"                       # 피드 본문은 지금처럼 한 줄
 
 
 def test_vendor_markdown_page_kept_verbatim():

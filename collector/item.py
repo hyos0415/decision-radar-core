@@ -24,14 +24,16 @@ class Item:
     title: str
     url: str
     created_at: str = ""         # ISO 8601, 출처가 주는 값
-    text: str = ""               # 본문·설명·초록 (TEXT_MAX에서 자름)
+    text: str = ""               # 본문·설명·초록 (TEXT_MAX에서 자름 — 벤더 페이지만 전문)
     signals: dict = field(default_factory=dict)   # points · comments · stars · rank · trending_score · upvotes
     links: list = field(default_factory=list)     # 본문에서 뽑은 외부 링크 (2단계 1차 출처 확인의 첫 후보)
     meta: dict = field(default_factory=dict)      # 출처별 부가 정보
 
     def to_dict(self):
         d = asdict(self)
-        d["text"] = d["text"][:TEXT_MAX]
+        # 벤더 페이지는 자르지 않는다 — 지난 주와 줄 단위로 비교하려면 전문이 필요하다 (Anthropic 릴리스 노트 8만 자)
+        if self.meta.get("kind") != "page":
+            d["text"] = d["text"][:TEXT_MAX]
         return d
 
 
@@ -50,15 +52,24 @@ def extract_links(markup):
 
 
 _SCRIPT = re.compile(r"<(script|style|noscript|svg)\b.*?</\1>", re.I | re.S)
+_BLOCK = re.compile(r"</?(p|div|li|ul|ol|h[1-6]|br|hr|tr|table|section|article|header|footer|pre|blockquote|dt|dd)\b[^>]*>", re.I)
 _TAG = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
+_HWS = re.compile(r"[ \t\r\f\v ]+")
 
 
-def html_to_text(markup):
-    """페이지 비교용 본문 텍스트. 원본 HTML 해시는 요청마다 달라서(빌드 ID 등) 텍스트로 비교한다."""
+def html_to_text(markup, lines=False):
+    """본문 텍스트. 원본 HTML 해시는 요청마다 달라서(빌드 ID 등) 페이지는 텍스트로 비교한다.
+
+    lines=True면 블록 태그 경계에서 줄을 바꾼다 — 페이지 비교(HYO-72)가 줄 단위라서. 기본은 한 줄."""
     t = _SCRIPT.sub(" ", markup or "")
+    if not lines:
+        t = _TAG.sub(" ", t)
+        return _WS.sub(" ", html.unescape(t)).strip()
+    t = _BLOCK.sub("\n", t)
     t = _TAG.sub(" ", t)
-    return _WS.sub(" ", html.unescape(t)).strip()
+    out = (_HWS.sub(" ", ln).strip() for ln in html.unescape(t).split("\n"))
+    return "\n".join(ln for ln in out if ln)
 
 
 def text_hash(text):
