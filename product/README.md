@@ -6,6 +6,7 @@
 | 경로 | 무엇 |
 |---|---|
 | `requirements.txt` | 제품 의존성 — 스킬·eval(`/requirements.txt`)과 섞지 않는다 (스킬은 배포 단위, CLAUDE.md 규율 6) |
+| `radar/` | **제품 패키지** (LangGraph 비교 모드) — revisit·capture(스파이크에서 옮김) + detect(새로) + 53케이스 스텁 eval. `radar/README.md` |
 | `spike/common/` | 두 런타임이 같이 쓰는 것 — 프롬프트·스키마·도구 본체·보고서·스텁 판단·가드·채점 어댑터 (한 벌이어야 런타임 차이만 남는다) |
 | `spike/agents_sdk/` | 런타임 스파이크 1번 (HYO-63). 기준: `docs/design/runtime-spike.md` |
 | `spike/langgraph_spike/` | 런타임 스파이크 2번 (HYO-64) — Agents SDK와 짝 비교 (변경 2026-09-30). 폴더 이름이 `langgraph`면 설치된 `langgraph` 패키지를 가린다 |
