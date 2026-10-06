@@ -14,7 +14,10 @@ export function CaptureApp(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const ta = useRef<HTMLTextAreaElement>(null)
   const busyRef = useRef(false)
-  busyRef.current = busy
+
+  useEffect(() => {
+    busyRef.current = busy
+  }, [busy])
 
   const ready = backend.status === 'ready' && !!backend.baseUrl
   if (ready) setBaseUrl(backend.baseUrl!)

@@ -9,7 +9,7 @@ import {
   type StaleAnswer
 } from '@renderer/lib/api'
 import { EditDialog } from './EditDialog'
-import { STATE_LABEL, waitText } from './InboxList'
+import { STATE_LABEL, waitText } from '@renderer/lib/inbox'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,7 +23,11 @@ import { Button } from './ui/button'
 
 type StaleState = { kind: 'approve' | 'edit'; draft?: AdrDraft; changes: string[] }
 
-const STALE_BUTTONS: { answer: StaleAnswer; label: string; variant: 'default' | 'outline' | 'ghost' }[] = [
+const STALE_BUTTONS: {
+  answer: StaleAnswer
+  label: string
+  variant: 'default' | 'outline' | 'ghost'
+}[] = [
   { answer: 'continue', label: '계속', variant: 'default' },
   { answer: 'rejudge', label: '다시 판정', variant: 'outline' },
   { answer: 'discard', label: '버림', variant: 'ghost' }
