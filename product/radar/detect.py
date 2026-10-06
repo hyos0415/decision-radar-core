@@ -1,13 +1,14 @@
 """detect 그래프 — 스킬 SKILL.md 흐름 2와 같은 명세 (R10·R14·R16·R17). 새로 만들었다 (HYO-43).
 
-  load ─▶ triage ─▶ screen ─Send로 후보마다─▶ draft ─▶ write
-  (코드)  (모델)    (코드)                    (모델)   (코드)
+  load ─▶ triage ─▶ screen ─Send로 후보마다─▶ draft ─▶ write ─▶ (validate 실패가 있으면) repair ─▶ report
+  (코드)  (모델)    (코드)                    (모델)   (코드)                              (모델+코드)
 
   load    대상 repo의 CLAUDE.md·manifest 읽기 + 소식 수집(radar.py snapshot feed)
   triage  모델이 소식을 거른다 — 후보(technology·affected·dependency)와 버린 것(이유). 의존성 릴리스는 breaking·security·major만 (A5b)
   screen  R10(affected 하나 이상·실재 repo)과 R14(기존 ADR과 겹침 → skipped_existing)를 **코드가** 집행한다. 겹침 판정은 radar.py match
   draft   모델이 후보마다 초안 서술(title·use·context·decision·evidence·revisit_when)을 쓴다. 병렬
   write   초안 파일은 코드가 쓴다 — ops.propose_adr: next-id → proposed로 렌더 → radar.py validate
+  repair  validate가 거부한 초안을 모델이 오류와 함께 **한 번** 고쳐 쓴다(서술만). 파일은 코드가 같은 번호로 다시 쓰고 validate를 다시 돈다
 
 status를 쓰는 노드는 없다 (R8): AdrDraft에 status 칸이 없고 ops.render가 proposed로 박는다. 모델에게 주는 도구는 읽기(snapshot_*)뿐이다.
 기존 ADR은 읽기만 한다 — radar.py match가 읽고, write는 새 번호의 새 파일만 만든다 (INV-1).
@@ -27,7 +28,7 @@ from common.core import Ctx, check_scope
 from common.schemas import AdrDraft
 
 from . import detect_ops, llm_log
-from .detect_prompts import DRAFT_INSTRUCTIONS, TRIAGE_INSTRUCTIONS, draft_prompt, triage_prompt
+from .detect_prompts import DRAFT_INSTRUCTIONS, REPAIR_INSTRUCTIONS, TRIAGE_INSTRUCTIONS, draft_prompt, repair_prompt, triage_prompt
 from .detect_schemas import DraftBody, Triage
 from .revisit import limit
 from .tools import DETECT_TOOLS
@@ -44,6 +45,7 @@ class DetectState(TypedDict, total=False):
     skipped: list
     dropped: list
     drafts: Annotated[list, operator.add]  # draft 병렬 가지들의 결과
+    written: list
     p3: Annotated[list, operator.add]
     report: dict
 
@@ -55,6 +57,8 @@ def _item_for(feed, urls):
 def detect_graph(ctx, model):
     triage_agent = create_agent(model, tools=DETECT_TOOLS, system_prompt=TRIAGE_INSTRUCTIONS,
                                 response_format=ProviderStrategy(Triage), context_schema=Ctx, name="detect-triage")
+    repair_agent = create_agent(model, tools=DETECT_TOOLS, system_prompt=REPAIR_INSTRUCTIONS,
+                                response_format=ProviderStrategy(DraftBody), context_schema=Ctx, name="detect-repair")
     draft_agent = create_agent(model, tools=DETECT_TOOLS, system_prompt=DRAFT_INSTRUCTIONS,
                                response_format=ProviderStrategy(DraftBody), context_schema=Ctx, name="detect-draft")
 
@@ -98,16 +102,41 @@ def detect_graph(ctx, model):
         written = []
         for d in sorted(state.get("drafts") or [], key=lambda x: x["w"]["idx"]):  # 병렬 가지의 도착 순서와 무관하게 소식 순서대로 번호를 받는다
             w, cand = d["w"], d["w"]["candidate"]
-            # 후보의 정체(technology·affected)와 기존 ADR 연결(related)은 triage·screen이 정한 값을 코드가 덮어쓴다 — draft는 서술만 한다
-            body = {**d["draft"], "technology": cand["technology"], "affected": cand["affected"],
-                    "related": [r["id"] for r in w["related"]]}
-            out = ops.propose_adr(ctx, AdrDraft.model_validate(body))
-            res = json.loads(out)
-            written.append({"candidate": cand, "id": res["id"], "validate_errors": res["validate_errors"]})
+            body = detect_ops.compose(d["draft"], w)  # 후보의 정체·related는 코드가 덮어쓴다 — draft는 서술만 한다
+            res = json.loads(ops.propose_adr(ctx, AdrDraft.model_validate(body)))
+            written.append({"candidate": cand, "w": w, "body": d["draft"], "id": res["id"], "path": res["written"],
+                            "validate_errors": res["validate_errors"], "repaired": False})
+        return {"written": written}
+
+    def after_write(state):
+        return "repair" if any(x["validate_errors"] for x in state["written"]) else "report"
+
+    async def repair_node(state):
+        """validate가 거부한 초안을 모델에게 오류와 함께 **한 번** 고쳐 쓰게 한다 (스킬의 「초안 파일만 고친다」와 같다).
+        모델은 서술(DraftBody)만 낸다 — 파일은 코드가 같은 번호로 다시 쓰고 radar.py validate를 다시 돌린다. 그래도 실패면 draft_invalid로 센다."""
+        p3, out = [], []
+        for x in state["written"]:
+            if not x["validate_errors"]:
+                out.append(x)
+                continue
+            item = _item_for(state["feed"], x["candidate"]["source_urls"])
+            try:
+                r = await repair_agent.ainvoke({"messages": [{"role": "user", "content": repair_prompt(
+                    state["now"], x["candidate"], item, x["body"], x["validate_errors"])}]},
+                    context=ctx, config={"recursion_limit": limit(DETECT_MAX_TURNS)})
+                body = r["structured_response"].model_dump()
+            except Exception as e:
+                p3.append({"kind": "model_error", "stage": "repair", "adr": x["id"], "type": type(e).__name__, "message": str(e)[:300]})
+                out.append(x)
+                continue
+            errs = detect_ops.rewrite(ctx, x["path"], x["id"], AdrDraft.model_validate(detect_ops.compose(body, x["w"])))
+            out.append({**x, "body": body, "validate_errors": errs, "repaired": True})
+        return {"written": out, "p3": p3}
+
+    def report_node(state):
         failed = [p for p in state.get("p3") or [] if p.get("stage") == "draft"]
-        rep = detect_ops.detect_report(ctx, state["now"], skipped=state.get("skipped") or [],
-                                       dropped=state.get("dropped") or [], excluded=state.get("excluded") or [],
-                                       written=written, failed=failed)
+        rep = detect_ops.detect_report(ctx, state["now"], skipped=state.get("skipped") or [], dropped=state.get("dropped") or [],
+                                       excluded=state.get("excluded") or [], written=state.get("written") or [], failed=failed)
         return {"report": rep}
 
     g = StateGraph(DetectState)
@@ -115,11 +144,15 @@ def detect_graph(ctx, model):
     g.add_node("triage", triage_node)
     g.add_node("draft", draft_node)
     g.add_node("write", write_node)
+    g.add_node("repair", repair_node)
+    g.add_node("report", report_node)
     g.add_edge(START, "load")
     g.add_edge("load", "triage")
     g.add_conditional_edges("triage", fan_out, ["draft", "write"])
     g.add_edge("draft", "write")
-    g.add_edge("write", END)
+    g.add_conditional_edges("write", after_write, ["repair", "report"])
+    g.add_edge("repair", "report")
+    g.add_edge("report", END)
     return g.compile()
 
 

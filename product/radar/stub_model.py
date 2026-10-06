@@ -45,6 +45,8 @@ class StubChat(BaseChatModel):
             prompt = next(_text(m.content) for m in messages if isinstance(m, HumanMessage))
             if "<feed>" in prompt:
                 return stub_policy.detect_triage_step(self.script, prompt)
+            if "<repair>" in prompt:
+                return stub_policy.detect_repair_step(self.script, prompt)
             return stub_policy.detect_draft_step(self.script, prompt)
         names = {tc["id"]: tc["name"] for m in messages if isinstance(m, AIMessage) for tc in (m.tool_calls or [])}
         history = [(names.get(m.tool_call_id), _text(m.content)) for m in messages if isinstance(m, ToolMessage)]

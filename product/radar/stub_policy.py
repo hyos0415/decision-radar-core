@@ -6,6 +6,7 @@
 detect — 소식(feed) 단위 판단표 (케이스가 아니라 소식 ID가 열쇠라서 7케이스가 같은 판단을 공유한다):
 - triage: 소식 목록(<feed>)의 url마다 script["detect"]["items"][url] — candidate면 technology·dependency·affected, exclude면 reason
 - draft:  후보(<candidate>)의 소식 url로 script["detect"]["drafts"][url] — DraftBody 그대로
+- repair: 고쳐 쓸 초안(<repair>)의 소식 url로 script["detect"]["repairs"][url] — 없으면 받은 초안을 그대로 돌려준다(고치지 못함)
 스텁은 겹침(R14)을 모른다 — LEANN(D06)도 후보로 올린다. 겹침은 그래프의 screen 노드와 radar.py match가 잡아야 한다.
 """
 
@@ -16,6 +17,7 @@ from common.stub_policy import capture_step, parse_condition, revisit_step  # no
 
 FEED = re.compile(r"<feed>(.*?)</feed>", re.S)
 CAND = re.compile(r"<candidate>(.*?)</candidate>", re.S)
+REPAIR = re.compile(r"<repair>(.*?)</repair>", re.S)
 
 
 def detect_triage_step(script, prompt):
@@ -37,3 +39,8 @@ def detect_triage_step(script, prompt):
 def detect_draft_step(script, prompt):
     data = json.loads(CAND.search(prompt).group(1))
     return ("final", script["detect"]["drafts"][data["news"]["url"]])
+
+
+def detect_repair_step(script, prompt):
+    data = json.loads(REPAIR.search(prompt).group(1))
+    return ("final", script["detect"].get("repairs", {}).get(data["news"]["url"], data["draft"]))

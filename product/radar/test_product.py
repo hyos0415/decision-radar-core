@@ -52,7 +52,7 @@ check("소스에 다른 status 값을 쓰는 곳 없음", not bad, bad)
 print("2. detect 그래프")
 src = open(os.path.join(HERE, "detect.py"), encoding="utf-8").read()
 added = set(re.findall(r'g\.add_node\("(\w+)"', src))
-check("노드 = {load, triage, draft, write}", added == {"load", "triage", "draft", "write"}, sorted(added))
+check("노드 = {load, triage, draft, write, repair, report}", added == {"load", "triage", "draft", "write", "repair", "report"}, sorted(added))
 check("모델에게 주는 도구는 읽기뿐 (snapshot_*)", [t.name for t in DETECT_TOOLS] == ["snapshot_fetch", "snapshot_search"])
 
 print("3. 격리 검사가 detect trace 모양을 문다")
