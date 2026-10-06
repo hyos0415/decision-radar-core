@@ -15,3 +15,6 @@ usage/out/
 
 # 에이전트 worktree (Claude Code)
 .claude/worktrees/
+
+# 프로필 필터 결과 (HYO-73)
+pipeline/out/
