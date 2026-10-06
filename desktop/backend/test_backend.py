@@ -64,6 +64,11 @@ def main():
 
         h = c.get("/health").json()
         check("health", h["ok"] and h["mode"] == "stub", h)
+        pre = {"Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type"}
+        ok = c.options("/inbox/x/approve", headers={"Origin": "http://localhost:5173", **pre})
+        check("CORS: 개발 화면 출처 허용", ok.headers.get("access-control-allow-origin") == "http://localhost:5173", dict(ok.headers))
+        bad = c.options("/inbox/x/approve", headers={"Origin": "https://evil.example", **pre})
+        check("CORS: 바깥 출처 거부", "access-control-allow-origin" not in bad.headers, dict(bad.headers))
 
         items = c.get("/inbox").json()["items"]
         check("목록 3개, 오래된 순", [i["waiting_days"] for i in items] == [6, 3, 0], items)

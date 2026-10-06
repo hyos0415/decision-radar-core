@@ -14,6 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from fastapi import Body, FastAPI, HTTPException  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 
 import devdata  # noqa: E402
@@ -24,6 +25,9 @@ DEFAULT_DATA = os.path.join(REPO, "desktop", ".dev-data")
 
 def create_app(svc: RadarService) -> FastAPI:
     app = FastAPI(title="Decision Radar backend", docs_url=None, redoc_url=None)
+    # 화면(개발 서버 localhost:5173 등)과 포트가 달라 교차 출처다. localhost 출처만 허용한다 — 아무 웹 페이지나 승인 API를 부르지 못하게
+    app.add_middleware(CORSMiddleware, allow_origin_regex=r"^http://(localhost|127\.0\.0\.1)(:\d+)?$",
+                       allow_methods=["GET", "POST"], allow_headers=["content-type"])
 
     @app.exception_handler(ServiceError)
     def _service_error(_req, e: ServiceError):
