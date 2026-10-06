@@ -210,7 +210,7 @@ MoSCoW = **M**ust(없으면 실패) · **S**hould(중요하지만 없어도 성�
 | | Arena 하네스 — 코퍼스 3종·gold set(A~J 일부)·`ranx`+JHS 지표·빌드 비용 계측·버전 고정 | G2 |
 | | Arena 전략 — Full Context·BM25·Dense·Hybrid·구조 그래프·SPLADE | G2 |
 | | LangGraph 코어 — revisit·detect, interrupt·resume·checkpoint, 규칙층 재사용 | G5 |
-| | 최소 웹 — Inbox + Decisions | G4 |
+| | 최소 웹 — Inbox + Decisions. **변경 (2026-10-06, 사용자)**: 웹 → **데스크톱 앱(Electron + React·TS 화면 + Python FastAPI 백엔드)**. 근거 = 로컬 CLI 백그라운드 실행 · OS 네이티브 알림 · 항상 떠 있는 창 · 대화 붙여넣기(전역 단축키) — 필요에서 고른 스택이고 실측은 아직 없다(실사용 2주 일지로 검증, 안 쓰면 웹으로 축소). MVP만: 패키징·서명·자동 업데이트는 Won't · `desktop-app.md` · ADR adr/0011 | G4 |
 | | 실사용 비교 측정 | G4 |
 | | **수집 파이프라인 (M2) 기본** — 제한된 출처 풀(Reddit RSS · HN · GitHub · HF · 벤더 피드) → 프로필 필터 → 2단계 1차 출처 확인 → 주간 스냅숏. **변경 (2026-10-02, 사용자 결정)**: Should에서 Must로. C-DOC 코퍼스(E4)와 detect 흐름(E5)이 둘 다 이 결과를 받는다. 급증 통계는 아래 Should에 남는다 · 에픽 E9 | G2·G3 |
 | **Should** | 온톨로지 계층 — 구조 그래프와 **같은 Neo4j 그래프**에 클래스 계층·별칭·추론을 얹는 모드 (ablation) · Reranker · LightRAG | G2 |
@@ -220,7 +220,7 @@ MoSCoW = **M**ust(없으면 실패) · **S**hould(중요하지만 없어도 성�
 | | capture via MCP · 최소 실험 제안(M6) · 실제 페이지 소음 스냅숏 | G3·G4 |
 | | 역할별 멀티 모델 + 최적화 모드 실험 (§14) | G5 |
 | **Could** | ChatGPT 저장 경로 · GitHub Actions 실험 실행 · Agentic retrieval · 블로그 연재 · 규제 출처 (HYO-68 — 신호만, 판단은 사람) | |
-| **Won't** | multi-user·인증·SaaS · symbol 단위 영향 분석 · 한국어 뉴스 코퍼스(NIKL) · MS GraphRAG·Graphiti · SHACL을 넘는 OWL 추론 · retriever·라우터 학습(fine-tuning) · 로컬 LLM 그래프 추출 · 엔진 간 비교 · desktop 앱 | |
+| **Won't** | multi-user·인증·SaaS · symbol 단위 영향 분석 · 한국어 뉴스 코퍼스(NIKL) · MS GraphRAG·Graphiti · SHACL을 넘는 OWL 추론 · retriever·라우터 학습(fine-tuning) · 로컬 LLM 그래프 추출 · 엔진 간 비교 · ~~desktop 앱~~ → Must로 (2026-10-06 변경, 위 「최소 웹」 줄 — 재판정 c3 「재미있어서 착수」가 아니라 필요 4가지를 근거로 남김) · 데스크톱 앱의 패키징·서명·자동 업데이트 | |
 
 ## 10. 일정 제약 (2개월)
 
@@ -277,13 +277,14 @@ MoSCoW = **M**ust(없으면 실패) · **S**hould(중요하지만 없어도 성�
 | ~~Q3~~ | ~~구조 그래프와 온톨로지의 경계~~ → **그래프 하나, 모드 둘(ablation)**: 구조만 vs +온톨로지 계층(isA·altLabel·추론). SHACL은 검색이 아니라 적재 전 검증 | 해결 (2026-09-29) |
 | ~~Q4~~ | ~~ES의 RRF가 라이선스 등급에서 쓸 수 있는가 — 안 되면 fusion만 `ranx` — **변경 (2026-10-01, 사용자): 범위를 넓힌다 — Arena가 ES에 기대는 기능 전부(nori·BM25·kNN·RRF/retriever·그 밖의 것)가 무료(self-managed Basic) 등급에 드는지. HYO-31(docker compose) 전에 조사**~~ → RRF·linear retriever만 Enterprise, 나머지는 무료. 구독하지 않고 fusion은 `ranx` + 직접 구현 RRF (사용자 결정). compose는 `basic` 라이선스 고정 — `doc-pipeline.md` §7 | 해결 (2026-10-02) |
 | ~~Q5~~ | ~~재판정 결정 기록 — 이 문서가 확정되면 `docs/decisions/`에~~ → `docs/decisions/2026-09-29-rejudgment.md` (HYO-13, 31973b0) | 해결 (2026-09-29) |
-| Q6 | 웹 프레임워크 | E6 착수 전 |
+| ~~Q6~~ | ~~웹 프레임워크~~ → Electron(TS) + React·TS(Vite) + Python FastAPI 백엔드 (`desktop-app.md`, adr/0011) | 해결 (2026-10-06) |
 
 ## 관련 문서
 
 - 명세 R1~R16: `docs/spec-work-order.md`
 - 수집 파이프라인 (M2 · E9): `docs/design/doc-pipeline.md`
 - HITL · checkpoint · ADR 정합성 (M7 · G5, HYO-44): `docs/design/hitl-state.md`
+- 데스크톱 앱 (M8 · E6, HYO-49·50): `docs/design/desktop-app.md`
 - 검시 판정: `docs/decisions/2026-09-29-coroner-verdict.md`
 - 원 제안서: `<downloads>\project_jhs_autopsy_proposal.md` (레포 밖)
 - eval 확정 시트·케이스: `eval/precondition-sheet.md` · `eval/cases/README.md`
