@@ -126,11 +126,7 @@ export type RunResult = {
   alerts: { adr: string; condition: string; result: string; message: string }[]
 }
 
-export type EventName =
-  | 'item_opened'
-  | 'app_opened'
-  | 'decision_opened'
-  | 'capture_opened'
+export type EventName = 'item_opened' | 'app_opened' | 'decision_opened' | 'capture_opened'
 
 let baseUrl = ''
 

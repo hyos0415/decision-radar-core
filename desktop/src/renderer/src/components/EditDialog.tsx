@@ -18,7 +18,13 @@ const EMPTY: AdrDraft = {
   revisit_when: []
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }): React.JSX.Element {
+function Field({
+  label,
+  children
+}: {
+  label: string
+  children: React.ReactNode
+}): React.JSX.Element {
   return (
     <div className="grid gap-1">
       <Label>{label}</Label>
@@ -94,9 +100,7 @@ export function EditDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl">
         <DialogTitle>고쳐서 승인</DialogTitle>
-        <DialogDescription>
-          상태와 번호는 고칠 수 없다. 저장할 때 정해진다.
-        </DialogDescription>
+        <DialogDescription>상태와 번호는 고칠 수 없다. 저장할 때 정해진다.</DialogDescription>
         <div className="-mx-1 grid flex-1 gap-3 overflow-y-auto px-1 pb-1">
           <Field label="제목">
             <Input value={title} onChange={(e) => setTitle(e.target.value)} />

@@ -37,7 +37,11 @@ async function getJson<T>(path: string): Promise<T | null> {
   }
 }
 
-export function postEvent(event: string, item?: string, detail: Record<string, unknown> = {}): void {
+export function postEvent(
+  event: string,
+  item?: string,
+  detail: Record<string, unknown> = {}
+): void {
   const b = base()
   if (!b) return
   fetch(b + '/events', {

@@ -31,35 +31,49 @@ function App(): React.JSX.Element {
   const [info, setInfo] = useState<RadarInfo | null>(null)
   const sentOpened = useRef(false)
   const selectedRef = useRef<string | null>(null)
-  selectedRef.current = selectedId
 
   useEffect(() => {
-    window.radar.getBackend().then(setBackend)
-    return window.radar.onBackendStatus(setBackend)
+    selectedRef.current = selectedId
+  }, [selectedId])
+
+  useEffect(() => {
+    // the detail pane is cleared whenever the backend is not ready
+    const apply = (b: Backend): void => {
+      setBackend(b)
+      if (!(b.status === 'ready' && !!b.baseUrl)) setDetail(null)
+    }
+    window.radar.getBackend().then(apply)
+    return window.radar.onBackendStatus(apply)
   }, [])
 
   const ready = backend.status === 'ready' && !!backend.baseUrl
   if (ready) setBaseUrl(backend.baseUrl!)
 
   // preferred: id to select if still present; otherwise keep current, else first
-  const refresh = useCallback(async (preferIndex?: number, preferId?: string) => {
-    try {
-      const list = await api.inbox()
-      setItems(list)
-      setLoadError(null)
-      const cur = selectedRef.current
-      if (preferId && list.some((i) => i.id === preferId)) {
-        setSelectedId(preferId)
-      } else if (preferIndex !== undefined) {
-        const next = list[Math.min(preferIndex, list.length - 1)]
-        setSelectedId(next ? next.id : null)
-      } else if (!cur || !list.some((i) => i.id === cur)) {
-        setSelectedId(list[0]?.id ?? null)
-      }
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e))
-    }
-  }, [])
+  const refresh = useCallback(
+    (preferIndex?: number, preferId?: string): Promise<void> =>
+      api
+        .inbox()
+        .then((list) => {
+          setItems(list)
+          setLoadError(null)
+          const cur = selectedRef.current
+          if (preferId && list.some((i) => i.id === preferId)) {
+            setSelectedId(preferId)
+          } else if (preferIndex !== undefined) {
+            const next = list[Math.min(preferIndex, list.length - 1)]
+            setSelectedId(next ? next.id : null)
+            if (!next) setDetail(null)
+          } else if (!cur || !list.some((i) => i.id === cur)) {
+            setSelectedId(list[0]?.id ?? null)
+            if (!list[0]) setDetail(null)
+          }
+        })
+        .catch((e) => {
+          setLoadError(e instanceof Error ? e.message : String(e))
+        }),
+    []
+  )
 
   useEffect(() => {
     window.radar.getInfo().then(setInfo)
@@ -111,10 +125,7 @@ function App(): React.JSX.Element {
   }, [ready, refresh])
 
   useEffect(() => {
-    if (!ready || !selectedId) {
-      setDetail(null)
-      return
-    }
+    if (!ready || !selectedId) return
     let cancelled = false
     api
       .detail(selectedId)

@@ -30,20 +30,12 @@ function Revisit({ d }: { d: Decision }): React.JSX.Element {
   )
 }
 
-function Panel({
-  id,
-  onClose
-}: {
-  id: string
-  onClose: () => void
-}): React.JSX.Element {
+function Panel({ id, onClose }: { id: string; onClose: () => void }): React.JSX.Element {
   const [d, setD] = useState<DecisionDetail | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    setD(null)
-    setErr(null)
     api
       .decision(id)
       .then((r) => {
@@ -99,7 +91,9 @@ function Panel({
                   <div className="text-[13px]">{r.condition}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
                     <Badge variant="outline">{r.check_type}</Badge>
-                    <span className={cn(r.last?.result === 'met' && 'font-semibold text-foreground')}>
+                    <span
+                      className={cn(r.last?.result === 'met' && 'font-semibold text-foreground')}
+                    >
                       {resultLabel(r.last?.result)}
                     </span>
                     {r.last && <span>{dateOnly(r.last.checked_at)}</span>}
@@ -112,7 +106,9 @@ function Panel({
 
           <div className="mt-5 mb-1.5 flex flex-wrap items-baseline justify-between gap-x-3">
             <span className="font-mono text-xs">{d.file}</span>
-            <span className="text-[11px] text-muted-foreground">상태는 ADR 파일에서 사람이 바꾼다</span>
+            <span className="text-[11px] text-muted-foreground">
+              상태는 ADR 파일에서 사람이 바꾼다
+            </span>
           </div>
           <pre className="overflow-x-auto rounded-md border bg-muted p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap">
             {d.markdown}
@@ -151,9 +147,10 @@ export function DecisionsView({
     const needle = q.trim().toLowerCase()
     return (items ?? []).filter(
       (d) =>
-        (status === 'all' || d.status === status || (status === 'adopted' && d.status === 'accepted')) &&
-        (!needle ||
-          `${d.id} ${d.title} ${d.technology}`.toLowerCase().includes(needle))
+        (status === 'all' ||
+          d.status === status ||
+          (status === 'adopted' && d.status === 'accepted')) &&
+        (!needle || `${d.id} ${d.title} ${d.technology}`.toLowerCase().includes(needle))
     )
   }, [items, q, status])
 
@@ -214,7 +211,9 @@ export function DecisionsView({
               >
                 <span className="font-mono text-xs text-muted-foreground">{d.id}</span>
                 <span className="truncate">{d.title}</span>
-                <span className="truncate font-mono text-xs text-muted-foreground">{d.technology}</span>
+                <span className="truncate font-mono text-xs text-muted-foreground">
+                  {d.technology}
+                </span>
                 <span>
                   <Badge variant="outline">{statusLabel(d.status)}</Badge>
                 </span>
