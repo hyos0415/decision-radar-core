@@ -73,14 +73,37 @@ def test_adjustments():
     sens = policy.Context(sensitive=True)
     assert policy.cell("L7", "deprecation", sens)["keep"] and policy.cell("L8", "deprecation", sens)["keep"]
     assert not policy.cell("L8", "breaking", sens)["keep"]                                           # security·deprecation만
-    # 적용 순서: 경로(개발) 다음에 민감 → 개발+민감이면 deprecation이 되살아난다
-    both = policy.Context(path="dev", sensitive=True)
-    assert policy.cell("L4", "deprecation", both)["keep"] and not policy.cell("L4", "breaking", both)["keep"]
+    # 개발 경로가 최우선 (사용자 2026-10-06, §8 판정 세부): 떠 있는 태그·민감 경로 보정이 다른 변화를 되살리지 않는다 → test_dev_path_is_top_priority
     # 로컬 서빙 모델은 모델 은퇴 칸 해당 없음 (v1.1 U2)
     assert not policy.cell("L2", "model_retirement", policy.Context(local=True))["keep"]
     assert policy.cell("L2", "pricing", policy.Context(local=True))["keep"]
     r = policy.cell("L4", "breaking", dev)
     assert r["adjusted_by"] and "개발" in r["adjusted_by"][0]
+
+
+def test_dev_path_is_top_priority():
+    """개발 경로면 security만 남는다 — 어떤 등급·어떤 보정 조합에서도. (문서 순서를 글자 그대로 적용하면 개발+떠 있는 태그에서 minor·patch가 ✅가 된다)"""
+    combos = {"개발": policy.Context(path="dev"), "개발+떠 있는 태그": policy.Context(path="dev", pin="floating"),
+              "개발+민감": policy.Context(path="dev", sensitive=True), "개발+떠 있는 태그+민감": policy.Context(path="dev", pin="floating", sensitive=True),
+              "개발+로컬": policy.Context(path="dev", local=True)}
+    for name, ctx in combos.items():
+        for t in policy.TIERS:
+            kept = [c for c in policy.CHANGES if policy.cell(t, c, ctx)["keep"]]
+            assert kept == ["security"], (name, t, kept)
+    r = policy.cell("L6", "minor_patch", policy.Context(path="dev", pin="floating"))
+    assert not r["keep"] and not any("떠 있는 태그" in a for a in r["adjusted_by"])             # 되살리는 보정은 기록에도 안 남는다
+    r = policy.cell("L7", "deprecation", policy.Context(path="dev", sensitive=True))
+    assert not r["keep"] and not any("민감" in a for a in r["adjusted_by"])
+    assert policy.cell("L8", "security", policy.Context(path="dev", sensitive=True))["keep"]
+    # 개발이 아니면 두 보정은 그대로 일한다 (개발 우선이 보정을 통째로 꺼 버리지 않았다)
+    assert policy.cell("L6", "minor_patch", policy.Context(pin="floating"))["keep"] and policy.cell("L7", "deprecation", policy.Context(sensitive=True))["keep"]
+    # 관문 끝까지: 개발 그룹 기술 + 떠 있는 태그 + 민감 → 모델이 minor·patch·deprecation을 짚어도 버려진다
+    st = TierStore()
+    st.classify(_q("lintx", manifest="requirements-dev.txt", group="dev", pin="floating"), StubBackend(tiers={"lintx": ["L7"]}))
+    st.data["overrides"][signals.norm("lintx")] = {"technology": "lintx", "sensitive": True}
+    g = gate_mod.Gate(StubBackend(changes={"a": ["minor_patch"], "b": ["deprecation"], "c": ["security"]}), st)
+    assert not g(_item("a", "lintx 1.1", tech="lintx"))["keep"] and not g(_item("b", "lintx deprecates", tech="lintx"))["keep"]
+    assert g(_item("c", "lintx cve", tech="lintx"))["keep"]
 
 
 def test_two_tiers_any_row_keeps_and_records_which():
@@ -174,10 +197,15 @@ def test_verify_script_beats_model():
     assert v["tiers"] == ["L1"] and v["mismatch"] is None                             # 일치하면 어긋남 기록 없음
     v = tiers.verify(["L4"], False, {"manifest": "pyproject.toml", "group": "dev"})   # S2 dev 그룹
     assert v["tiers"] == ["L7"] and v["path"] == "dev" and v["mismatch"]["rule"].startswith("S2")
-    v = tiers.verify(["L2"], False, {"manifest": "requirements.txt", "group": "main"})   # S3: 패키지가 모델·서비스일 수 없다
+    # S3 (사용자 2026-10-06): manifest 패키지는 L0·L1만 떨어낸다 — 호스팅 등급(L2·L3)은 떨어내지 않는다
+    v = tiers.verify(["L3", "L5"], False, {"manifest": "requirements.txt", "group": "main"})   # langfuse 같은 서비스+SDK (§4 예시)
+    assert v["tiers"] == ["L3", "L5"] and v["mismatch"] is None and not v["unresolved"]
+    v = tiers.verify(["L2"], False, {"manifest": "requirements.txt", "group": "main"})
+    assert v["tiers"] == ["L2"] and not v["unresolved"] and v["mismatch"] is None
+    v = tiers.verify(["L1", "L5"], False, {"manifest": "requirements.txt", "group": "main"})   # L0·L1은 패키지가 될 수 없다
+    assert v["tiers"] == ["L5"] and v["mismatch"]["model"] == ["L1", "L5"] and v["mismatch"]["script"] == ["L5"]
+    v = tiers.verify(["L0", "L1"], False, {"manifest": "requirements.txt", "group": "main"})   # 남는 게 없으면 분류 불가
     assert v["unresolved"] and v["tiers"] == [] and v["mismatch"]
-    v = tiers.verify(["L3", "L5"], False, {"manifest": "requirements.txt", "group": "main"})
-    assert v["tiers"] == ["L5"] and v["mismatch"]["model"] == ["L3", "L5"] and not v["unresolved"]
     v = tiers.verify([], True, {"manifest": "requirements.txt", "group": "main"})     # 모델이 분류 불가 + 스크립트도 못 정함
     assert v["unresolved"]
     v = tiers.verify(["L7"], True, {"manifest": "pyproject.toml", "group": "dev"})    # 모델이 분류 불가여도 스크립트가 정한다
@@ -427,12 +455,22 @@ def test_make_backend_gating():
                 pass
     finally:
         agents_backend.openai_key = orig
-    for m, exc in (("jev-1.13.0", NotImplementedError), ("llama", ValueError)):
+    from pipeline.importance import jev_backend
+    orig_k = jev_backend.typesafe_key
+    jev_backend.typesafe_key = lambda: (_ for _ in ()).throw(AssertionError("키를 읽으려 했다"))
+    try:
         try:
-            make_backend(m, allow_real=True)
-            raise AssertionError(m)
-        except exc:
+            make_backend("jev-1.13.0")
+            raise AssertionError("플래그 없이 Jev 백엔드가 만들어졌다")
+        except PermissionError:
             pass
+    finally:
+        jev_backend.typesafe_key = orig_k
+    try:
+        make_backend("llama", allow_real=True)
+        raise AssertionError("llama")
+    except ValueError:
+        pass
 
 
 # ---------------------------------------------------------------- Agents SDK 백엔드 (가짜 모델 — 네트워크 없음)
@@ -567,6 +605,344 @@ def test_netguard_blocks_outside_api_openai_and_stops_without_retry():
             b.close()
     finally:
         socket.getaddrinfo = real
+
+
+# ---------------------------------------------------------------- Jev 백엔드 (로컬 가짜 HTTP 서버 127.0.0.1 — 실제 API·외부 네트워크 없음)
+
+import http.server  # noqa: E402
+import os  # noqa: E402
+import threading  # noqa: E402
+import urllib.request  # noqa: E402
+
+from pipeline.importance import jev_backend, prompts  # noqa: E402
+
+
+def _noul_answers(**p):
+    return {k: {"type": "noul", "noul": p.get(k, 0.0)} for k in policy.CHANGES}
+
+
+def _ok(answers, model="jev-1.13.0", i=1234, o=9):
+    return 200, {}, {"model": model, "usage": {"input_tokens": i, "output_tokens": o}, "answers": answers}
+
+
+def _choice(top, probs):
+    return {"tier": {"type": "choice", "choice": top, "confidence": probs[top], "probabilities": probs}}
+
+
+class FakeJev:
+    """로컬 HTTP 서버. script: 요청마다 하나 — (status, headers, json) | 호출 가능(요청 본문 dict → 그 튜플). seen에 요청이 쌓인다."""
+
+    def __init__(self, script):
+        outer = self
+        self.script, self.seen = list(script), []
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                body = json.loads(raw.decode("utf-8"))
+                outer.seen.append({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
+                step = outer.script.pop(0)
+                status, headers, obj = step(body) if callable(step) else step
+                data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+                self.send_response(status)
+                for k, v in headers.items():
+                    self.send_header(k, v)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+
+        self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+def _jev(fake, guard=False, **kw):
+    b = jev_backend.JevBackend("jev-1.13.0", key="sk-test", base_url=fake.url, guard=guard, opener=urllib.request.build_opener(urllib.request.ProxyHandler({})), **kw)
+    b.sleeps = []
+    b.retry.SLEEPER.sleep = b.sleeps.append          # 실제로 기다리지 않는다
+    return b
+
+
+def test_jev_request_shape_and_parallel_questions():
+    fake = FakeJev([_ok(_noul_answers(breaking=0.9)), _ok(_choice("L4", {"L4": 0.9, "L6": 0.1}))])
+    b = _jev(fake)
+    try:
+        a = b.classify_changes(NewsQuery("n1", "pydantic", "pydantic v3 — breaking", "Breaking changes: validators removed."))
+        t = b.classify_tiers(TechQuery("pydantic", usage="앱 뼈대", source="pyproject", signals={"manifest": "pyproject.toml", "group": "main"}))
+        assert a.labels == ["breaking"] and t.labels == ["L4"] and len(fake.seen) == 2        # 소식 하나·기술 하나 = 요청 하나씩
+        r = fake.seen[0]
+        assert r["path"] == "/v1/systemone" and r["headers"]["authorization"] == "Bearer sk-test"
+        assert r["headers"]["content-type"] == "application/json" and r["headers"]["accept"] == "application/json"
+        assert sorted(r["body"]) == ["model", "questions", "state"] and r["body"]["model"] == "jev-1.13.0"
+        assert list(r["body"]["questions"]) == policy.CHANGES                              # 변화 종류 9개가 한 요청에 병렬
+        assert r["body"]["state"] == {"technology": "pydantic", "title": "pydantic v3 — breaking", "body": "Breaking changes: validators removed."}
+        for kind, qn in r["body"]["questions"].items():
+            assert qn["type"] == "noul" and kind in qn["instructions"] and prompts.CHANGE_MEANING[kind] in qn["instructions"]
+            assert set(qn["criteria"]) == {"true", "false"}
+        r2 = fake.seen[1]["body"]
+        assert list(r2["questions"]) == ["tier"] and r2["questions"]["tier"]["type"] == "choice"      # 등급은 선택지 한 질문
+        assert list(r2["questions"]["tier"]["criteria"]) == policy.TIERS and r2["model"] == "jev-1.13.0"
+        assert r2["state"] == {"technology": "pydantic", "usage": "앱 뼈대", "source": "pyproject"}
+        assert "pyproject.toml" not in json.dumps(r2, ensure_ascii=False)                   # 스크립트 신호는 모델에 안 보낸다
+    finally:
+        b.close()
+        fake.close()
+
+
+def test_jev_threshold_is_fixed_half_boundary():
+    assert jev_backend.THRESHOLD == 0.5
+    fake = FakeJev([_ok(_noul_answers(breaking=0.5, security=0.4999, deprecation=0.5001, pricing=1.0, major=0.0))])
+    b = _jev(fake)
+    try:
+        a = b.classify_changes(NewsQuery("n", "x", "t"))
+        assert a.labels == ["breaking", "deprecation", "pricing"]       # 0.5는 예 · 0.5001도 예 · 정책 순서
+        assert "security" not in a.labels                                                  # 0.4999는 아니오
+        assert a.per_label["breaking"] == {"yes": True, "prob": 0.5} and a.per_label["security"] == {"yes": False, "prob": 0.4999}
+        assert a.reason is None and len(a.calls) == 1                                       # 근거 텍스트 없음 (ADR 0001 c2) · 호출 기록은 붙는다
+    finally:
+        b.close()
+        fake.close()
+
+
+def test_jev_second_tier_needs_half():
+    fake = FakeJev([_ok(_choice("L5", {"L3": 0.5, "L5": 0.5})),                     # 두 번째 등급 p=0.5 → 두 등급 (등급 순서로)
+                    _ok(_choice("L5", {"L3": 0.4999, "L5": 0.5001})),               # 0.4999 → 한 등급
+                    _ok(_choice("L4", {"L4": 0.4, "L6": 0.35, "L7": 0.25}))])      # 고른 등급은 p가 낮아도 그대로 (두 번째만 문턱)
+    b = _jev(fake)
+    try:
+        two = b.classify_tiers(TechQuery("langfuse"))
+        assert two.labels == ["L3", "L5"] and not two.unsure and two.per_label["L3"]["yes"] and two.per_label["L5"]["prob"] == 0.5
+        assert b.classify_tiers(TechQuery("langfuse")).labels == ["L5"]
+        assert b.classify_tiers(TechQuery("x")).labels == ["L4"]
+        # 저장소·검증까지: langfuse 두 등급 L3+L5가 S3를 지나 유지된다
+        st = TierStore()
+        fake.script.append(_ok(_choice("L3", {"L3": 0.5, "L5": 0.5})))
+        rec = st.classify(_q("langfuse", manifest="requirements.txt", group="main"), b)
+        assert rec["tiers"] == ["L3", "L5"] and rec["mismatch"] is None and rec["reason"] is None and rec["per_label"]["L5"]["prob"] == 0.5
+    finally:
+        b.close()
+        fake.close()
+
+
+def test_jev_call_log_cost_and_returned_model():
+    fake = FakeJev([_ok(_noul_answers(), i=2000, o=7), _ok(_noul_answers(), model="jev-1.14.0", i=1000)])
+    b = _jev(fake)
+    try:
+        b.classify_changes(NewsQuery("n", "x", "t"))
+        b.classify_changes(NewsQuery("m", "x", "t"))
+        c1, c2 = b.log.calls
+        assert c1["type"] == "llm_call" and c1["model"] == "jev-1.13.0" and c1["requested_model"] == "jev-1.13.0" and c1["model_mismatch"] is False   # 응답 model 필드
+        assert c1["input_tokens"] == 2000 and c1["output_tokens"] == 7 and abs(c1["cost_usd"] - 2000 * 0.042 / 1e6) < 1e-12 and c1["attempts"] == 1
+        assert c2["model"] == "jev-1.14.0" and c2["model_mismatch"] is True                  # 요청과 다른 모델이 답하면 숨기지 않는다
+        tot = b.log.totals()
+        assert tot["input_tokens"] == 3000 and abs(tot["cost_usd"] - 3000 * 0.042 / 1e6) < 1e-5 and tot["unpriced_calls"] == 0
+        assert b.run_info()["models_returned"] == ["jev-1.13.0", "jev-1.14.0"] and b.run_info()["threshold"] == 0.5
+    finally:
+        b.close()
+        fake.close()
+
+
+def test_jev_retry_429_respects_retry_after_and_4xx_is_not_retried():
+    fake = FakeJev([(429, {"retry-after": "7"}, {"error": "rate"}), (503, {}, {"error": "busy"}), (429, {"retry-after-ms": "9000"}, {}), _ok(_noul_answers(security=0.9))])
+    b = _jev(fake)
+    try:
+        assert b.classify_changes(NewsQuery("n", "x", "t")).labels == ["security"]
+        rec = b.log.calls[0]
+        assert rec["attempts"] == 4 and rec["retried"] == ["JevHTTPError(429)", "JevHTTPError(503)", "JevHTTPError(429)"] and not rec.get("error")
+        assert b.sleeps[0] >= 7.0 and b.sleeps[2] >= 9.0 and b.sleeps[1] <= 4.0           # 429는 retry-after 이상 기다리고, 503은 정책 지연(2·4·8·16초) 안
+        assert b.retry.MAX_ATTEMPTS == 5 and b.retry.BACKOFF_BASE == 2.0                    # product/radar/retry.py의 상수
+    finally:
+        b.close()
+        fake.close()
+    fake = FakeJev([(400, {}, {"detail": "bad"}), _ok(_noul_answers())])                  # 그 밖의 4xx는 다시 불러도 같다
+    b = _jev(fake)
+    try:
+        try:
+            b.classify_changes(NewsQuery("n", "x", "t"))
+            raise AssertionError("400이 삼켜졌다")
+        except jev_backend.JevHTTPError as e:
+            assert e.status_code == 400
+        assert len(fake.seen) == 1 and b.sleeps == [] and b.log.calls[0]["attempts"] == 1 and "JevHTTPError" in b.log.calls[0]["error"]
+        assert b.log.calls[0]["cost_usd"] == 0.0 and b.log.totals()["errors"] == 1
+    finally:
+        b.close()
+        fake.close()
+    fake = FakeJev([(429, {}, {})] * 5 + [_ok(_noul_answers())])                           # 끝내 안 풀리면 5번째에서 멈춘다
+    b = _jev(fake)
+    try:
+        try:
+            b.classify_changes(NewsQuery("n", "x", "t"))
+            raise AssertionError("끝없이 재시도했다")
+        except jev_backend.JevHTTPError:
+            pass
+        assert len(fake.seen) == 5 and b.log.calls[0]["attempts"] == 5 and len(b.log.calls[0]["retried"]) == 4
+    finally:
+        b.close()
+        fake.close()
+
+
+def test_jev_malformed_response_is_safe_failure_not_silent_no():
+    miss = _noul_answers()
+    del miss["pricing"]
+    bad_p = _noul_answers(breaking=1.5)
+    fake = FakeJev([_ok(miss), _ok(bad_p), (200, {}, {"model": "jev-1.13.0", "answers": _noul_answers()})])
+    b = _jev(fake)
+    try:
+        for _ in range(3):
+            try:
+                b.classify_changes(NewsQuery("n", "x", "t"))
+                raise AssertionError("깨진 응답이 통과했다")
+            except jev_backend.JevResponseError:
+                pass
+        assert len(fake.seen) == 3 and b.sleeps == [] and b.log.totals()["errors"] == 3          # 재시도 없음 · 기록됨
+        assert b.log.calls[0]["input_tokens"] == 1234 and b.log.calls[0]["cost_usd"] > 0 and "pricing" in b.log.calls[0]["error"]   # 응답은 왔으니 비용은 그대로
+        # 관문: 호출 실패는 버림 + status=error (조용히 아니오로 세지 않는다)
+        st = _store(pydantic={"tiers": ["L4"]})
+        fake.script.append(_ok(miss))
+        out = gate_mod.Gate(b, st)(_item("n", "pydantic breaking", tech="pydantic"))
+        assert out["status"] == "error" and not out["keep"]
+    finally:
+        b.close()
+        fake.close()
+
+
+def test_jev_pinned_model_key_gating_and_env_is_not_exported():
+    for alias in ("jev-latest", "jev-preview", "jev-1.13"):
+        try:
+            jev_backend.JevBackend(alias, key="k", guard=False)
+            raise AssertionError(f"alias {alias}가 받아들여졌다")
+        except ValueError:
+            pass
+    assert jev_backend.MODEL_ID == "jev-1.13.0" and jev_backend.PINNED_MODELS == {"jev-1.13.0"}
+    with tempfile.TemporaryDirectory() as d:
+        env = Path(d) / ".env"
+        env.write_text('OPENAI_API_KEY=sk-openai\nTYPESAFE_API_KEY="ts-secret"\n', encoding="utf-8")
+        old = os.environ.get("RADAR_ENV_FILE")
+        os.environ["RADAR_ENV_FILE"] = str(env)
+        try:
+            assert jev_backend.typesafe_key() == "ts-secret" and "TYPESAFE_API_KEY" not in os.environ      # os.environ에 넣지 않는다
+            env.write_text("OPENAI_API_KEY=sk-openai\n", encoding="utf-8")
+            try:
+                jev_backend.typesafe_key()
+                raise AssertionError("키 없이 통과")
+            except SystemExit:
+                pass
+        finally:
+            if old is None:
+                os.environ.pop("RADAR_ENV_FILE", None)
+            else:
+                os.environ["RADAR_ENV_FILE"] = old
+    assert jev_backend.parse_retry_after({"retry-after": "3"}) == 3.0 and abs(jev_backend.parse_retry_after({"retry-after-ms": "1500"}) - 1.5) < 1e-9
+    assert jev_backend.parse_retry_after({"retry-after": "x"}) is None and jev_backend.parse_retry_after({}) is None and jev_backend.parse_retry_after({"retry-after": "-1"}) is None
+
+
+def test_jev_netguard_allows_only_typesafe_host():
+    real = socket.getaddrinfo
+
+    def offline(host, *a, **k):          # 실제 DNS를 부르지 않는다
+        raise socket.gaierror("offline test")
+    socket.getaddrinfo = offline
+    try:
+        # (1) 허용 밖 호스트(OpenAI 호스트 포함) → 막고, 재시도 없이 BoundaryError
+        b = jev_backend.JevBackend("jev-1.13.0", key="k", base_url="https://api.openai.com", guard=True)
+        b.sleeps = []
+        b.retry.SLEEPER.sleep = b.sleeps.append
+        try:
+            try:
+                b.classify_changes(NewsQuery("n", "x", "t"))
+                raise AssertionError("허용 밖 호스트가 막히지 않았다")
+            except BoundaryError as e:
+                assert "api.openai.com" in str(e)
+            rec = b.log.calls[0]
+            assert rec["attempts"] == 1 and rec["blocked_hosts"] == ["api.openai.com"] and b.sleeps == []
+            g = b.guard
+            assert g._ok("api.typesafe.ai") and not g._ok("api.openai.com") and not g._ok("api.anthropic.com") and not g._ok("evil.example")
+        finally:
+            b.close()
+        assert jev_backend.ALLOWED_HOSTS == {"api.typesafe.ai"} and agents_backend.ALLOWED_HOSTS == {"api.openai.com"}   # 백엔드별 허용 목록
+        # (2) TypeSafe 호스트는 가드를 통과한다 (오프라인이라 연결 오류가 나고, 가드가 막은 것은 아니다)
+        b = jev_backend.JevBackend("jev-1.13.0", key="k", guard=True)
+        b.sleeps = []
+        b.retry.SLEEPER.sleep = b.sleeps.append
+        try:
+            try:
+                b.classify_changes(NewsQuery("n", "x", "t"))
+                raise AssertionError("오프라인인데 성공했다")
+            except BoundaryError:
+                raise AssertionError("허용 호스트가 막혔다")
+            except jev_backend.JevConnectionError:
+                pass
+            rec = b.log.calls[0]
+            assert b.guard.attempts == [] and rec["attempts"] == 5 and "blocked_hosts" not in rec     # 연결 오류는 재시도 정책대로 5번
+        finally:
+            b.close()
+    finally:
+        socket.getaddrinfo = real
+
+
+def test_jev_prompts_carry_same_definitions_as_gpt():
+    for kind, meaning in prompts.CHANGE_MEANING.items():
+        assert f"| {kind} | {meaning} |" in prompts.CHANGE_INSTRUCTIONS, kind                    # GPT 프롬프트 표와 같은 문구
+    for t, (name, meaning) in prompts.TIER_MEANING.items():
+        assert f"| {t} | {name} | {meaning} |" in prompts.TIER_INSTRUCTIONS, t
+    assert list(prompts.CHANGE_MEANING) == policy.CHANGES and list(prompts.TIER_MEANING) == policy.TIERS
+
+
+def test_jev_end_to_end_lane_a_and_evaluate():
+    tier_p = {"pydantic": ("L4", {"L4": 0.9, "L6": 0.1}), "langfuse": ("L3", {"L3": 0.5, "L5": 0.5}), "gpt-6-luna": ("L2", {"L2": 0.95, "L3": 0.05})}
+    change_p = {"j1": {"breaking": 0.97, "major": 0.8}, "j2": {"pricing": 0.9}, "j3": {"model_retirement": 0.99, "deprecation": 0.7}, "j4": {"minor_patch": 0.6}}
+
+    def respond(body):
+        if list(body["questions"]) == ["tier"]:
+            top, probs = tier_p[body["state"]["technology"]]
+            return _ok(_choice(top, probs))
+        return _ok(_noul_answers(**change_p[body["state"]["title"].split()[0]]))
+    fake = FakeJev([respond] * 200)
+    gold = {"technologies": [{"name": "pydantic", "usage": "u", "signals": {"manifest": "pyproject.toml", "group": "main", "pin": "pinned"}},
+                             {"name": "langfuse", "usage": "u", "signals": {"manifest": "pyproject.toml", "group": "main", "pin": "pinned"}},
+                             {"name": "gpt-6-luna", "usage": "u"}],
+            "items": [{"id": "j1", "technology": "pydantic", "title": "j1 pydantic v3", "gold_changes": ["breaking", "major"], "gold_keep": True, "basis": "b"},
+                      {"id": "j2", "technology": "langfuse", "title": "j2 langfuse pricing", "gold_changes": ["pricing"], "gold_keep": True, "basis": "b"},
+                      {"id": "j3", "technology": "gpt-6-luna", "title": "j3 luna retired", "gold_changes": ["model_retirement", "deprecation"], "gold_keep": True, "basis": "b"},
+                      {"id": "j4", "technology": "pydantic", "title": "j4 pydantic patch", "gold_changes": ["minor_patch"], "gold_keep": False, "basis": "b"}]}
+    b = _jev(fake, guard=True)                      # 가드를 켠 채 — 루프백은 열려 있다
+    try:
+        res = evaluate.evaluate(b, gold, 2)
+        assert all(r["c1_miss_count"] == 0 and r["c3_agree"] == 1.0 and r["c2_noise"] == 0.0 for r in res["runs"])
+        tp = res["technologies"][0]["langfuse"]
+        assert tp["tiers"] == ["L3", "L5"] and tp["mismatch"] is None                         # S3가 서비스 등급을 떨어내지 않는다 → 두 등급 유지
+        assert res["predictions"][0]["j2"]["kept_by"] == [{"technology": "langfuse", "tier": "L3", "change": "pricing"}]
+        assert b.log.totals()["model_calls"] == (3 + 4) * 2 == len(fake.seen) and b.log.totals()["errors"] == 0
+        assert b.run_info()["models_returned"] == ["jev-1.13.0"]
+    finally:
+        b.close()
+    # CLI: 플래그 없으면 거부(키 안 읽음) · --plan은 API·키 없이 · --real-api면 끝까지 돌고 summary에 응답 모델이 남는다
+    gold_path = str(REPO / "eval" / "importance" / "gold.example.json")
+    orig_make, orig_key = evaluate.make_backend, jev_backend.typesafe_key
+    evaluate.make_backend = lambda *a, **k: (_ for _ in ()).throw(AssertionError("백엔드를 만들었다"))
+    jev_backend.typesafe_key = lambda: (_ for _ in ()).throw(AssertionError("키를 읽으려 했다"))
+    try:
+        assert evaluate.main(["--gold", gold_path, "--model", "jev-1.13.0", "--k", "3"]) == 2
+        assert evaluate.main(["--gold", gold_path, "--model", "jev-1.13.0", "--k", "3", "--plan"]) == 0
+        fake.script[:] = [lambda body: _ok(_choice("L4", {"L4": 1.0})) if list(body["questions"]) == ["tier"] else _ok(_noul_answers())] * 100
+        evaluate.make_backend = lambda model, allow_real=False, log=None, **k: _jev(fake, log=log)
+        with tempfile.TemporaryDirectory() as d:
+            evaluate.main(["--gold", gold_path, "--model", "jev-1.13.0", "--k", "1", "--no-tier-diag", "--real-api", "--out", d])
+            s = json.loads((Path(d) / "summary.json").read_text(encoding="utf-8"))
+            assert s["backend_info"]["models_returned"] == ["jev-1.13.0"] and s["calls"]["model_calls"] == 9
+            rows = [json.loads(x) for x in (Path(d) / "calls.jsonl").read_text(encoding="utf-8").splitlines()]
+            assert all(r["model"] == "jev-1.13.0" and "cost_usd" in r for r in rows)
+    finally:
+        evaluate.make_backend, jev_backend.typesafe_key = orig_make, orig_key
+        fake.close()
 
 
 # ---------------------------------------------------------------- 채점
@@ -787,6 +1163,15 @@ def _score_status_ignored(preds, gold_items):
     return _ORIG_SCORE(fixed, gold_items)
 
 
+def _dev_not_first(tier, change, ctx=None):
+    """문서 순서를 글자 그대로: 개발 → security만, 그다음 떠 있는 태그·민감 경로 보정이 되살린다 (고치기 전 동작)."""
+    r = _ORIG_CELL(tier, change, ctx)
+    if ctx is not None and ctx.path == "dev" and not r["keep"]:
+        if (ctx.pin == "floating" and change == "minor_patch") or (ctx.sensitive and change in ("security", "deprecation")):
+            return {**r, "keep": True}
+    return r
+
+
 def mutations():
     return [
         ("두 등급인데 첫 등급 행만 적용", [(policy, "decide", _first_tier_only)], test_two_tiers_any_row_keeps_and_records_which),
@@ -802,6 +1187,16 @@ def mutations():
         ("상한 정렬: 심각도 먼저", [(policy, "rank_key", _severity_first)], test_cap_order_and_log),
         ("채점이 오류·분류 불가 상태를 무시", [(evaluate, "score_run", _score_status_ignored)], test_score_run_by_hand),
         ("허용 호스트를 넓힘", [(agents_backend, "ALLOWED_HOSTS", {"api.openai.com", "telemetry.example.invalid"})], test_netguard_blocks_outside_api_openai_and_stops_without_retry),
+        ("개발 경로가 최우선이 아님 (떠 있는 태그·민감이 되살림)", [(policy, "cell", _dev_not_first)], test_dev_path_is_top_priority),
+        ("S3가 호스팅 등급(L2·L3)을 떨어냄", [(tiers, "MANIFEST_DROP_TIERS", {"L0", "L1", "L2", "L3"})], test_verify_script_beats_model),
+        ("S3가 호스팅 등급을 떨어냄 (Jev 두 등급 흐름)", [(tiers, "MANIFEST_DROP_TIERS", {"L0", "L1", "L2", "L3"})], test_jev_end_to_end_lane_a_and_evaluate),
+        ("Jev 문턱 0.5 → 0.6", [(jev_backend, "THRESHOLD", 0.6)], test_jev_threshold_is_fixed_half_boundary),
+        ("Jev 문턱 0.5 → 0.4", [(jev_backend, "THRESHOLD", 0.4)], test_jev_threshold_is_fixed_half_boundary),
+        ("Jev 문턱 0.5 → 0.6 (두 번째 등급)", [(jev_backend, "THRESHOLD", 0.6)], test_jev_second_tier_needs_half),
+        ("Jev alias(jev-latest) 허용", [(jev_backend, "PINNED_MODELS", {"jev-1.13.0", "jev-latest", "jev-preview", "jev-1.13"})], test_jev_pinned_model_key_gating_and_env_is_not_exported),
+        ("Jev 허용 목록에 api.openai.com을 섞음", [(jev_backend, "ALLOWED_HOSTS", {"api.typesafe.ai", "api.openai.com"})], test_jev_netguard_allows_only_typesafe_host),
+        ("429 retry-after를 무시", [(jev_backend, "parse_retry_after", lambda headers: None)], test_jev_retry_429_respects_retry_after_and_4xx_is_not_retried),
+        ("Jev 단가를 10배로", [(jev_backend, "INPUT_USD_PER_MTOK", 0.42)], test_jev_call_log_cost_and_returned_model),
     ]
 
 

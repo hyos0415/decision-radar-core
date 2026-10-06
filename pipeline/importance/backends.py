@@ -9,7 +9,7 @@ speculative fan-out). 판정 근거 텍스트(reason)가 없다. 그래서 결�
   LabelAnswer.reason     근거 텍스트 — 선택 (Jev는 None)
   LabelAnswer.calls      호출 기록 (모델·토큰·비용·시도 횟수 — llm_call 형식)
 
-백엔드를 고르는 곳은 `make_backend(model)` 하나다. 지금: `stub` · `gpt-*`(Agents SDK). `jev-*`는 아직 없다 (키·의존성·경계 결정이 사용자 대기 중).
+백엔드를 고르는 곳은 `make_backend(model)` 하나다. 지금: `stub` · `gpt-*`(Agents SDK) · `jev-1.13.0`(urllib 직접 — jev_backend.py).
 """
 import json
 from abc import ABC, abstractmethod
@@ -54,7 +54,7 @@ class LabelAnswer:
 def labels_from_scores(per_label, threshold=None, order=None):
     """라벨별 {"yes","prob"} → 라벨 집합. threshold가 있고 prob가 있으면 prob >= threshold, 아니면 yes.
 
-    Jev 백엔드가 쓸 자리다: 질문별 선택(예/아니오)과 확률을 받아 임계값으로 라벨을 만든다. 임계값은 정답지로 정한다 (보고서 「Jev 백엔드」).
+    Jev 백엔드가 쓸 자리다: 질문별 선택(예/아니오)과 확률을 받아 임계값으로 라벨을 만든다. Jev의 임계값은 p ≥ 0.5로 **고정**이다 (importance-policy §8 등록값 — 정답지로 맞추지 않는다).
     """
     out = []
     for lab in (order or list(per_label)):
@@ -170,8 +170,11 @@ def make_backend(model, *, allow_real=False, **kw):
         from .agents_backend import AgentsBackend
         return AgentsBackend(model, **kw)
     if model.startswith("jev-"):
-        raise NotImplementedError(f"{model}: Jev 백엔드는 아직 없다 — 키·의존성·데이터 경계 결정이 사용자 대기 중 (보고서 「Jev 백엔드를 붙이려면」)")
-    raise ValueError(f"모르는 모델 {model!r} (stub · gpt-6-luna · gpt-6.1-sol · 나중에 jev-1.13.0)")
+        if not allow_real:
+            raise PermissionError(f"{model}: 실제 API 실행은 --real-api 없이는 거부한다")    # 키 파일도 읽기 전에 거부
+        from .jev_backend import JevBackend
+        return JevBackend(model, **{k: v for k, v in kw.items() if k in ("key", "log", "base_url", "opener", "guard", "timeout")})
+    raise ValueError(f"모르는 모델 {model!r} (stub · gpt-6-luna · gpt-6.1-sol · jev-1.13.0)")
 
 
 def check_labels(labels, universe, what):

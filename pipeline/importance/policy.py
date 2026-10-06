@@ -3,7 +3,8 @@
 등급(L0~L8) × 변화 종류 → 남김(✅) / 버림(❌) / 해당 없음(—). 「—」는 그 조합이 정책에 없다는 뜻이고 결과는 버림이다 (소음 우선 — §6).
 표는 문서의 §4 표와 같아야 한다 — test_importance.py가 문서 표를 읽어 코드와 대조한다. 바꾸지 않는다 (규율 7).
 
-적용 순서 (§4 「보정 축 적용 순서」): 등급으로 행을 고른다 → 경로가 개발이면 security만 → 떠 있는 태그면 minor·patch도 ✅ → 민감 경로면 security·deprecation을 ✅로.
+적용 순서 (§4 「보정 축 적용 순서」 + §8 판정 세부): 등급으로 행을 고른다 → 경로가 개발이면 security만 남기고 거기서 끝(개발 경로가 최우선 — 아래 보정이 되살리지 않는다)
+→ 아니면 떠 있는 태그면 minor·patch도 ✅ → 민감 경로면 security·deprecation을 ✅로.
 두 등급이면 두 행을 모두 적용하고 하나라도 ✅면 남긴다 — 어느 행(등급 × 변화) 때문에 남았는지 `kept_by`에 기록한다.
 주당 상한: 등급 높은 순(L0→L8) → 변화 심각도 순. 잘린 것은 `truncated`로 돌려줘 로그에 남기게 한다.
 """
@@ -65,10 +66,11 @@ def cell(tier, change, ctx=None):
         steps.append("로컬 서빙 모델은 모델 은퇴 칸 해당 없음 (v1.1 U2)")
     keep = base == KEEP
     if ctx.path == "dev":
+        # 개발 경로가 최우선 (사용자 2026-10-06, importance-policy §8 판정 세부) — security만 남기고 떠 있는 태그·민감 경로 보정이 되살리지 않는다
         new = change == "security"
         if new != keep:
             steps.append("경로=개발 → security만 남김")
-        keep = new
+        return {"tier": tier, "change": change, "base": base, "keep": new, "adjusted_by": steps}
     if ctx.pin == "floating" and change == "minor_patch" and not keep:
         keep = True
         steps.append("떠 있는 태그 → minor·patch도 남김")
