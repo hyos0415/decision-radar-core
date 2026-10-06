@@ -3,7 +3,10 @@ import { Toaster } from 'sonner'
 import { api, setBaseUrl, type InboxDetail, type InboxItem } from './lib/api'
 import { InboxList } from './components/InboxList'
 import { ItemDetail } from './components/ItemDetail'
-import { Sidebar } from './components/Sidebar'
+import { DecisionsView } from './components/DecisionsView'
+import { RunsView } from './components/RunsView'
+import { Sidebar, type View } from './components/Sidebar'
+import type { NavTarget, RadarInfo } from '../../shared'
 
 type Backend = Awaited<ReturnType<typeof window.radar.getBackend>>
 
@@ -21,6 +24,11 @@ function App(): React.JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<InboxDetail | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [view, setView] = useState<View>('inbox')
+  const [decisionId, setDecisionId] = useState<string | null>(null)
+  const [tick, setTick] = useState(0)
+  const [mode, setMode] = useState<string | null>(null)
+  const [info, setInfo] = useState<RadarInfo | null>(null)
   const sentOpened = useRef(false)
   const selectedRef = useRef<string | null>(null)
   selectedRef.current = selectedId
@@ -34,13 +42,15 @@ function App(): React.JSX.Element {
   if (ready) setBaseUrl(backend.baseUrl!)
 
   // preferred: id to select if still present; otherwise keep current, else first
-  const refresh = useCallback(async (preferIndex?: number) => {
+  const refresh = useCallback(async (preferIndex?: number, preferId?: string) => {
     try {
       const list = await api.inbox()
       setItems(list)
       setLoadError(null)
       const cur = selectedRef.current
-      if (preferIndex !== undefined) {
+      if (preferId && list.some((i) => i.id === preferId)) {
+        setSelectedId(preferId)
+      } else if (preferIndex !== undefined) {
         const next = list[Math.min(preferIndex, list.length - 1)]
         setSelectedId(next ? next.id : null)
       } else if (!cur || !list.some((i) => i.id === cur)) {
@@ -52,13 +62,50 @@ function App(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
+    window.radar.getInfo().then(setInfo)
+  }, [])
+
+  useEffect(() => {
+    if (!ready) return
+    api
+      .health()
+      .then((h) => setMode(h.mode))
+      .catch(() => {})
+  }, [ready])
+
+  // main -> renderer: navigate (notification click, capture window) and data-changed pushes
+  useEffect(() => {
+    const offNav = window.radar.onNavigate((t: NavTarget) => {
+      setView(t.view)
+      if (t.view === 'inbox') {
+        if (t.id) setSelectedId(t.id)
+        void refresh(undefined, t.id)
+      } else if (t.view === 'decisions') {
+        setDecisionId(t.id ?? null)
+      }
+      setTick((n) => n + 1)
+    })
+    const offData = window.radar.onDataChanged(() => {
+      void refresh()
+      setTick((n) => n + 1)
+    })
+    return () => {
+      offNav()
+      offData()
+    }
+  }, [refresh])
+
+  useEffect(() => {
     if (!ready) return
     if (!sentOpened.current) {
       sentOpened.current = true
       api.event('app_opened')
     }
     void refresh()
-    const onFocus = (): void => void refresh()
+    const onFocus = (): void => {
+      void refresh()
+      setTick((n) => n + 1)
+    }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [ready, refresh])
@@ -91,7 +138,20 @@ function App(): React.JSX.Element {
   }
 
   let body: React.ReactNode
-  if (backend.status === 'failed') {
+  if (ready && view === 'decisions') {
+    body = <DecisionsView selectedId={decisionId} onSelect={setDecisionId} refreshKey={tick} />
+  } else if (ready && view === 'runs') {
+    body = (
+      <RunsView
+        refreshKey={tick}
+        onOpenDecision={(id) => {
+          setDecisionId(id)
+          setView('decisions')
+        }}
+        onChanged={() => void refresh()}
+      />
+    )
+  } else if (backend.status === 'failed') {
     body = (
       <Centered>
         <div className="max-w-xl">
@@ -128,7 +188,13 @@ function App(): React.JSX.Element {
 
   return (
     <div className="flex h-full">
-      <Sidebar pending={items?.length ?? 0} />
+      <Sidebar
+        view={view}
+        onView={setView}
+        pending={items?.length ?? 0}
+        stub={mode === 'stub'}
+        info={info}
+      />
       <main className="flex min-w-0 flex-1">{body}</main>
       <Toaster theme="light" position="bottom-right" />
     </div>

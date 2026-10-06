@@ -17,31 +17,62 @@ function ringIcon(): Electron.NativeImage {
   return img
 }
 
-let tray: Tray | null = null
+export type TrayActions = {
+  getWindow: () => BrowserWindow | null
+  onQuit: () => void
+  onCapture: () => void
+  onRun: (flow: 'detect' | 'revisit') => void
+}
 
-export function createTray(getWindow: () => BrowserWindow | null, onQuit: () => void): Tray {
-  const show = (): void => {
-    const w = getWindow()
-    if (!w) return
-    if (w.isMinimized()) w.restore()
-    w.show()
-    w.focus()
-  }
-  tray = new Tray(ringIcon())
-  tray.setToolTip('Decision Radar')
+let tray: Tray | null = null
+let actions: TrayActions | null = null
+let pending = 0
+let shortcutOk = true
+
+function show(): void {
+  const w = actions?.getWindow()
+  if (!w) return
+  if (w.isMinimized()) w.restore()
+  w.show()
+  w.focus()
+}
+
+function rebuild(): void {
+  if (!tray || !actions) return
+  const a = actions
+  tray.setToolTip(pending > 0 ? `Decision Radar — 대기 ${pending}` : 'Decision Radar')
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: '열기', click: show },
+      {
+        label: shortcutOk ? '빠른 capture' : '빠른 capture (단축키 등록 실패)',
+        click: a.onCapture
+      },
       { type: 'separator' },
-      { label: '종료', click: onQuit }
+      { label: 'detect 실행 (스텁)', click: () => a.onRun('detect') },
+      { label: 'revisit 실행 (스텁)', click: () => a.onRun('revisit') },
+      { type: 'separator' },
+      { label: '종료', click: a.onQuit }
     ])
   )
+}
+
+export function createTray(a: TrayActions): Tray {
+  actions = a
+  tray = new Tray(ringIcon())
   tray.on('click', () => {
-    const w = getWindow()
+    const w = a.getWindow()
     if (w && w.isVisible() && w.isFocused()) w.hide()
     else show()
   })
+  rebuild()
   return tray
+}
+
+export function setTrayState(s: { pending?: number; shortcutOk?: boolean }): void {
+  if (s.pending !== undefined) pending = s.pending
+  if (s.shortcutOk !== undefined) shortcutOk = s.shortcutOk
+  rebuild()
 }
 
 export function destroyTray(): void {

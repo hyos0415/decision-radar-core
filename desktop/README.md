@@ -64,3 +64,10 @@ detect 검토 항목은 목록·상세만 — 답하려면 내보내기가 켜�
 - `source: backend` — `approve` · `edit` · `reject`(detail에 outcome·stale_answer·adr·errors) · `item_created`
 - `source: app` — 화면이 `POST /events`로 보낸 것
 - **무시**는 기록하지 않고 계산한다: 알림(`notification_shown`)·항목 생성 뒤 답이 없는 항목
+
+## 마일스톤 2 — 빠른 capture · 알림 · Decisions · 실행 (HYO-51·52)
+
+- **빠른 capture 창**: 전역 단축키 기본 `CommandOrControl+Shift+Space`(`RADAR_CAPTURE_SHORTCUT`로 바꿈). 같은 렌더러 번들을 `#/capture` 해시로 띄운 틀 없는 창이고, 숨기고 다시 보여 재사용한다. 블러·Esc로 닫힘. 등록 실패는 로그와 트레이 메뉴 라벨에 나온다. 사이드바 「빠른 capture」로도 연다. (`RADAR_CAPTURE_KEEP=1`: 블러로 안 닫힘 — 스크린샷 확인용)
+- **알림·폴링**: 백엔드 준비 뒤 main이 5초마다(`RADAR_POLL_MS`) `/inbox`·`/runs`를 본다. 첫 폴링은 기준선만 잡는다. 새 항목·새 실행(초안/재검토 조건 충족)은 OS 알림 + `notification_shown`/`notification_clicked` 이벤트, 클릭하면 메인 창이 해당 항목으로 간다. 트레이 툴팁에 대기 수. 네트워크는 127.0.0.1 백엔드뿐.
+- **Decisions**: 읽기 전용 표 + 오른쪽 상세(재검토 조건·ADR 원문). status 편집 없음(R8). **실행**: detect/revisit 스텁 실행 · 기록. 트레이 메뉴에서도 실행 가능.
+- 확인: `npm run build` 통과. 백엔드 v1이 없는 worktree에서 임시 mock(v0+v1)에 `RADAR_BACKEND_URL`로 붙여 CDP로 화면·알림 이벤트 확인. macOS 동작(전역 단축키 권한·트레이 템플릿·알림)은 확인하지 못했다.

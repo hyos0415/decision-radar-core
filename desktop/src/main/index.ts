@@ -3,7 +3,18 @@ import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { getStatus, onStatus, startBackend, stopBackend } from './backend'
-import { createTray, destroyTray } from './tray'
+import { createTray, destroyTray, setTrayState } from './tray'
+import {
+  createCaptureWindow,
+  hideCapture,
+  isShortcutOk,
+  registerCaptureShortcut,
+  shortcut,
+  showCapture,
+  unregisterCaptureShortcut
+} from './capture'
+import { markKnown, pollNow, postRun, startPoller, stopPoller } from './poller'
+import type { NavTarget } from '../shared'
 
 let win: BrowserWindow | null = null
 let quitting = false
@@ -18,6 +29,12 @@ function showWindow(): void {
   if (win.isMinimized()) win.restore()
   win.show()
   win.focus()
+}
+
+function navigate(t: NavTarget): void {
+  hideCapture()
+  showWindow()
+  if (win && !win.isDestroyed()) win.webContents.send('nav', t)
 }
 
 function createWindow(): void {
@@ -91,9 +108,48 @@ if (!app.requestSingleInstanceLock()) {
       if (win && !win.isDestroyed()) win.webContents.send('backend:status', s)
     })
 
+    ipcMain.handle('info:get', () => ({
+      shortcut,
+      shortcutOk: isShortcutOk(),
+      platform: process.platform
+    }))
+    ipcMain.handle('capture:open', () => showCapture())
+    ipcMain.on('capture:hide', () => hideCapture())
+    ipcMain.on('nav:go', (_e, t: NavTarget) => {
+      if (t && ['inbox', 'decisions', 'runs'].includes(t.view)) navigate(t)
+    })
+    ipcMain.on('data:changed', (_e, item: string | null) => {
+      if (item) markKnown(item)
+      if (win && !win.isDestroyed()) win.webContents.send('data:changed')
+      void pollNow()
+    })
+
     createWindow()
-    createTray(() => win, quitApp)
-    void startBackend()
+    createCaptureWindow()
+    createTray({
+      getWindow: () => win,
+      onQuit: quitApp,
+      onCapture: showCapture,
+      onRun: (flow) => {
+        void postRun(flow).then(() => pollNow())
+      }
+    })
+    setTrayState({ shortcutOk: registerCaptureShortcut() })
+
+    let polling = false
+    const maybeStartPoller = (): void => {
+      if (polling || getStatus().status !== 'ready') return
+      polling = true
+      startPoller({
+        onClick: navigate,
+        onPending: (n) => setTrayState({ pending: n }),
+        onChanged: () => {
+          if (win && !win.isDestroyed()) win.webContents.send('data:changed')
+        }
+      })
+    }
+    onStatus(maybeStartPoller)
+    void startBackend().then(maybeStartPoller)
 
     app.on('activate', showWindow)
   })
@@ -105,6 +161,8 @@ if (!app.requestSingleInstanceLock()) {
     stopBackend()
   })
   app.on('will-quit', () => {
+    unregisterCaptureShortcut()
+    stopPoller()
     stopBackend()
     destroyTray()
   })
