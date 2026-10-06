@@ -125,6 +125,10 @@ def run_control(rt, name, c, flow, root):
     missing = [m for m in c["must_fail"] if m not in ea.failed(g)]
     p3 = [e["kind"] for e in g["spike"]["P3_errors"]]
     ok = not missing and (not c["must_fail"] or not g["pass"]) and (c.get("expect_p3") is None or c["expect_p3"] in p3)
+    if c.get("expect_pass"):  # 통과해야 하는 통제 — 가드가 일을 했다는 것을 보인다
+        ok = ok and g["pass"] and not p3
+    if "expect_llm_calls" in c:
+        ok = ok and g["usage"]["calls"] == c["expect_llm_calls"]
     print(json.dumps({"control": name, "flow": flow, "caught": ok, "grade_pass": g["pass"], "failed": ea.failed(g),
                       "expected_but_passed": missing, "p3": p3}, ensure_ascii=False))
     return ok

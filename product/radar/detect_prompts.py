@@ -47,3 +47,16 @@ def triage_prompt(now, stack, feed):
 def draft_prompt(now, candidate, item, related):
     data = {"candidate": candidate, "news": item, "related_adrs": related}
     return f"지금 시각: {now}\n\n초안으로 쓸 후보:\n<candidate>{json.dumps(data, ensure_ascii=False)}</candidate>"
+
+
+REPAIR_INSTRUCTIONS = """너는 `radar.py validate`가 거부한 ADR 초안을 **한 번** 고쳐 쓴다. 기회는 이번 한 번이다.
+
+- 입력: 후보·소식·방금 쓴 초안(draft)·validate 오류 목록(errors). 오류가 가리키는 곳만 고치고 나머지는 그대로 둔다
+- 오류를 피하려고 근거를 지어내지 않는다. basis는 소식에서 그대로 옮긴 문장이어야 하고, 그런 문장이 없으면 조건을 빼고 research_note에 「재검토 조건 없음: <왜>」를 적는다
+- source_hint는 evidence에 넣은 1차 출처 URL이거나 repo 경로여야 한다. community는 evidence가 아니다
+- 출력은 초안 서술(DraftBody) 전체다. status·technology·affected·related는 칸이 없다 — 코드가 채운다"""
+
+
+def repair_prompt(now, candidate, item, draft, errors):
+    data = {"candidate": candidate, "news": item, "draft": draft, "errors": errors}
+    return f"지금 시각: {now}\n\n고쳐 쓸 초안:\n<repair>{json.dumps(data, ensure_ascii=False)}</repair>"

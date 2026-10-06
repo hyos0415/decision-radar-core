@@ -68,14 +68,14 @@ def detect_report(c, now, *, skipped, dropped, excluded, written, failed):
 
     report의 candidates는 **초안을 쓴 후보**다 — 거른 뒤 남아 초안이 된 것. skipped_existing·dropped·excluded는 따로 둔다.
     """
-    files = [e["message"]["content"][0]["input"]["file_path"] for e in c.events
-             if e.get("type") == "assistant" and e["message"]["content"][0]["name"] == "Write"]
+    files = list(dict.fromkeys(e["message"]["content"][0]["input"]["file_path"] for e in c.events  # repair가 같은 파일을 다시 써도 한 번만
+                               if e.get("type") == "assistant" and e["message"]["content"][0]["name"] == "Write"))
     needed = bool(written)
     return {
         "flow": "detect", "now": now, "dry_run": c.dry_run,
         "candidates": [{"technology": w["candidate"]["technology"], "affected": w["candidate"]["affected"],
                         "source_urls": w["candidate"]["source_urls"], "dependency": w["candidate"]["dependency"],
-                        "adr": w["id"], "validate_errors": w["validate_errors"]} for w in written],
+                        "adr": w["id"], "validate_errors": w["validate_errors"], "repaired": w["repaired"]} for w in written],
         "skipped_existing": skipped, "dropped": dropped, "excluded": excluded, "draft_failed": failed,
         "pr": {"needed": needed, "opened": False, "branch": f"claude/radar-detect-{now[:10]}" if needed else None},
         "files_written": files, "remote_side_effects": [],
@@ -83,3 +83,17 @@ def detect_report(c, now, *, skipped, dropped, excluded, written, failed):
         "tool_calls": c.tool_calls(),
     }
 
+
+
+def compose(body, w):
+    """DraftBody → AdrDraft 입력. technology·affected는 triage가 정한 후보, related는 radar.py match 결과 — 코드가 덮어쓴다."""
+    cand = w["candidate"]
+    return {**body, "technology": cand["technology"], "affected": cand["affected"], "related": [r["id"] for r in w["related"]]}
+
+
+def rewrite(c, path, adr_id, draft):
+    """repair가 낸 초안으로 **같은 번호의 파일을 코드가** 다시 쓰고 radar.py validate를 다시 돈다 → 남은 오류."""
+    c.record("Write", {"file_path": path})
+    open(path, "w", encoding="utf-8", newline="\n").write(ops.render(draft, c.now))
+    v = radar(c, "validate", c.adr_dir, ok_codes=(0, 1))
+    return next((a["errors"] for a in v["adrs"] if a["id"] == adr_id), ["validate에 없음"])

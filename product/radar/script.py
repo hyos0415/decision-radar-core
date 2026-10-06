@@ -39,6 +39,7 @@ def capture_script(cid, force_propose=False, draft_from=None):
 def detect_script(overlay=None):
     """기본 판단표 + 음성 대조의 덮어쓰기(소식 url 단위)."""
     d = copy.deepcopy(SCRIPT["detect"])
-    for k in ("items", "drafts"):
+    d.setdefault("repairs", {})
+    for k in ("items", "drafts", "repairs"):
         d[k].update((overlay or {}).get("detect", {}).get(k, {}))
     return {"detect": d}
