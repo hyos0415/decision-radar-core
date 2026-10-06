@@ -80,6 +80,7 @@ flowchart LR
 - **자동 재료는 저장하지 않고 실행마다 계산한다** (원본이 하나). 그 주에 계산된 프로필은 주간 스냅숏에 함께 남긴다 (재현)
 - **원본 = ADR repo의 `radar-profile.yaml`** (`radar-targets.json` 옆, 환경 변수 `RADAR_PROFILE`). 스킬은 대화 → 미리보기 → 승인 → 파일 수정(R9와 같은 승인 규칙). 제품은 웹 폼 → 백엔드가 같은 파일에 직접 커밋. 형식 검사는 `radar.py validate`가 한다(규율 1). DB만 두면 스킬이 못 읽어 비교가 불공정해진다
 - `version`을 올릴 때마다 스냅숏·eval이 `profile@vN`으로 참조한다
+- **v1 (2026-10-06)**: 관심사 14개(high 3 — 하이브리드·희소 검색 · 임베딩·리랭커 · GraphRAG) + 전역 제외 1개. Claude 초안 12개에 사용자가 음성(STT·TTS)·선호 최적화(DPO·ORPO)를 더했다 (HYO-73 댓글, adr PR #3)
 
 관심사 한 항목:
 
@@ -92,7 +93,8 @@ flowchart LR
 | `aliases` | 선택 | 키워드 검색 (영어). **쓸지 말지가 전략 변수** — 손으로 쓴 확장 대 SPLADE(학습된 확장) 대 질의 변환(LLM 확장)을 섞지 않으려고 |
 | `priority` | 선택 | `high`·`normal`·`low` (기본 `normal`) |
 | `relates_to` | 선택 | `adr:0004` · `repo:fineprint` |
-| `id` · `why` · `added` · `review_after` · `active` | 자동 (고칠 수 있음) | slug · 입력한 말 그대로 · 날짜 · 기본 `added`+28일에 「아직 관심 있나요?」 · 지우지 않고 끄기 |
+| `why` | 선택 | 입력한 말 그대로. **변경 (2026-10-06, 사용자)**: 자동 → 선택 — 관심에 이유가 꼭 있을 필요는 없다 |
+| `id` · `added` · `review_after` · `active` | 자동 (고칠 수 있음) | slug · 날짜 · 기본 `added`+28일에 「아직 관심 있나요?」 · 지우지 않고 끄기 |
 
 ```yaml
 version: 1
