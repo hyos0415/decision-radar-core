@@ -16,6 +16,7 @@ status를 쓰는 노드는 없다 (R8): AdrDraft에 status 칸이 없고 ops.ren
 
 import json
 import operator
+import uuid
 from typing import Annotated, TypedDict
 
 from langchain.agents import create_agent
@@ -62,8 +63,11 @@ def detect_graph(ctx, model):
     draft_agent = create_agent(model, tools=DETECT_TOOLS, system_prompt=DRAFT_INSTRUCTIONS,
                                response_format=ProviderStrategy(DraftBody), context_schema=Ctx, name="detect-draft")
 
+    run = {"id": None}
+
     def load_node(state):
         ctx.now, ctx.calls = state["now"], 0
+        run["id"] = f"detect-{state['now']}-{uuid.uuid4().hex[:8]}"  # 이 실행의 초안들이 같이 갖는 기록 — 같은 실행의 내보내기를 지문에서 넘기는 근거 (hitl._own_exports)
         return {"stack": detect_ops.read_stack(ctx), "feed": detect_ops.snapshot_feed(ctx)}
 
     async def triage_node(state):
@@ -106,7 +110,7 @@ def detect_graph(ctx, model):
             ctx.calls += 1
             item_id = hitl.new_item_id(ctx, "detect", cand["technology"])  # 별도 파일은 초안 파일을 쓰는 순간에 생긴다 (설계 §3-1)
             res = hitl.write_adr(ctx, item_id, "detect", AdrDraft.model_validate(body), lifecycle="REVIEW_CANDIDATE",
-                                 final_lifecycle="REVIEW_CANDIDATE", by="graph", hold_export=True)  # 내보내기를 켰으면 Inbox 검토까지 로컬에 둔다 (결정 8)
+                                 final_lifecycle="REVIEW_CANDIDATE", by="graph", hold_export=True, run_id=run["id"])  # 내보내기를 켰으면 Inbox 검토까지 로컬에 둔다 (결정 8)
             written.append({"candidate": cand, "w": w, "body": d["draft"], "id": res["id"], "path": res["written"], "item": item_id,
                             "validate_errors": res["validate_errors"], "repaired": False})
         return {"written": written}
