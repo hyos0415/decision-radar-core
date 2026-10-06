@@ -19,6 +19,7 @@
 | langgraph · langgraph-checkpoint · langgraph-checkpoint-sqlite · langchain · langchain-core · langchain-anthropic | product (`spike/langgraph_spike` — 비교 모드, ADR 0009) |
 | anthropic | product |
 | litellm (별도 venv) | product (`spike/agents_sdk`의 Claude 경로) |
+| fastapi · uvicorn | desktop (`desktop/backend` — 앱 백엔드, localhost) |
 | Elasticsearch (docker `infra/`, 9.5.4 + analysis-nori, basic) | arena |
 | Neo4j (docker `infra/`, 5.26.31 + n10s) | arena |
 

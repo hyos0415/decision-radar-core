@@ -16,3 +16,7 @@ anthropic==1.9.0
 
 # litellm — Agents SDK의 Claude 경로. 선언 충돌(litellm 1.103.1은 openai<3)이라 메인 .venv에 넣지 않는다.
 # 별도 venv에 설치 순서로 맞춘다: spike/agents_sdk/README.md 「실제 모델(LiteLLM) 준비」 — litellm==1.103.1 후 openai==3.22.1
+
+# 데스크톱 앱 백엔드 (E6, desktop/backend — localhost API). 2026-10-06 설치, 메인 .venv (pip check 통과)
+fastapi==0.142.2
+uvicorn==0.54.0
