@@ -78,6 +78,60 @@ export const SUCCESS_OUTCOMES: Outcome[] = [
   'recovered'
 ]
 
+export type CaptureResult = {
+  outcome: 'awaiting' | 'linked' | 'no_draft'
+  item?: string
+  message?: string
+  link_candidates?: string[]
+}
+
+export type RevisitResultKind = 'met' | 'not_met' | 'undetermined' | string
+export type DecisionRevisit = {
+  id: string
+  check_type: string
+  condition: string
+  last: { result: RevisitResultKind; checked_at: string; reason: string | null } | null
+}
+export type RevisitSummary = {
+  met: number
+  not_met: number
+  undetermined: number
+  unchecked: number
+}
+export type Decision = {
+  id: string
+  title: string
+  file: string
+  status: string
+  technology: string
+  use: string
+  date: string
+  affected: Affected[]
+  revisit: DecisionRevisit[]
+  revisit_summary: RevisitSummary
+  last_checked: string | null
+}
+export type DecisionDetail = Decision & { markdown: string }
+
+export type Flow = 'detect' | 'revisit'
+export type RunResult = {
+  id: string
+  flow: Flow
+  at: string
+  mode: string
+  ok: boolean
+  error: string | null
+  summary: string[]
+  drafts: { adr: string; title: string; technology?: string }[]
+  alerts: { adr: string; condition: string; result: string; message: string }[]
+}
+
+export type EventName =
+  | 'item_opened'
+  | 'app_opened'
+  | 'decision_opened'
+  | 'capture_opened'
+
 let baseUrl = ''
 
 export function setBaseUrl(url: string): void {
@@ -114,7 +168,12 @@ export const api = {
   edit: (id: string, draft: AdrDraft, stale_answer: StaleAnswer | null = null) =>
     request<ActionResult>('POST', `/inbox/${enc(id)}/edit`, { draft, stale_answer }),
   reject: (id: string) => request<ActionResult>('POST', `/inbox/${enc(id)}/reject`, {}),
-  event: (event: 'item_opened' | 'app_opened', item?: string): void => {
+  event: (event: EventName, item?: string): void => {
     request('POST', '/events', { event, item: item ?? null, detail: {} }).catch(() => {})
-  }
+  },
+  capture: (conversation: string) => request<CaptureResult>('POST', '/capture', { conversation }),
+  decisions: () => request<{ items: Decision[] }>('GET', '/decisions').then((r) => r.items),
+  decision: (id: string) => request<DecisionDetail>('GET', `/decisions/${enc(id)}`),
+  runs: () => request<{ items: RunResult[] }>('GET', '/runs').then((r) => r.items),
+  run: (flow: Flow) => request<RunResult>('POST', `/runs/${flow}`, {})
 }
