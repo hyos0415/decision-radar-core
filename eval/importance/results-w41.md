@@ -62,6 +62,6 @@ Sol의 소음은 두 가지뿐이다: llama.cpp v0.6.0 **3/3** (breaking) · Bed
 - 개발 경로·등급 신호를 스크립트로 집행할지 (스택 표 component · overrides)
 - 기술 해석의 제목 매칭(`gate.resolve_technologies`)을 고칠지
 - llama.cpp v0.6.0의 정답
-- 운영 모델: Sol(지금 통과) vs 등급 집行 뒤 Luna 재측정
+- 운영 모델: Sol(지금 통과) vs 등급 집행 뒤 Luna 재측정
 
 **방향 (2026-10-06, 사용자)**: 등급을 스크립트로 집행한 다음 Luna나 Jev를 쓰는 쪽으로 간다 (Sol은 통과했지만 비용이 16배). 정한 것: dev component는 `radar-targets.json`에 repo마다 `dev_components`로 명시(A안) · fineprint `pilot`은 dev. 규칙 후보 S4 스택 밖 · S5 표 위치(외부 모델·서비스 표 → L2·L3만, 의존성 표 → L2·L3 제외) · S6 component 경로 · S7 docker 이미지 문구 — 세부는 다음 세션
