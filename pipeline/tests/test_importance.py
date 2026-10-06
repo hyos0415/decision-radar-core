@@ -511,8 +511,8 @@ class FakeModel(Model):
         raise NotImplementedError
 
 
-def _agents(fake, model="gpt-6-luna", guard=True):
-    b = agents_backend.AgentsBackend(model, key="sk-test", export_traces=False, guard=guard, model_factory=lambda client, name: fake)
+def _agents(fake, model="gpt-6-luna", guard=True, **kw):
+    b = agents_backend.AgentsBackend(model, key="sk-test", export_traces=False, guard=guard, model_factory=lambda client, name: fake, **kw)
     b.retry.SLEEPER.sleep = lambda s: None
 
     async def nosleep(s):
@@ -546,12 +546,36 @@ def test_agents_backend_structured_output_log_and_trace():
 
 
 def test_agents_backend_unpriced_model_is_none_not_zero():
-    b = _agents(FakeModel([{"changes": [], "reason": "r"}]), model="gpt-6.1-sol")
+    b = _agents(FakeModel([{"changes": [], "reason": "r"}]), model="gpt-6-astra")      # 단가표에 없는 모델
     try:
         b.classify_changes(NewsQuery("n", "t", "t"))
-        assert b.log.calls[0]["cost_usd"] is None and b.log.totals()["unpriced_calls"] == 1 and b.log.calls[0]["model"] == "gpt-6.1-sol"
+        assert b.log.calls[0]["cost_usd"] is None and b.log.totals()["unpriced_calls"] == 1 and b.log.calls[0]["model"] == "gpt-6-astra"
     finally:
         b.close()
+
+
+def test_agents_backend_flex_sends_service_tier_and_halves_cost():
+    assert agents_backend.cost_usd("gpt-6.1-sol", 1_000_000, 1_000_000) == 12.0
+    assert agents_backend.cost_usd("gpt-6.1-sol", 1_000_000, 1_000_000, "flex") == 6.0          # Flex = Batch = 반값
+    b = _agents(FakeModel([{"changes": [], "reason": "r"}]), model="gpt-6.1-sol", service_tier="flex")
+    try:
+        assert b.settings.extra_args == {"service_tier": "flex"} and b.settings.reasoning.effort == "medium"   # effort는 Luna와 같다
+        b.classify_changes(NewsQuery("n", "t", "t"))
+        c = b.log.calls[0]
+        assert c["service_tier"] == "flex" and c["cost_usd"] == agents_backend.cost_usd("gpt-6.1-sol", c["input_tokens"], c["output_tokens"], "flex")
+    finally:
+        b.close()
+    plain = _agents(FakeModel([]), model="gpt-6.1-sol")
+    try:
+        assert plain.settings.extra_args is None                                                   # 기본은 Standard
+    finally:
+        plain.close()
+    try:
+        _agents(FakeModel([]), service_tier="priority")
+        raise AssertionError("모르는 service_tier를 받아들였다")
+    except ValueError:
+        pass
+    assert evaluate.main(["--gold", str(REPO / "eval" / "importance" / "gold.example.json"), "--model", "jev-1.13.0", "--plan", "--flex"]) == 2
 
 
 def test_agents_backend_retry_policy_same_as_product():

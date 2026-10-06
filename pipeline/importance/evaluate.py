@@ -267,10 +267,14 @@ def main(argv=None):
     ap.add_argument("--real-api", action="store_true", help="실제 API 호출(과금)을 허용한다. 없으면 stub 외에는 거부")
     ap.add_argument("--plan", action="store_true", help="호출 수만 세고 끝 (API·키 접근 없음)")
     ap.add_argument("--no-tier-diag", action="store_true", help="등급 정확도 진단(tier-screen 49개)을 건너뛴다")
+    ap.add_argument("--flex", action="store_true", help="GPT: service_tier=flex (Batch와 같은 반값, 느리다). Jev에는 없다")
     ap.add_argument("--out", help="결과 폴더 (기본 eval/runs/<시각>-importance-<모델>/)")
     a = ap.parse_args(argv)
     if a.model != "stub" and not a.real_api and not a.plan:
         print(f"거부: {a.model}은 실제 API를 부른다. 호출 수는 --plan, 실행은 --real-api로 명시한다", file=sys.stderr)
+        return 2
+    if a.flex and not a.model.startswith("gpt-"):
+        print(f"거부: --flex는 GPT 모델에만 있다 ({a.model})", file=sys.stderr)
         return 2
     gold = load_gold(a.gold)
     diag = None if a.no_tier_diag else tier_diag_sets()
@@ -281,7 +285,7 @@ def main(argv=None):
         return 0
     out = Path(a.out) if a.out else REPO / "eval" / "runs" / f"{time.strftime('%Y%m%d-%H%M%S')}-importance-{a.model}"
     out.mkdir(parents=True, exist_ok=True)
-    backend = make_backend(a.model, allow_real=a.real_api, log=CallLog(out / "calls.jsonl"))
+    backend = make_backend(a.model, allow_real=a.real_api, log=CallLog(out / "calls.jsonl"), **({"service_tier": "flex"} if a.flex else {}))
     try:
         res = evaluate(backend, gold, a.k, diag)
     finally:

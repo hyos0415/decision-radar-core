@@ -24,7 +24,10 @@ from .prompts import CHANGE_INSTRUCTIONS, TIER_INSTRUCTIONS, change_prompt, tier
 
 REPO = Path(__file__).resolve().parents[2]
 ALLOWED_HOSTS = {"api.openai.com"}
-PRICES = {"gpt-6-luna": (0.10, 0.50)}   # $/MTok 입력·출력 — ADR 0007 (2026-09-30). gpt-6.1-sol 단가는 확인된 값이 없다 → None으로 기록
+PRICES = {"gpt-6-luna": (0.10, 0.50),   # $/MTok 입력·출력 Standard — ADR 0007 (2026-09-30)
+          "gpt-6.1-sol": (2.00, 10.00)}  # developers.openai.com/api/docs/pricing 확인 (2026-10-06)
+FLEX_FACTOR = 0.5   # Flex(service_tier="flex") = Batch 단가 = Standard의 절반 (같은 페이지, 두 모델 모두 확인). 느리고 자원이 없으면 429 — retry.py가 재시도
+SERVICE_TIERS = (None, "flex")
 DEFAULT_MODEL = "gpt-6-luna"
 DEFAULT_EFFORT = "medium"
 
@@ -83,9 +86,10 @@ class ChangeOut(BaseModel):
     reason: str
 
 
-def cost_usd(model, i, o):
+def cost_usd(model, i, o, service_tier=None):
     p = PRICES.get(model)
-    return None if p is None else round(i / 1e6 * p[0] + o / 1e6 * p[1], 6)
+    f = FLEX_FACTOR if service_tier == "flex" else 1.0
+    return None if p is None else round((i / 1e6 * p[0] + o / 1e6 * p[1]) * f, 6)
 
 
 def _canon(labels, order):
@@ -127,7 +131,7 @@ class TraceCounter:
 
 class AgentsBackend(Backend):
     def __init__(self, model=DEFAULT_MODEL, *, key=None, log=None, effort=DEFAULT_EFFORT, export_traces=True, guard=True,
-                 model_factory=None, max_turns=2):
+                 model_factory=None, max_turns=2, service_tier=None):
         """key를 주지 않으면 .env에서 읽는다. model_factory(client, model_name) → Agents SDK Model — 테스트가 가짜 모델을 꽂는 자리.
         export_traces=False면 OpenAI로 올리는 기본 exporter를 빼고 세기만 한다 (오프라인 테스트용 — 실제 실행은 True)."""
         super().__init__(log)
@@ -136,7 +140,11 @@ class AgentsBackend(Backend):
         self.name, self.model, self.max_turns = model, model, max_turns
         self.retry = load_retry()
         self.key = key if key is not None else openai_key()
-        self.settings = ModelSettings(reasoning=Reasoning(effort=effort)) if effort else ModelSettings()
+        if service_tier not in SERVICE_TIERS:
+            raise ValueError(f"service_tier {service_tier!r} — {SERVICE_TIERS} 중 하나")
+        self.service_tier = service_tier
+        extra = {"extra_args": {"service_tier": service_tier}} if service_tier else {}
+        self.settings = ModelSettings(**({"reasoning": Reasoning(effort=effort)} if effort else {}), **extra)
         self.model_factory = model_factory or self._real_model
         self.counter = TraceCounter()
         if export_traces:
@@ -177,7 +185,8 @@ class AgentsBackend(Backend):
             finally:
                 await client.close()
 
-        rec = {"flow": flow, "agent": agent_name, "model": self.model, "estimated": False}
+        rec = {"flow": flow, "agent": agent_name, "model": self.model, "estimated": False,
+               **({"service_tier": self.service_tier} if self.service_tier else {})}
         try:
             result = asyncio.run(retry_mod.call_async(one, info_id))
         except Exception as e:  # noqa: BLE001
@@ -190,7 +199,9 @@ class AgentsBackend(Backend):
         info = retry_mod.pop_info(info_id)
         i = sum(r.usage.input_tokens for r in result.raw_responses)
         o = sum(r.usage.output_tokens for r in result.raw_responses)
-        self.log.add({**rec, "input_tokens": i, "output_tokens": o, "cost_usd": cost_usd(self.model, i, o),
+        served = {getattr(r, "service_tier", None) for r in result.raw_responses} - {None}   # 서버가 실제로 쓴 등급 (있으면 기록)
+        self.log.add({**rec, "input_tokens": i, "output_tokens": o, "cost_usd": cost_usd(self.model, i, o, self.service_tier),
+                      **({"served_tier": sorted(served)} if served else {}),
                       "latency_s": round(time.perf_counter() - t0, 3), "attempts": info["attempts"],
                       **({"retried": info["retried"]} if info["retried"] else {})})
         return result.final_output
