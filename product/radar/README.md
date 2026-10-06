@@ -5,7 +5,7 @@
 
 ```
 revisit   list(radar.py list) ─Send─▶ judge(create_agent+Verdict) ─▶ decide(radar.py decide --apply)           [스파이크에서 옮김]
-capture   create_agent(match_adr·propose_adr) + HumanInTheLoopMiddleware + SqliteSaver, 2턴은 새 프로세스         [스파이크에서 옮김 — HITL·체크포인트 설계는 HYO-44]
+capture   create_agent(match_adr·propose_adr) + HumanInTheLoopMiddleware(approve·edit·reject) + SqliteSaver, 2턴은 새 프로세스  [스파이크에서 옮김 + HYO-44 HITL 상태: 아래 「HITL 상태」]
 detect    load ─▶ triage ─▶ screen ─Send─▶ draft ─▶ write ─▶ (validate 실패 시) repair ─▶ report              [새로 만듦]
           (코드) (모델)    (코드)         (모델)   (코드)                  (모델+코드)
 ```
@@ -34,10 +34,28 @@ detect    load ─▶ triage ─▶ screen ─Send─▶ draft ─▶ write ─�
 .venv/Scripts/python product/radar/run_eval.py --stub JHS-046 --controls    # 지정 케이스 + 음성 대조
 .venv/Scripts/python product/radar/run_eval.py --model anthropic JHS-011    # 실제 Claude (API 과금, .env 키) — 케이스 명시. 아직 실행하지 않았다
 .venv/Scripts/python product/radar/test_product.py                          # 구조 회귀 (모델 없음)
+.venv/Scripts/python product/radar/test_hitl.py                             # HITL 상태 회귀 — 회복·낡음·S2·edit·변이 (스텁, API 없음)
 .venv/Scripts/python product/radar/usage.py eval/runs/<실행>                 # 호출 단위 사용량 요약
 ```
 
 산출물: `eval/runs/<시각>-product-<모델>/<case>-<i>/` (transcript*.jsonl · grade.json · 작업 디렉터리 사본) + 실행 루트의 `llm_calls.jsonl`.
+
+## HITL 상태 (HYO-44) — 설계 `docs/design/hitl-state.md`
+
+| 결정 | 어디에 | 한 줄 |
+|---|---|---|
+| 1 ADR 파일이 이긴다 | `hitl.py` | ADR 파일은 `"x"`(없을 때만 생성)로 만든다. 의도의 해시와 파일 해시가 다르면 덮지 않고 `attention`(사람에게 보이는 표시)을 남기고 멈춘다 |
+| 2·5 항목 = thread = 별도 파일 | `capture.py` · `hitl.py` | `thread_id = item-id`. `<ADR repo 루트>/.radar/items/<item-id>.yaml` (루트 = `RADAR_ADR_DIR`의 두 단계 위). `status` 칸 없음(R8) — 쓰기·읽기 모두 `validate_item`이 거부 |
+| R9 | `capture.py` | 승인 전에는 ADR repo에 쓰기 0 — 별도 파일은 승인 순간(write-ahead 의도와 같은 단계)에 생긴다. 멈출 때의 지문은 checkpoint 파일 안의 별도 표(`StateStore`)에 둔다. detect는 초안 파일을 쓰는 순간 생긴다 |
+| 4 write-ahead | `hitl.write_adr` · `recover` | 번호 → 별도 파일에 의도(`write_intent`: adr·path·content_hash·state, 본문은 완료되면 지움) → ADR 파일 + validate → 완료. 각 단계 뒤 파일을 닫는다. 회복은 설계 §5 표 네 줄 그대로 |
+| 3 재개 프로토콜 | `hitl.check_resume` · `capture_turn2` | 별도 파일 → 쓰다 만 것 회복 → 지문 비교 → 다르면 `hitl.stale.changes`와 함께 다시 interrupt(답 `continue`·`rejudge`·`discard`) → 끝나면 checkpoint thread 삭제. 거부는 지문을 보지 않는다 |
+| 6 edit | `hitl.check_edit` | `allowed_decisions = approve·edit·reject`. 고친 초안은 쓰기 전에 임시 폴더에서 `radar.py validate` — 실패하면 쓰지 않고 `hitl.edit_errors`로 돌려주며 승인 대기는 그대로. status·번호 칸은 오류. history에 원래·고친 해시 둘 다 |
+
+**Q2 미정 — 지문에 무엇을 넣나. 사용자가 다음 대화에서 정한다.** `Fingerprint` 인터페이스(계산·비교·차이 요약)로 두 구현을 만들어 두었고 기본값은 (A)다. (A) `RepoHashFingerprint` = docs/adr 파일 해시 전체 (무엇이든 바뀌면 다시 묻는다). (B) `RelatedMatchFingerprint` = 관련 ADR 파일 해시 + `radar.py match` 결과 (무관한 변화는 안 묻는다). 바꾸는 곳은 `hitl.DEFAULT_FINGERPRINT` 한 줄(또는 `RADAR_FINGERPRINT` 환경변수).
+**Q3 미정 — git 내보내기.** 로컬 파일 쓰기까지만 한다. `hitl.Exporter`(기본 no-op)가 그 자리다.
+Q4(승인 뒤 validate 실패의 모델 repair)는 하지 않았다 — 대신 edit이 쓰기 전에 사람이 고치는 길이다. 승인 뒤 validate가 실패하면 파일은 남고 `validate_errors`가 별도 파일 `write_intent`에 적힌다. Q5(별도 파일 형식 검사의 위치)는 제품 코드(`validate_item`)에 두었다 — 사용자 결정 대기.
+
+검증은 `test_hitl.py` — write-ahead 단계 사이 죽이기(함수 + 실제 프로세스 `os._exit`) · 낡음 S1/S4 × 지문 (A)(B) · S2 · edit · 변이 7개(해시 다름 덮어쓰기 · 지문 비교 생략 · 의도 없이 쓰기 · edit validate 생략 · edit status 허용 · 번호 재지정 생략 · 이중 쓰기). 스텁 모델이라 실제 모델에서의 재개·edit 흐름은 재지 못했다.
 
 ## 스텁 통과는 배관 검증일 뿐이다
 
@@ -87,7 +105,7 @@ detect    load ─▶ triage ─▶ screen ─Send─▶ draft ─▶ write ─�
 
 - 실제 모델로 돌린 적이 없다 — detect의 `ProviderStrategy(Triage/DraftBody)` 요청 모양(`output_config.format` 허용 스키마)과 effort medium에서의 판단은 미검증
 - detect의 repair는 1회다. 그래도 `validate`에 걸리면 `draft_invalid`로 세고 파일은 남는다(실패한 초안). 스텁은 repair 성공·실패 경로를 각각 음성 대조로 본다 — 실제 모델에서 repair가 얼마나 도는지는 미측정
-- **capture에는 repair 경로가 없다 (확인만, 고치지 않음)**: `propose_adr`가 승인 뒤 파일을 쓰고 `validate_errors`를 도구 결과로 돌려주지만, 모델이 고칠 도구가 `propose_adr`뿐이라 다시 제안하면 새 승인과 새 번호가 필요하다(같은 번호로 고쳐 쓰지 못한다). 스킬은 승인 뒤 그 초안 파일만 고친다. HITL 설계(HYO-44)와 함께 정할 것
+- **capture에는 모델 repair 경로가 없다**: 승인 뒤 validate가 실패하면 파일은 남고 `validate_errors`만 기록한다. 스킬은 그 파일을 모델이 고친다. 제품은 edit(쓰기 전 validate, 사람이 고침)이 그 자리를 맡는다 — 설계 Q4는 열려 있다
 - 라이브 모드(WebFetch)·PR/issue 생성은 범위 밖이다 — `check_scope`가 스냅숏 모드·dry-run만 허용한다
 - detect의 의존성 → component 매핑을 코드로 읽지 않는다(모델이 CLAUDE.md를 읽고 R16을 지킨다). radar.py에 `affected` 검사 하위 명령이 생기면 코드로 옮긴다 — radar.py 수정은 P4 위반이라 하지 않았다
 
@@ -109,3 +127,5 @@ detect    load ─▶ triage ─▶ screen ─Send─▶ draft ─▶ write ─�
 | 10 | **비용 단위** | `claude -p` 구독 | API 호출, `llm_call`로 토큰·달러 | 프로토콜 §3 — 토큰으로 나란히 두고 달러는 API 단가로 환산 |
 | 11 | **R16 매핑 집행** | 모델 | 모델 (같음) | 대칭 — `radar.py`에 `affected` 검사가 생기면 R10과 함께 옮길 후보 |
 | 12 | **technology 칸의 모양** | `references/schema.md` ADR 예시(`technology: LEANN`)와 기존 ADR을 읽고 배운다 | triage 스키마 필드 설명에 「이름만, 버전·설명 없이」를 직접 적는다 | 2026-10-06 첫 실제 실행에서 이 안내 없이 6/7이 이름에 버전·설명을 붙여 동일성 비교가 깨졌다 — 같은 정보를 다른 경로로 준다 |
+| 13 | **edit 채널** — 승인 때 초안을 고치는 길 | 사용자가 대화로 고칠 점을 말하면 모델이 반영한다 (텍스트 채널) | `edit` 결정이 구조화된 초안을 돌려준다. 쓰기 전에 `radar.py validate`를 지나고, 실패하면 쓰지 않고 사람에게 돌려준다. status·번호는 못 바꾼다. history에 원래·고친 해시 | 제품만 (설계 §5-1, HYO-44) — 「모델 초안을 사람이 얼마나 고쳤나」는 제품에서만 계측된다 |
+| 14 | **재개 검사** — 대기 중 ADR repo가 바뀌었나 | 해당 없음 — 매 실행이 새 세션이고 대기가 없다 | 재개마다 지문을 비교하고 다르면 변경 요약과 함께 다시 승인받는다(계속·다시 판정·버림). 쓰다 죽은 것은 write-ahead 의도로 회복하고, 사람이 고친 파일은 덮지 않는다 | **스킬 구조상 어려운 틈** — 역수입 대상이 아니다 (설계 §1). 지문 구현은 Q2 미정 |
