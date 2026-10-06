@@ -5,11 +5,15 @@
 detect는 이 도구도 모델에게 주지 않는다 — 초안 파일은 그래프의 write 노드(코드)가 쓴다.
 """
 
+import json
+
 from langchain.tools import ToolRuntime, tool
 
 from common import ops
 from common.core import Ctx
 from common.schemas import AdrDraft
+
+from . import hitl
 
 
 @tool("snapshot_fetch", description=ops.DOCS["snapshot_fetch"])
@@ -34,8 +38,14 @@ def match_adr(technology: str, repo: str, component: str, use: str, runtime: Too
 
 @tool("propose_adr", description=ops.DOCS["propose_adr"])
 def propose_adr(draft: AdrDraft, runtime: ToolRuntime[Ctx]) -> str:
+    """승인(approve·edit) 뒤에만 실행된다 — 번호 → 별도 파일 의도 → ADR 파일 + validate → 완료 (write-ahead, hitl.write_adr).
+    thread_id가 item-id다. 승인 정보(결정·지문·edit 전 초안 해시)는 재개 호출이 config로 넘긴다."""
     d = draft if isinstance(draft, AdrDraft) else AdrDraft.model_validate(draft)
-    return ops.propose_adr(runtime.context, d)
+    c = runtime.context
+    c.calls += 1
+    cfg = (runtime.config or {}).get("configurable") or {}
+    res = hitl.write_adr(c, cfg["thread_id"], "capture", d, approval=cfg.get("radar_approval"))
+    return json.dumps(res, ensure_ascii=False)
 
 
 REVISIT_TOOLS = [snapshot_fetch, snapshot_search, read_repo_file]

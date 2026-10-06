@@ -27,7 +27,7 @@ from common import ops
 from common.core import Ctx, check_scope
 from common.schemas import AdrDraft
 
-from . import detect_ops, llm_log
+from . import detect_ops, hitl, llm_log
 from .detect_prompts import DRAFT_INSTRUCTIONS, REPAIR_INSTRUCTIONS, TRIAGE_INSTRUCTIONS, draft_prompt, repair_prompt, triage_prompt
 from .detect_schemas import DraftBody, Triage
 from .revisit import limit
@@ -103,8 +103,11 @@ def detect_graph(ctx, model):
         for d in sorted(state.get("drafts") or [], key=lambda x: x["w"]["idx"]):  # 병렬 가지의 도착 순서와 무관하게 소식 순서대로 번호를 받는다
             w, cand = d["w"], d["w"]["candidate"]
             body = detect_ops.compose(d["draft"], w)  # 후보의 정체·related는 코드가 덮어쓴다 — draft는 서술만 한다
-            res = json.loads(ops.propose_adr(ctx, AdrDraft.model_validate(body)))
-            written.append({"candidate": cand, "w": w, "body": d["draft"], "id": res["id"], "path": res["written"],
+            ctx.calls += 1
+            item_id = hitl.new_item_id(ctx, "detect", cand["technology"])  # 별도 파일은 초안 파일을 쓰는 순간에 생긴다 (설계 §3-1)
+            res = hitl.write_adr(ctx, item_id, "detect", AdrDraft.model_validate(body), lifecycle="REVIEW_CANDIDATE",
+                                 final_lifecycle="REVIEW_CANDIDATE", by="graph")
+            written.append({"candidate": cand, "w": w, "body": d["draft"], "id": res["id"], "path": res["written"], "item": item_id,
                             "validate_errors": res["validate_errors"], "repaired": False})
         return {"written": written}
 
@@ -129,7 +132,7 @@ def detect_graph(ctx, model):
                 p3.append({"kind": "model_error", "stage": "repair", "adr": x["id"], "type": type(e).__name__, "message": str(e)[:300]})
                 out.append(x)
                 continue
-            errs = detect_ops.rewrite(ctx, x["path"], x["id"], AdrDraft.model_validate(detect_ops.compose(body, x["w"])))
+            errs = detect_ops.rewrite(ctx, x["path"], x["id"], AdrDraft.model_validate(detect_ops.compose(body, x["w"])), item_id=x.get("item"))
             out.append({**x, "body": body, "validate_errors": errs, "repaired": True})
         return {"written": out, "p3": p3}
 

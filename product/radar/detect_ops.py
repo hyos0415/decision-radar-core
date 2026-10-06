@@ -8,6 +8,8 @@ import json
 from common import ops
 from common.core import radar
 
+from . import hitl
+
 
 def snapshot_feed(c):
     """스냅숏 모드의 소식 수집 — 웹 대신 radar.py snapshot feed (HYO-45)."""
@@ -91,8 +93,11 @@ def compose(body, w):
     return {**body, "technology": cand["technology"], "affected": cand["affected"], "related": [r["id"] for r in w["related"]]}
 
 
-def rewrite(c, path, adr_id, draft):
-    """repair가 낸 초안으로 **같은 번호의 파일을 코드가** 다시 쓰고 radar.py validate를 다시 돈다 → 남은 오류."""
+def rewrite(c, path, adr_id, draft, item_id=None):
+    """repair가 낸 초안으로 **같은 번호의 파일을 코드가** 다시 쓰고 radar.py validate를 다시 돈다 → 남은 오류.
+    item_id가 있으면 write-ahead로 쓴다(의도 → 파일 → 완료) — 사람이 고친 파일이면 덮지 않는다 (HYO-44)."""
+    if item_id:
+        return hitl.rewrite_adr(c, item_id, adr_id, draft)
     c.record("Write", {"file_path": path})
     open(path, "w", encoding="utf-8", newline="\n").write(ops.render(draft, c.now))
     v = radar(c, "validate", c.adr_dir, ok_codes=(0, 1))
