@@ -283,6 +283,7 @@ MoSCoW = **M**ust(없으면 실패) · **S**hould(중요하지만 없어도 성�
 
 - 명세 R1~R16: `docs/spec-work-order.md`
 - 수집 파이프라인 (M2 · E9): `docs/design/doc-pipeline.md`
+- HITL · checkpoint · ADR 정합성 (M7 · G5, HYO-44): `docs/design/hitl-state.md`
 - 검시 판정: `docs/decisions/2026-09-29-coroner-verdict.md`
 - 원 제안서: `<downloads>\project_jhs_autopsy_proposal.md` (레포 밖)
 - eval 확정 시트·케이스: `eval/precondition-sheet.md` · `eval/cases/README.md`
