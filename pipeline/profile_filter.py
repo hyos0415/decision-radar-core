@@ -51,8 +51,11 @@ def write_json(path, obj):
     Path(path).write_text(json.dumps(obj, ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
 
 
-def run_filter(items, profile, strategies, stack_terms=(), only_new=False):
-    """순수 계산 (파일을 쓰지 않는다). → {"lane_a": [...], "lane_b": {전략: 순위}, "skipped": n, ...}"""
+def run_filter(items, profile, strategies, stack_terms=(), only_new=False, gate=None):
+    """순수 계산 (파일을 쓰지 않는다). → {"lane_a": [...], "lane_b": {전략: 순위}, "skipped": n, ...}
+
+    gate: 레인 A 관문 `pipeline.importance.gate.Gate` (HYO-67). 없으면 `gate: null`, `gate_status: "not-implemented"`로 비워 둔다.
+    """
     lane_a, lane_b, skipped = lanes.split_lanes(items)
     dropped_old = 0
     if only_new:
@@ -65,8 +68,9 @@ def run_filter(items, profile, strategies, stack_terms=(), only_new=False):
         for s in strategies:
             sc = keyword_match.score_item(it, profile, s)
             by[s] = [{"kind": "lane", "lane": "A", "why": reasons}] + (sc["matched_by"] if sc else [])
+        verdict = gate(it, reasons) if gate is not None else lanes.GATE
         a_out.append({"id": it["id"], "source": it["source"], "title": it["title"], "url": it["url"],
-                      "lane": "A", "reasons": reasons, "gate": lanes.GATE, "gate_status": "not-implemented" if lanes.GATE is None else "ok",
+                      "lane": "A", "reasons": reasons, "gate": verdict, "gate_status": "not-implemented" if verdict is None else "ok",
                       "also_matches_interest": {s: any(e["kind"] == "match" for e in by[s]) for s in strategies},
                       "known_example": bool(keyword_match.known_examples(it, profile)), "matched_by": by})
     b_out = {s: keyword_match.rank_items(lane_b, profile, s) for s in strategies}
@@ -76,7 +80,12 @@ def run_filter(items, profile, strategies, stack_terms=(), only_new=False):
             e["stack_mentions"] = mentions.get(e["id"], [])
     counts = {"items": len(items), "lane_a": len(a_out), "lane_b_candidates": len(lane_b), "skipped_pages": len(skipped),
               "dropped_not_new": dropped_old, "lane_b_ranked": {s: len(r) for s, r in b_out.items()}}
-    return {"lane_a": a_out, "lane_b": b_out, "counts": counts, "texts": {it["id"]: it.get("text", "") for it in lane_b}}
+    res = {"lane_a": a_out, "lane_b": b_out, "counts": counts, "texts": {it["id"]: it.get("text", "") for it in lane_b}}
+    if gate is not None:
+        from .importance.gate import cap_lane_a      # 5/N 상한 — 잘린 것은 summary에 남는다 (버리지 않는다)
+        res["gate_summary"] = cap_lane_a(a_out, gate.limit)
+        counts["lane_a_kept"] = res["gate_summary"]["total_kept"]
+    return res
 
 
 def cmd_validate(a):
@@ -107,9 +116,19 @@ def cmd_run(a):
         except Exception as e:  # noqa: BLE001 — 스택을 못 읽어도 레인 분리·순위는 돈다 (표시만 빠진다)
             stack = {"terms": [], "sources": {"error": f"{type(e).__name__}: {e}"}}
     items = read_items(a.snapshot)
-    res = run_filter(items, profile, strategies, stack["terms"], a.only_new)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
+    gate = backend = None
+    if a.gate:                                   # 레인 A 관문 (HYO-67). stub이면 모델 없이 돈다; 실제 모델은 --real-api가 있어야 한다
+        from .importance.cli import build_gate
+        if not a.tiers:
+            raise SystemExit("--gate에는 --tiers(등급 파일)가 필요하다")
+        gate, backend = build_gate(a.gate, a.tiers, real_api=a.real_api, call_log=out / "gate-calls.jsonl", limit=a.gate_limit)
+    try:
+        res = run_filter(items, profile, strategies, stack["terms"], a.only_new, gate=gate)
+    finally:
+        if backend:
+            backend.close()
     write_json(out / "lane_a.json", res["lane_a"])
     for s, ranked in res["lane_b"].items():
         write_json(out / f"lane_b.{s}.json", ranked)
@@ -119,7 +138,8 @@ def cmd_run(a):
                 "weights": {"PRIORITY_WEIGHT": keyword_match.PRIORITY_WEIGHT, "MATCH_BASE": keyword_match.MATCH_BASE,
                             "EXTRA_TERM": keyword_match.EXTRA_TERM, "EXTRA_TERM_CAP": keyword_match.EXTRA_TERM_CAP,
                             "NOT_PENALTY": keyword_match.NOT_PENALTY, "EXCLUDE_PENALTY": keyword_match.EXCLUDE_PENALTY},
-                "lane_a_gate": "not-implemented (importance-policy 관문은 아직 코드에 없다)"}
+                "lane_a_gate": ({"model": a.gate, "tiers": str(a.tiers), **res["gate_summary"], "calls": backend.log.totals()}
+                                if gate is not None else "not-implemented (--gate로 켠다: pipeline.importance)")}
     write_json(out / "run.json", manifest)
     write_json(out / "profile.resolved.json", profile)
     c = res["counts"]
@@ -175,6 +195,10 @@ def main(argv=None):
     r.add_argument("--adr-dir", help="ADR 폴더 (기본: RADAR_ADR_DIR)")
     r.add_argument("--no-stack", action="store_true", help="스택 표시(stack_mentions)를 건너뛴다")
     r.add_argument("--only-new", action="store_true", help="스냅숏의 new: false 항목을 레인 B에서 뺀다")
+    r.add_argument("--gate", help="레인 A 관문 백엔드: stub | gpt-6-luna | gpt-6.1-sol (HYO-67). 없으면 관문 없이 gate: null")
+    r.add_argument("--tiers", help="기술 등급 파일 (python -m pipeline.importance classify-stack으로 만든다)")
+    r.add_argument("--real-api", action="store_true", help="실제 API 호출 허용 (stub 외 모델에 필요)")
+    r.add_argument("--gate-limit", type=int, help="주당 표시 상한 (기본 5 — importance-policy §4)")
     r.set_defaults(fn=cmd_run)
     p = sp.add_parser("pool", help="사용자 판정용 시트 (전략 상위를 합쳐 중복 제거, 전략·순위 숨김)")
     p.add_argument("--run", required=True)

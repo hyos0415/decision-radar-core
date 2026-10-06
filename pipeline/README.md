@@ -57,6 +57,27 @@ python pipeline/tests/test_profile_filter.py                      # 오프라인
 - `--cutoffs`: 지표를 재는 자리(Recall@k의 k). 이것도 필터가 보여 줄 개수를 정하는 값이 아니다 — k는 사용자가 dev 주에 정한다
 - 판정이 없으면 `score`는 계산하지 않는다. 일부만 있으면 `--partial`을 줘야 하고 그래도 비어 있는 수를 표시한다. 순위에 있지만 판정되지 않은 항목(cutoff > pool-depth)은 관련 없음으로 치되 `미판정` 건수를 낸다
 
+## 레인 A 관문 (HYO-67: `pipeline/importance/`)
+
+설계·기준: `docs/design/importance-policy.md` §4·§8. 모델이 등급·변화 종류를 분류하고 **판정은 결정표(코드)** 가 내린다. Python은 메인 `.venv` (openai-agents 0.22.3).
+
+```bash
+# 1) 스택의 기술 등급 — 스택이 바뀔 때만. 스크립트 검증(Dockerfile FROM·dev 그룹·manifest)이 모델을 덮는다
+python -m pipeline.importance classify-stack --repo ../adr --extra pipeline/importance/stack-extra.json --tiers tiers.json --model stub [--plan]
+python -m pipeline.importance override --tiers tiers.json --tech PyYAML --set-tiers L6      # 사람이 고친 값 (최우선, 재분류해도 유지)
+# 2) 레인 A에 붙이기 (gate: keep/drop + 어느 행 때문인지, 5/N 상한)
+python -m pipeline.profile_filter run --snapshot ... --gate stub --tiers tiers.json --out pipeline/out/w41
+# 3) 평가 (C1·C2·C3 + 등급 정확도 진단). 실제 모델은 --real-api 없이는 거부
+python -m pipeline.importance evaluate --gold eval/importance/gold.json --model gpt-6-luna --k 3 --plan
+python -m pipeline.importance evaluate --gold eval/importance/gold.json --model gpt-6-luna --k 3 --real-api
+
+python pipeline/tests/test_importance.py      # 오프라인 테스트 + 변이 13개
+```
+
+- `backends.py`가 백엔드 인터페이스다 (`stub` · `gpt-*` Agents SDK · 나중에 Jev). 정답지 형식은 `evaluate.py` 머리말, 예시는 `eval/importance/gold.example.json`
+- 파일: `policy`(결정표) · `tiers`(등급 저장·검증) · `signals`(repo 신호) · `gate`(레인 A 연결) · `agents_backend` · `prompts` · `evaluate` · `cli`
+- 위의 「관문은 코드에 없다」는 `--gate` 없이 돌릴 때의 모습이다 (`gate: null`, `not-implemented`)
+
 ## 알려진 한계
 
 - 한국어 `not`·`excludes`(「이미지 생성」「이미지·영상 생성 도구」)는 영어 항목에 걸리지 않는다 — 감점이 거의 안 일어난다. 번역·질의 변환 전략의 몫

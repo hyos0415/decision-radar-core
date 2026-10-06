@@ -1,0 +1,8 @@
+[
+  {"name": "claude-sonnet-5-5", "usage": "Anthropic API로 부르는 비교 모드 모델 (effort medium)", "source": "대상 repo CLAUDE.md 「외부 모델·서비스」"},
+  {"name": "gpt-6-luna", "usage": "가벼운 태스크에 OpenAI API로 부르는 모델 (tier-screen · 레인 A 분류기)", "source": "대상 repo CLAUDE.md 「외부 모델·서비스」"},
+  {"name": "gpt-6-sol", "usage": "codex exec로 부르는 LLM judge 모델 (개발 중에만)", "source": "대상 repo CLAUDE.md 「외부 모델·서비스」"},
+  {"name": "LangSmith", "usage": "개발 실행 트레이싱 서비스 (운영에는 안 들어감)", "source": "대상 repo CLAUDE.md 「외부 모델·서비스」"},
+  {"name": "Elasticsearch", "usage": "docker로 우리가 띄우는 검색 엔진 서버 (arena)", "source": "대상 repo CLAUDE.md 「의존성 → component」"},
+  {"name": "Neo4j", "usage": "docker로 우리가 띄우는 그래프 DB 서버 (arena)", "source": "대상 repo CLAUDE.md 「의존성 → component」"}
+]

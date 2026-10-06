@@ -1,0 +1,105 @@
+"""중요도 결정표 (importance-policy §4) — 코드. 모델 없이 결정론적으로 돈다 (CLAUDE.md 규율 1).
+
+등급(L0~L8) × 변화 종류 → 남김(✅) / 버림(❌) / 해당 없음(—). 「—」는 그 조합이 정책에 없다는 뜻이고 결과는 버림이다 (소음 우선 — §6).
+표는 문서의 §4 표와 같아야 한다 — test_importance.py가 문서 표를 읽어 코드와 대조한다. 바꾸지 않는다 (규율 7).
+
+적용 순서 (§4 「보정 축 적용 순서」): 등급으로 행을 고른다 → 경로가 개발이면 security만 → 떠 있는 태그면 minor·patch도 ✅ → 민감 경로면 security·deprecation을 ✅로.
+두 등급이면 두 행을 모두 적용하고 하나라도 ✅면 남긴다 — 어느 행(등급 × 변화) 때문에 남았는지 `kept_by`에 기록한다.
+주당 상한: 등급 높은 순(L0→L8) → 변화 심각도 순. 잘린 것은 `truncated`로 돌려줘 로그에 남기게 한다.
+"""
+
+TIERS = [f"L{i}" for i in range(9)]
+CHANGES = ["breaking", "deprecation", "eol", "security", "yanked", "major", "minor_patch", "model_retirement", "pricing"]
+CHANGE_LABEL = {"breaking": "breaking", "deprecation": "deprecation", "eol": "우리 버전 EOL", "security": "security", "yanked": "yanked",
+                "major": "major", "minor_patch": "minor·patch", "model_retirement": "모델 은퇴", "pricing": "가격·한도 변경"}
+TIER_LABEL = {"L0": "언어 런타임", "L1": "실행 기반", "L2": "호스팅 모델", "L3": "호스팅 서비스", "L4": "앱 프레임워크",
+              "L5": "공급자 SDK", "L6": "도메인 라이브러리", "L7": "개발·테스트 도구", "L8": "유틸"}
+
+KEEP, DROP, NA = "✅", "❌", "—"
+
+# 열 순서 = CHANGES
+_ROWS = {
+    "L0": "✅ ✅ ✅ ✅ — ❌ ❌ — —",
+    "L1": "✅ ✅ ✅ ✅ ✅ ✅ ❌ — —",
+    "L2": "✅ ✅ — — — — ❌ ✅ ✅",
+    "L3": "✅ ✅ — ✅ — — ❌ — ✅",
+    "L4": "✅ ✅ ✅ ✅ ✅ ✅ ❌ — —",
+    "L5": "✅ ✅ ❌ ✅ ✅ ✅ ❌ — —",
+    "L6": "✅ ✅ ❌ ✅ ✅ ❌ ❌ — —",
+    "L7": "❌ ❌ ❌ ✅ ❌ ❌ ❌ — —",
+    "L8": "❌ ❌ ❌ ✅ ✅ ❌ ❌ — —",
+}
+TABLE = {t: dict(zip(CHANGES, row.split())) for t, row in _ROWS.items()}
+
+# 변화 심각도 (낮을수록 먼저): security > breaking > 우리 버전 EOL·모델 은퇴 > deprecation > 나머지 (§4 주당 상한)
+SEVERITY = {"security": 0, "breaking": 1, "eol": 2, "model_retirement": 2, "deprecation": 3}
+SEVERITY_REST = 4
+WEEKLY_LIMIT = 5
+
+
+def severity(change):
+    return SEVERITY.get(change, SEVERITY_REST)
+
+
+def tier_rank(tier):
+    return TIERS.index(tier)
+
+
+class Context:
+    """보정 축 값. 모두 기본은 보정 없음. path: "prod"|"dev" · pin: None|"floating"|"range"|"pinned" · sensitive · local (로컬 서빙 모델)."""
+
+    def __init__(self, path="prod", pin=None, sensitive=False, local=False):
+        self.path, self.pin, self.sensitive, self.local = path, pin, bool(sensitive), bool(local)
+
+    def as_dict(self):
+        return {"path": self.path, "pin": self.pin, "sensitive": self.sensitive, "local": self.local}
+
+
+def cell(tier, change, ctx=None):
+    """한 칸 → {"tier","change","base","keep","adjusted_by"}. base는 표의 값, keep은 보정 뒤의 결과."""
+    ctx = ctx or Context()
+    base = TABLE[tier][change]
+    steps = []
+    if ctx.local and tier == "L2" and change == "model_retirement":   # v1.1 U2: 모델 은퇴 칸은 호스팅 모델에만
+        base = NA
+        steps.append("로컬 서빙 모델은 모델 은퇴 칸 해당 없음 (v1.1 U2)")
+    keep = base == KEEP
+    if ctx.path == "dev":
+        new = change == "security"
+        if new != keep:
+            steps.append("경로=개발 → security만 남김")
+        keep = new
+    if ctx.pin == "floating" and change == "minor_patch" and not keep:
+        keep = True
+        steps.append("떠 있는 태그 → minor·patch도 남김")
+    if ctx.sensitive and change in ("security", "deprecation") and not keep:
+        keep = True
+        steps.append("민감 경로 → security·deprecation 남김")
+    return {"tier": tier, "change": change, "base": base, "keep": keep, "adjusted_by": steps}
+
+
+def decide(tiers, changes, ctx=None):
+    """기술의 등급(들) × 소식의 변화(들) → {"keep", "rows", "kept_by", "defaulted_change"}.
+
+    변화가 비어 있으면(모델이 해당 종류를 못 찾음) minor·patch로 친다 — 표의 「그 외」. 등급이 없으면 판정하지 않는다(호출부가 걸러야 한다).
+    """
+    if not tiers:
+        raise ValueError("등급이 없다 — 분류 불가는 호출부가 후보에서 빼고 기록한다")
+    defaulted = not changes
+    changes = list(changes) or ["minor_patch"]
+    rows = [cell(t, c, ctx) for t in tiers for c in changes]
+    kept_by = [r for r in rows if r["keep"]]
+    return {"keep": bool(kept_by), "rows": rows, "kept_by": kept_by, "defaulted_change": defaulted}
+
+
+def rank_key(entry):
+    """주당 상한 정렬 키: 남긴 행들 중 가장 높은 등급 → 가장 심각한 변화 → id (결정론)."""
+    kb = entry["kept_by"]
+    return (min(tier_rank(r["tier"]) for r in kb), min(severity(r["change"]) for r in kb), str(entry.get("id", "")))
+
+
+def apply_cap(entries, limit=WEEKLY_LIMIT):
+    """남긴 후보 → (보이는 것, 잘린 것, "5/N"). entries는 {"id", "kept_by", ...}. 잘린 것은 버리지 않고 호출부가 로그에 남긴다."""
+    ordered = sorted(entries, key=rank_key)
+    shown, cut = ordered[:limit], ordered[limit:]
+    return shown, cut, f"{len(shown)}/{len(ordered)}"

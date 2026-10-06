@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "_note": "형식 예시다 — 정답지가 아니다. 실제 정답지는 W41 스냅숏의 레인 A 항목으로 Claude가 초안을 쓰고 사용자가 확정한다 (importance-policy §8). 모델이 보는 곳에 두지 않는다",
+  "technologies": [
+    {"name": "pydantic", "usage": "pyproject 직접 의존성 — 스키마 검증이 앱 전반에 걸친다", "source": "pyproject 직접 의존성",
+     "signals": {"manifest": "pyproject.toml", "group": "main", "pin": "pinned", "image": false}},
+    {"name": "pytest", "usage": "pyproject dev 그룹", "source": "pyproject dev 그룹",
+     "signals": {"manifest": "pyproject.toml", "group": "dev", "pin": "range", "image": false}},
+    {"name": "gpt-6-luna", "usage": "가벼운 태스크에 OpenAI API로 부르는 모델 (ADR 0007)", "source": "코드 속 모델 id"},
+    {"name": "python:3.12-slim", "usage": "Dockerfile FROM", "source": "Dockerfile FROM",
+     "signals": {"manifest": null, "group": null, "pin": "pinned", "image": true}}
+  ],
+  "items": [
+    {"id": "ex-1", "technology": "pydantic", "title": "pydantic v3.0.0 — breaking: validators API removed", "text": "Breaking changes: the v1-style validator decorators were removed.",
+     "gold_changes": ["breaking", "major"], "gold_keep": true, "basis": "(예시) L4 × breaking = ✅"},
+    {"id": "ex-2", "technology": "pytest", "title": "pytest 9.1.0", "text": "Minor release with new fixtures options.",
+     "gold_changes": ["minor_patch"], "gold_keep": false, "basis": "(예시) L7 × minor·patch = ❌"},
+    {"id": "ex-3", "technology": "pytest", "title": "pytest 9.0.3 — security fix for tmp_path handling (CVE-0000-0000)", "text": "Security release.",
+     "gold_changes": ["security"], "gold_keep": true, "basis": "(예시) L7 × security = ✅ (개발 도구도 security는 남긴다)"},
+    {"id": "ex-4", "technology": "gpt-6-luna", "title": "Deprecations: gpt-6-luna will be retired on 2027-03-01", "text": "Shutdown date and recommended replacement.",
+     "gold_changes": ["model_retirement", "deprecation"], "gold_keep": true, "basis": "(예시) L2 × 모델 은퇴 = ✅"},
+    {"id": "ex-5", "technology": "python:3.12-slim", "title": "python 3.14.0 released", "text": "New major features.",
+     "gold_changes": ["major"], "gold_keep": true, "basis": "(예시) L1 × major = ✅ — 정책 표 그대로; 소음이면 사용자가 ❌로 고친다"}
+  ]
+}
