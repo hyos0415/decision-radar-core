@@ -3,7 +3,7 @@
 - 어느 벤더를 볼지 = 규칙: 대상 repo CLAUDE.md 「외부 모델·서비스」 표 ∪ 재검토 조건이 살아 있는 ADR의 technology
 - 벤더마다 어느 경로를 볼지 = vendors.yaml (손으로 관리)
 - 규칙이 뽑은 이름이 어느 벤더에도 안 걸리면 「경로 없음」, 일부러 뺀 것이면 「제외」로 보고한다
-- page는 본문 텍스트와 해시만 낸다. 지난 주와의 비교는 스냅숏 단계(HYO-72)가 한다
+- page는 본문 텍스트(블록마다 한 줄, 전문)와 해시만 낸다. 지난 주와의 비교는 collector/snapshot.py(HYO-72)가 한다
 """
 import re
 import time

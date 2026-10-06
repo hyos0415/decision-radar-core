@@ -136,6 +136,15 @@ excludes:
 - 이유: 하나의 점수로 합치면 A의 ✅ 규칙(예: 호스팅 모델 은퇴는 무조건 남김)이 가중치 하나로 무력해진다 — 은퇴·보안 공지가 그 주의 화제 모델에 밀린다. 스크립트가 집행하는 규칙(규율 1)을 점수에 섞지 않는다. 등록된 정책(v1.3)도 건드리지 않고, 놓친 것이 어느 레인 탓인지 가를 수 있다
 - 한 항목이 두 레인에 다 걸리면(예: 스택 기술의 새 메이저이면서 관심사에도 맞음) A에 두고 `matched_by`에 둘 다 남긴다
 
+### 2-4. 주간 스냅숏 (HYO-72, 2026-10-06)
+
+- **저장 위치 = 새 private data repo `hyos0415/radar-snapshots`** (사용자 결정 2026-10-06). 기각: decision-radar(나중에 공개한다 — Reddit·HN 본문을 재배포하게 되고 git 이력에서 빼기 어렵다) · ADR repo(설정은 필요 없지만 사람이 쓴 결정 기록과 스킬 배포 대상 사이에 매주 기계 커밋이 섞인다). 대가: 클라우드 skill v2(HYO-75)가 읽으려면 GitHub App과 routine sources에 이 repo를 붙여야 한다
+- **코퍼스 버전 = `corpus@<ISO 주차>`** — 화요일 weekly 실행 시각(KST)의 주. 한 주 = weekly ∪ 지난 스냅숏 이후의 목요일 AWS 실행, 같은 id는 합친다. `manifest.json`에 실행·pool/vendors 버전·수집기 커밋·출처별 건수·항목 해시
+- **first-seen 원장**으로 다시 나온 항목(통로 ②, HF trending 단골)에 `new: false`를 붙인다. 지우지 않는다(원칙 1) — 「새 것만」은 필터의 선택이다
+- **벤더 페이지는 전문을 줄 단위로** 보관하고 지난 주와 비교해 `page-diff` 항목(더해진 줄 · 빠진 줄)을 만든다. 전에는 본문을 한 줄로 뭉개고 8,000자에서 잘라 비교가 불가능했다 (Anthropic 릴리스 노트 84,295자). 같은 날 20분 간격 두 번 받기에서 6개 페이지 모두 `unchanged` — 한 주 간격의 노이즈(날짜 표시 등)는 첫 몇 주에 본다
+- 얼린 주는 고치지 않는다 (규율 7과 같은 원칙). 놓친 주는 다음 manifest의 `missing_weeks`
+- 첫 스냅숏: 2026-10-06 16:00 예약 실행 = `corpus@2026-W41`. 10/2 시험 수집은 형식이 달라(페이지 한 줄·잘림) 넣지 않는다
+
 ## 3. 원칙
 
 1. **수집은 넓게, 거르기는 뒤에서.** 수집 단계에서 자른 것은 출처에 따라 되돌릴 수 없다. 노이즈는 필터에서 걸러야 필터를 잴 수 있다 (importance-policy 헤드라인 = 노이즈 비율). 근거: flair는 글쓴이가 붙인 라벨이라 부정확하다(r/LocalLLaMA의 「llama.cpp prompt lookup 42배」는 Discussion에 있었다). AI 키워드 정규식은 `DeepGEMM-Ascend`·`VisionHOPE`를 놓쳤다
@@ -268,6 +277,7 @@ self-managed 구독 표(elastic.co/subscriptions, 2026-10-01 원본 파싱):
 | 주기 | **화요일 16:00 KST** 주 1회 + AWS What's New만 **목요일 16:00** 한 번 더 (D4, 사용자 결정 2026-10-02 — 월·금은 연휴로 쉴 수 있다) |
 | 요청 | Reddit 약 11 · GitHub 5 + 의존성 수 · HN 1~2 · HF 15 · 벤더 10여 |
 | 실행 위치 | **로컬 — 지금은 교육장 Windows PC, 나중에 M1(외장 SSD)으로 이관** (D3, 사용자 결정 2026-10-02). 작업 스케줄러 `collector/schedule_windows.ps1`, 로그온 중에만, 놓친 시각은 다음에 켜질 때 바로 실행(StartWhenAvailable). 내 IP라 Reddit 차단 위험이 없다. 기각한 안: GitHub Actions·cloud routine·Lightsail(데이터센터 IP라 Reddit 위험은 같고, Lightsail은 서버 관리가 붙는다 — 제품 웹을 띄울 E6 때 다시 본다) · Airflow(상시 서버가 필요해 규모에 비해 무겁다 — 학습용 Could) |
+| 스냅숏 | weekly 실행 직후 `collector.snapshot freeze --push` → `hyos0415/radar-snapshots` (§2-4) |
 | 놓친 주 | PC가 꺼져 있어 못 돈 주는 Reddit·HF trending·벤더 페이지가 영구 손실이다(§3-1). `run.json`의 시각으로 드러난다. 월요일 routine은 지난 화요일 스냅숏(6일 전)을 읽는다 |
 | 4주 뒤 다시 볼 것 | Reddit 작은 서브레딧의 flair 컷 · HN 기준선 · Reddit 고유 기여 · `t=week` 대 `t=day` |
 
@@ -296,6 +306,7 @@ self-managed 구독 표(elastic.co/subscriptions, 2026-10-01 원본 파싱):
 | ~~D4~~ | ~~수집 요일·시각~~ → 화 16:00 + AWS 목 16:00 (§8) | 해결 (2026-10-02) |
 | D5 | Reddit 공식 API 신청 | 사용자 |
 | D6 | C-DOC 규모 티어(T1·T2)를 스냅숏 누적 주 수로 다시 정의할지 | HYO-32 착수 시 |
+| ~~D7~~ | ~~스냅숏을 어디에 두나~~ → 새 private data repo (§2-4) | 해결 (2026-10-06) |
 
 ## 부록: probe 기록
 

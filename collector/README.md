@@ -18,7 +18,22 @@ powershell -ExecutionPolicy Bypass -File collector\schedule_windows.ps1 -Remove 
 
 M1으로 옮길 때는 같은 두 명령을 `launchd`(StartCalendarInterval — 잠자기 중 놓친 실행은 깨어날 때 돈다)로 등록하면 된다.
 
-출력: `items.jsonl`(항목 한 줄에 하나) + `run.json`(출처별 요청 수·실패·건수·벤더 규칙 결과·200이 아닌 응답). 주간 스냅숏으로 얼리고 지난 주와 비교하는 일은 HYO-72가 한다.
+출력: `items.jsonl`(항목 한 줄에 하나) + `run.json`(출처별 요청 수·실패·건수·벤더 규칙 결과·200이 아닌 응답).
+
+## 주간 스냅숏 (HYO-72)
+
+weekly 예약 실행은 수집이 끝나면 `collector.snapshot freeze --push`로 한 주를 **`corpus@<ISO 주차>`**로 얼려 private data repo `hyos0415/radar-snapshots`(로컬 `../radar-snapshots`, 환경 변수 `RADAR_SNAPSHOT_REPO`)에 push한다. 폴더 형식은 그 repo의 README.
+
+```bash
+python -m collector.snapshot status                    # 얼린 주차 · 안 얼린 실행
+python -m collector.snapshot freeze --push             # 손으로 (예약 실행이 실패했을 때)
+python collector/tests/test_snapshot.py                # 오프라인 테스트
+```
+
+- 한 주 = weekly 실행 ∪ 지난 스냅숏 이후의 aws 실행. 주차는 weekly 시각(KST)의 ISO 주. 이름이 `<UTC>-weekly|aws`인 폴더만 본다 (손으로 돌린 시험 폴더는 빠진다)
+- first-seen 원장(`first_seen.jsonl`)으로 다시 나온 항목에 `new: false` — 지우지 않는다
+- 벤더 페이지는 전문을 `pages/`에 두고 지난 주와 줄 단위로 비교해 `page-diff` 항목을 만든다. 그래서 수집기는 페이지만 `TEXT_MAX`에서 자르지 않고 블록마다 줄을 바꾼다
+- 얼린 주는 고치지 않는다 (같은 주를 다른 실행으로 다시 얼리면 거부). 놓친 주는 다음 manifest의 `missing_weeks`
 
 ## 기준은 설정 파일에 있다
 

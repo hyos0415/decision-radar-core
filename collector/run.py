@@ -5,7 +5,7 @@
   python -m collector.run --sources vendor --only aws-bedrock --out /tmp/x    # AWS는 주 2회
 
 환경 변수 (스킬과 같은 이름): RADAR_TARGETS(대상 repo 목록) · RADAR_ADR_DIR(ADR 폴더) · GITHUB_TOKEN(없으면 gh auth token)
-주간 스냅숏으로 얼리고 지난 주와 비교하는 일은 HYO-72가 한다 — 여기서는 한 번 모은 원자료만 낸다.
+주간 스냅숏으로 얼리고 지난 주와 비교하는 일은 collector/snapshot.py(HYO-72) — 여기서는 한 번 모은 원자료만 낸다.
 """
 import argparse
 import json
