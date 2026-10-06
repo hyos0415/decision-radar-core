@@ -225,6 +225,26 @@ def scenario_m2(data):
     check("로그: capture_submitted·run", {"capture_submitted", "run"} <= kinds, kinds)
     check("화면 이벤트 decision_opened", c.post("/events", json={"event": "decision_opened", "item": "0001"}).status_code == 200)
 
+    # 정기 실행 — 칸 계산과 따라잡기 (가짜 시계)
+    import datetime as dt
+    import scheduling
+    kst = dt.timezone(dt.timedelta(hours=9))
+    tue = dt.datetime(2026, 10, 6, 9, 0, tzinfo=kst)  # 화 09:00 — revisit 칸(월 09:00)은 지났고 detect 칸(화 10:00)은 아직
+    check("칸: revisit 지난 칸 = 월 09:00", scheduling.last_slot("revisit", tue) == dt.datetime(2026, 10, 5, 9, 0, tzinfo=kst))
+    check("칸: detect 지난 칸 = 지난주 화", scheduling.last_slot("detect", tue) == dt.datetime(2026, 9, 29, 10, 0, tzinfo=kst))
+    check("칸 경계: 정각은 그 칸", scheduling.last_slot("revisit", dt.datetime(2026, 10, 5, 9, 0, tzinfo=kst)).day == 5)
+    old = [{"flow": "revisit", "at": "2026-10-04T12:00:00+09:00"}, {"flow": "detect", "at": "2026-09-30T08:00:00+09:00"}]
+    check("차례: 칸 뒤 실행 없으면 due", scheduling.due("revisit", tue, old) and not scheduling.due("detect", tue, old))
+    sched_data = os.path.join(os.path.dirname(data), "data3")
+    devdata.seed(sched_data)
+    s3 = RadarService(sched_data)
+    sch = scheduling.Scheduler(s3)
+    check("tick: 처음엔 둘 다 따라잡음", sorted(sch.tick(tue)) == ["detect", "revisit"])
+    check("tick: 같은 주엔 다시 안 돎", sch.tick(tue + dt.timedelta(hours=2)) == [], s3.runs()[:1])
+    check("tick: 실행 기록에 trigger=schedule", all(r["trigger"] == "schedule" for r in s3.runs()))
+    info = TestClient(server.create_app(s3)).get("/schedule").json()
+    check("GET /schedule: 기본 꺼짐 + 두 흐름", info["enabled"] is False and {f["flow"] for f in info["flows"]} == {"revisit", "detect"}, info)
+
 
 if __name__ == "__main__":
     sys.exit(main())

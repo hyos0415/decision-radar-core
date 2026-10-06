@@ -18,12 +18,13 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 
 import devdata  # noqa: E402
+import scheduling  # noqa: E402
 from service import REPO, RadarService, ServiceError  # noqa: E402
 
 DEFAULT_DATA = os.path.join(REPO, "desktop", ".dev-data")
 
 
-def create_app(svc: RadarService) -> FastAPI:
+def create_app(svc: RadarService, scheduler_on: bool = False) -> FastAPI:
     app = FastAPI(title="Decision Radar backend", docs_url=None, redoc_url=None)
     # 화면(개발 서버 localhost:5173 등)과 포트가 달라 교차 출처다. localhost 출처만 허용한다 — 아무 웹 페이지나 승인 API를 부르지 못하게
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"^http://(localhost|127\.0\.0\.1)(:\d+)?$",
@@ -77,6 +78,11 @@ def create_app(svc: RadarService) -> FastAPI:
     def runs():
         return {"items": svc.runs()}
 
+    @app.get("/schedule")
+    def schedule_info():
+        import datetime as dt
+        return scheduling.describe(dt.datetime.now().astimezone(), svc.runs(), scheduler_on)
+
     @app.post("/events")
     def events(body: dict = Body(...)):
         if not isinstance(body.get("event"), str):
@@ -103,8 +109,12 @@ def main(argv=None):
     elif devdata.ensure_snapshots(a.data_dir):
         print("개발 데이터에 스냅숏을 더했다", flush=True)
     svc = RadarService(a.data_dir)
+    scheduler_on = os.environ.get("RADAR_SCHEDULE") == "on"  # 기본 꺼짐 — scheduling.py 머리말
+    if scheduler_on:
+        scheduling.Scheduler(svc).start()
+        print("정기 실행 켜짐 (revisit 월 09:00 · detect 화 10:00, 지난 칸은 따라잡는다)", flush=True)
     import uvicorn
-    uvicorn.run(create_app(svc), host=a.host, port=a.port, log_level="warning")
+    uvicorn.run(create_app(svc, scheduler_on), host=a.host, port=a.port, log_level="warning")
 
 
 if __name__ == "__main__":

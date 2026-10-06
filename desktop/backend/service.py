@@ -365,7 +365,7 @@ class RadarService:
 
     # ── 실행 (detect · revisit) ──────────────────────────────────
 
-    def run(self, flow):
+    def run(self, flow, trigger="manual"):
         """흐름 하나를 스텁 모델로 한 번 돌린다. 코어 그래프를 그대로 부르고 보고서만 요약한다. 스냅숏 모드 + dry-run (check_scope)."""
         if flow not in FLOWS:
             raise ServiceError(404, f"모르는 흐름 {flow!r} — {list(FLOWS)}")
@@ -375,7 +375,7 @@ class RadarService:
                 fn, script = detect, stub_scripts.detect_script()
             else:  # JHS-001 대본 — 스냅숏 S02(Jev v0.9.0 릴리스)에서 0001 c1이 충족된다
                 fn, script = revisit, stub_scripts.revisit_script(stub_scripts.SCRIPT["cases"]["JHS-001"])
-            res = {"id": f"{ctx.now}-{flow}", "flow": flow, "at": ctx.now, "mode": self.mode, "ok": True, "error": None,
+            res = {"id": f"{ctx.now}-{flow}", "flow": flow, "at": ctx.now, "mode": self.mode, "trigger": trigger, "ok": True, "error": None,
                    "summary": [], "drafts": [], "alerts": []}
             try:
                 rep, diag = asyncio.run(fn(ctx, StubChat(script=script, flow=flow), ctx.now, self.mode))
@@ -386,7 +386,7 @@ class RadarService:
                 res.update(ok=False, error=f"{type(e).__name__}: {str(e)[:300]}")
             with open(self.runs_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(res, ensure_ascii=False) + "\n")
-            self.log("run", res["id"], flow=flow, ok=res["ok"], drafts=len(res["drafts"]), alerts=len(res["alerts"]))
+            self.log("run", res["id"], flow=flow, trigger=trigger, ok=res["ok"], drafts=len(res["drafts"]), alerts=len(res["alerts"]))
             return res
 
     def runs(self, limit=50):
