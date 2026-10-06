@@ -1,0 +1,848 @@
+"""레인 A 중요도 분류기 오프라인 테스트 (HYO-67) — 실제 API·네트워크 없이. 메인 .venv로 돌린다 (openai-agents 필요).
+
+  python pipeline/tests/test_importance.py
+
+뒤쪽에 변이 검사가 있다 (CLAUDE.md 규율 3): 코드를 일부러 망가뜨려 위 테스트가 실제로 빨개지는지 본다.
+통과는 증거가 아니다 — 두 등급 한쪽만 적용 · 모델 은퇴 ✅→❌ · C1을 k 중 하나만 · 스크립트 검증 무시 · 사람 수정 무시 · 상한 정렬 · 경로 보정 무시 · 허용 호스트 확대를 잡아야 한다.
+"""
+import asyncio
+import json
+import re
+import socket
+import sys
+import tempfile
+import traceback
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from pipeline import profile_filter  # noqa: E402
+from pipeline import interest_profile as ip  # noqa: E402
+from pipeline.importance import agents_backend, backends, evaluate, gate as gate_mod, policy, signals, tiers  # noqa: E402
+from pipeline.importance.backends import (Backend, BoundaryError, CallLog, LabelAnswer, NewsQuery, StubBackend,  # noqa: E402
+                                           TechQuery, labels_from_scores, make_backend)
+from pipeline.importance.tiers import TierStore  # noqa: E402
+
+REPO = Path(__file__).resolve().parents[2]
+Y, N, X = "✅", "❌", "—"
+
+
+# ---------------------------------------------------------------- 결정표
+
+def _doc_table():
+    text = (REPO / "docs" / "design" / "importance-policy.md").read_text(encoding="utf-8")
+    sec = text.split("## 4. 결정표", 1)[1].split("보정 축 적용 순서", 1)[0]
+    rows = {}
+    for line in sec.splitlines():
+        m = re.match(r"^\| (L\d) [^|]*\|(.*)\|\s*$", line)
+        if m:
+            rows[m.group(1)] = [c.strip() for c in m.group(2).split("|")]
+    return rows
+
+
+def test_table_matches_policy_doc():
+    doc = _doc_table()
+    assert sorted(doc) == policy.TIERS, "문서 표에서 L0~L8을 다 못 읽었다"
+    for t, cells in doc.items():
+        assert len(cells) == len(policy.CHANGES), (t, cells)
+        for c, v in zip(policy.CHANGES, cells):
+            assert policy.TABLE[t][c] == v, f"{t} × {c}: 코드 {policy.TABLE[t][c]} ≠ 문서 {v}"
+
+
+def test_every_cell_default_context():
+    for t in policy.TIERS:
+        for c in policy.CHANGES:
+            r = policy.cell(t, c)
+            assert r["keep"] == (policy.TABLE[t][c] == Y) and r["adjusted_by"] == [], (t, c)
+    # 손으로 고른 칸 — 표를 베끼지 않은 독립 확인
+    keep = {("L0", "eol"), ("L1", "yanked"), ("L2", "model_retirement"), ("L2", "pricing"), ("L3", "pricing"), ("L3", "security"), ("L4", "major"),
+            ("L5", "yanked"), ("L6", "yanked"), ("L7", "security"), ("L8", "security"), ("L8", "yanked")}
+    drop = {("L0", "major"), ("L2", "minor_patch"), ("L2", "security"), ("L5", "eol"), ("L6", "major"), ("L7", "breaking"), ("L7", "yanked"),
+            ("L8", "breaking"), ("L8", "deprecation"), ("L4", "model_retirement")}
+    assert all(policy.cell(t, c)["keep"] for t, c in keep) and not any(policy.cell(t, c)["keep"] for t, c in drop)
+
+
+def test_adjustments():
+    dev = policy.Context(path="dev")
+    assert [c for c in policy.CHANGES if policy.cell("L4", c, dev)["keep"]] == ["security"]        # 개발 → security만
+    assert policy.cell("L2", "security", dev)["keep"] and not policy.cell("L2", "model_retirement", dev)["keep"]   # 표에 —인 칸도 security는 남김
+    assert not policy.cell("L6", "minor_patch")["keep"]
+    assert policy.cell("L6", "minor_patch", policy.Context(pin="floating"))["keep"]                  # 떠 있는 태그 → minor·patch ✅
+    assert not policy.cell("L6", "minor_patch", policy.Context(pin="pinned"))["keep"]
+    assert not policy.cell("L6", "major", policy.Context(pin="floating"))["keep"]                    # major는 영향 없음
+    sens = policy.Context(sensitive=True)
+    assert policy.cell("L7", "deprecation", sens)["keep"] and policy.cell("L8", "deprecation", sens)["keep"]
+    assert not policy.cell("L8", "breaking", sens)["keep"]                                           # security·deprecation만
+    # 적용 순서: 경로(개발) 다음에 민감 → 개발+민감이면 deprecation이 되살아난다
+    both = policy.Context(path="dev", sensitive=True)
+    assert policy.cell("L4", "deprecation", both)["keep"] and not policy.cell("L4", "breaking", both)["keep"]
+    # 로컬 서빙 모델은 모델 은퇴 칸 해당 없음 (v1.1 U2)
+    assert not policy.cell("L2", "model_retirement", policy.Context(local=True))["keep"]
+    assert policy.cell("L2", "pricing", policy.Context(local=True))["keep"]
+    r = policy.cell("L4", "breaking", dev)
+    assert r["adjusted_by"] and "개발" in r["adjusted_by"][0]
+
+
+def test_two_tiers_any_row_keeps_and_records_which():
+    d = policy.decide(["L3", "L5"], ["pricing"])                  # L3 ✅ · L5 —
+    assert d["keep"] and [(r["tier"], r["change"]) for r in d["kept_by"]] == [("L3", "pricing")]
+    d = policy.decide(["L3", "L5"], ["yanked"])                   # L3 — · L5 ✅
+    assert d["keep"] and [r["tier"] for r in d["kept_by"]] == ["L5"]
+    d = policy.decide(["L3", "L5"], ["security"])                 # 둘 다 ✅ → 두 행 모두 기록
+    assert [r["tier"] for r in d["kept_by"]] == ["L3", "L5"]
+    d = policy.decide(["L3", "L5"], ["eol"])                      # L3 — · L5 ❌ → 버림
+    assert not d["keep"] and d["kept_by"] == [] and len(d["rows"]) == 2
+    d = policy.decide(["L2"], ["minor_patch", "model_retirement"])  # 변화가 여러 개 → 하나라도 ✅
+    assert d["keep"] and [r["change"] for r in d["kept_by"]] == ["model_retirement"]
+
+
+def test_empty_changes_default_and_empty_tiers_refused():
+    d = policy.decide(["L4"], [])
+    assert d["defaulted_change"] and [r["change"] for r in d["rows"]] == ["minor_patch"] and not d["keep"]
+    assert policy.decide(["L4"], ["breaking"])["defaulted_change"] is False
+    try:
+        policy.decide([], ["security"])
+        raise AssertionError("등급 없이 판정했다")
+    except ValueError:
+        pass
+
+
+def _cand(i, tier, change):
+    return {"id": i, "kept_by": [{"tier": tier, "change": change}]}
+
+
+def test_cap_order_and_log():
+    cands = [_cand("a", "L4", "security"), _cand("b", "L0", "eol"), _cand("c", "L4", "breaking"), _cand("d", "L1", "deprecation"),
+             _cand("e", "L2", "model_retirement"), _cand("f", "L0", "security"), _cand("g", "L7", "security"), _cand("h", "L4", "security")]
+    shown, cut, label = policy.apply_cap(cands, 5)
+    # 등급 높은 순 L0(f security, b eol) → L1 d → L2 e → L4(a·h security 동률은 id 순)
+    assert [s["id"] for s in shown] == ["f", "b", "d", "e", "a"], [s["id"] for s in shown]
+    assert [c["id"] for c in cut] == ["h", "c", "g"] and label == "5/8"
+    # 같은 등급에서 심각도: security > breaking > eol·모델 은퇴 > deprecation > 나머지
+    same = [_cand(c, "L4", c) for c in ("major", "deprecation", "eol", "breaking", "security")]
+    assert [s["id"] for s in policy.apply_cap(same, 5)[0]] == ["security", "breaking", "eol", "deprecation", "major"]
+    assert policy.apply_cap(cands[:3], 5)[2] == "3/3" and policy.apply_cap(cands[:3], 5)[1] == []
+    two = {"id": "x", "kept_by": [{"tier": "L5", "change": "yanked"}, {"tier": "L3", "change": "pricing"}]}   # 두 등급이면 높은 쪽 등급을 쓴다
+    assert policy.rank_key(two)[0] == 3
+
+
+# ---------------------------------------------------------------- 등급: 신호 · 검증 · 저장
+
+def _write(p, text):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8", newline="\n")
+
+
+def _repo(d):
+    d = Path(d)
+    _write(d / "requirements.txt", "PyYAML>=6\nopenai-agents==0.22.3\n# 주석\nrequests\n-r other.txt\ngit+https://x/y.git\nfoo[extra]~=1.2\n")
+    _write(d / "requirements-dev.txt", "pytest==8.0\nruff\n")
+    _write(d / "pyproject.toml", '[project]\nname="x"\ndependencies=["fastapi>=0.1","pydantic==2.0"]\n[project.optional-dependencies]\ndev=["mypy"]\nweb=["jinja2"]\n'
+                                 '[dependency-groups]\ntest=["hypothesis"]\n')
+    _write(d / "Dockerfile", "FROM python:3.12-slim AS base\nFROM base AS final\nFROM scratch\nFROM --platform=linux/amd64 vllm/vllm-openai:latest\n")
+    _write(d / "infra" / "compose.yaml", "services:\n  es:\n    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.4\n  x:\n    build: .\n")
+    return d
+
+
+def test_signals_from_repo():
+    with tempfile.TemporaryDirectory() as d:
+        s = signals.read_repo_signals(_repo(d))
+    g = lambda n: s[signals.norm(n)] if signals.norm(n) in s else s[n.lower()]   # noqa: E731
+    assert (g("PyYAML")["group"], g("PyYAML")["pin"], g("PyYAML")["manifest"]) == ("main", "range", "requirements.txt")
+    assert g("openai-agents")["pin"] == "pinned" and g("requests")["pin"] == "floating" and g("foo")["pin"] == "range"
+    assert g("pytest")["group"] == "dev" and g("ruff")["group"] == "dev" and g("pytest")["pin"] == "pinned"
+    assert g("fastapi")["group"] == "main" and g("pydantic")["pin"] == "pinned"
+    assert g("mypy")["group"] == "dev" and g("hypothesis")["group"] == "dev" and g("jinja2")["group"] == "main"   # web 그룹은 개발이 아니다
+    assert g("python:3.12-slim")["image"] and g("python:3.12-slim")["pin"] == "pinned"
+    assert g("vllm/vllm-openai:latest")["pin"] == "floating"
+    assert g("docker.elastic.co/elasticsearch/elasticsearch:9.5.4")["image"]
+    assert "base" not in s and "scratch" not in s                       # 스테이지 이름·scratch는 기술이 아니다
+    assert not any("other" in k or "git" in k for k in s)               # -r · URL 의존성은 건너뜀
+
+
+def test_main_group_beats_dev_group():
+    with tempfile.TemporaryDirectory() as d:
+        _write(Path(d) / "requirements.txt", "pytest==8\n")
+        _write(Path(d) / "requirements-dev.txt", "pytest==8\n")
+        assert signals.read_python_manifests(d)["pytest"]["group"] == "main"     # 운영에 들어가면 운영이다
+
+
+def test_verify_script_beats_model():
+    v = tiers.verify(["L5"], False, {"image": True, "pin": "pinned"})                # S1 이미지
+    assert v["tiers"] == ["L1"] and v["mismatch"]["model"] == ["L5"] and v["mismatch"]["script"] == ["L1"] and not v["unresolved"]
+    v = tiers.verify(["L1"], False, {"image": True})
+    assert v["tiers"] == ["L1"] and v["mismatch"] is None                             # 일치하면 어긋남 기록 없음
+    v = tiers.verify(["L4"], False, {"manifest": "pyproject.toml", "group": "dev"})   # S2 dev 그룹
+    assert v["tiers"] == ["L7"] and v["path"] == "dev" and v["mismatch"]["rule"].startswith("S2")
+    v = tiers.verify(["L2"], False, {"manifest": "requirements.txt", "group": "main"})   # S3: 패키지가 모델·서비스일 수 없다
+    assert v["unresolved"] and v["tiers"] == [] and v["mismatch"]
+    v = tiers.verify(["L3", "L5"], False, {"manifest": "requirements.txt", "group": "main"})
+    assert v["tiers"] == ["L5"] and v["mismatch"]["model"] == ["L3", "L5"] and not v["unresolved"]
+    v = tiers.verify([], True, {"manifest": "requirements.txt", "group": "main"})     # 모델이 분류 불가 + 스크립트도 못 정함
+    assert v["unresolved"]
+    v = tiers.verify(["L7"], True, {"manifest": "pyproject.toml", "group": "dev"})    # 모델이 분류 불가여도 스크립트가 정한다
+    assert v["tiers"] == ["L7"] and not v["unresolved"]
+    v = tiers.verify(["L6"], False, {})                                               # 신호 없음 → 모델 그대로
+    assert v["tiers"] == ["L6"] and v["mismatch"] is None and v["path"] == "prod"
+    assert tiers.verify([], True, None)["unresolved"]
+
+
+def _q(name, **sig):
+    return TechQuery(name=name, usage=f"{name} 사용", signals=sig)
+
+
+def test_store_reuse_fingerprint_and_human_override():
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "tiers.json"
+        be = StubBackend(tiers={"alpha": ["L6"], "beta": ["L5"]})
+        st = TierStore(path)
+        assert st.ensure([_q("alpha"), _q("beta")], be) == ["alpha", "beta"] and len(be.log.calls) == 2
+        st.save()
+        st2 = TierStore(path)
+        assert st2.ensure([_q("alpha"), _q("beta")], be) == [] and len(be.log.calls) == 2         # 저장한 것은 다시 부르지 않는다
+        assert st2.ensure([TechQuery("alpha", usage="쓰임이 바뀜")], be) == ["alpha"]              # 쓰임이 바뀌면 다시
+        assert st2.ensure([_q("alpha", pin="floating")], be) == ["alpha"]                         # 신호가 바뀌어도
+        # 사람 수정: 모델 호출 없이 자동 값을 덮고, refresh에도 남는다
+        st2.data["overrides"][signals.norm("alpha")] = {"technology": "alpha", "tiers": ["L4"], "sensitive": True}
+        n = len(be.log.calls)
+        assert st2.ensure([_q("alpha")], be, refresh=True) == [] and len(be.log.calls) == n
+        e = st2.effective("alpha")
+        assert e["tiers"] == ["L4"] and e["sensitive"] is True and e["human"] and not e["unresolved"]
+        assert st2.effective("beta")["tiers"] == ["L5"] and st2.effective("nope") is None
+        st2.save()
+        assert TierStore(path).effective("alpha")["tiers"] == ["L4"]
+        # 사람이 등급을 안 줬고 다른 필드만 준 경우: 자동 등급은 그대로, 필드만 덮음
+        st2.data["overrides"][signals.norm("beta")] = {"technology": "beta", "local": True}
+        assert st2.effective("beta")["tiers"] == ["L5"] and st2.effective("beta")["local"] is True
+
+
+def test_store_classify_applies_script_and_records_mismatch():
+    be = StubBackend(tiers={"serverx": ["L5"], "pytestish": ["L4"]})
+    st = TierStore()
+    rec = st.classify(_q("serverx", image=True, pin="floating"), be)
+    assert rec["tiers"] == ["L1"] and rec["model_tiers"] == ["L5"] and rec["mismatch"] and rec["pin"] == "floating"
+    rec = st.classify(_q("pytestish", manifest="pyproject.toml", group="dev"), be)
+    assert rec["tiers"] == ["L7"] and rec["path"] == "dev"
+    ctx_rec = st.effective("pytestish")
+    assert policy.decide(ctx_rec["tiers"], ["breaking"], policy.Context(path=ctx_rec["path"]))["keep"] is False
+
+
+# ---------------------------------------------------------------- 레인 A 관문
+
+def _store(**techs):
+    st = TierStore()
+    be = StubBackend(tiers={k: v["tiers"] for k, v in techs.items()})
+    for name, v in techs.items():
+        st.classify(TechQuery(name=name, usage="u", signals=v.get("signals", {})), be)
+    return st
+
+
+def _item(iid, title, tech=None, vendor=None, text=""):
+    meta = {k: v for k, v in (("dependency", tech), ("vendor", vendor)) if v}
+    return {"id": iid, "source": "github", "title": title, "url": "", "text": text, "channels": ["dependency-releases"], "meta": meta}
+
+
+def test_resolve_technologies():
+    names = ["pydantic", "openai-agents", "gpt-6-luna", "Python"]
+    r = gate_mod.resolve_technologies
+    assert r(_item("1", "x", tech="Pydantic"), names) == ["pydantic"]                      # 정규화 일치
+    assert r(_item("2", "OpenAI deprecations", vendor="openai"), names, {"openai": ["openai", "gpt"]}) == ["openai-agents", "gpt-6-luna"]
+    assert r(_item("3", "Release of pydantic v3"), names) == ["pydantic"]                   # 제목에 이름
+    assert r(_item("4", "pydanticx v3"), names) == []                                       # 단어 경계
+    assert r(_item("5", "nothing here"), names) == []
+    assert r(_item("6", "Python and pydantic", tech="pydantic"), names) == ["pydantic", "Python"]
+
+
+def test_gate_keep_drop_and_reasons():
+    st = _store(pydantic={"tiers": ["L4"]}, pytest={"tiers": ["L4"], "signals": {"manifest": "p", "group": "dev"}})
+    be = StubBackend(changes={"1": ["breaking"], "2": ["minor_patch"], "3": ["security"], "4": ["breaking"]})
+    g = gate_mod.Gate(be, st)
+    r1 = g(_item("1", "pydantic breaking", tech="pydantic"))
+    assert r1["keep"] and r1["status"] == "ok" and r1["tiers"] == {"pydantic": ["L4"]} and "L4 × breaking" in r1["reason"]
+    assert [(k["tier"], k["change"]) for k in r1["kept_by"]] == [("L4", "breaking")]
+    r2 = g(_item("2", "pydantic patch", tech="pydantic"))
+    assert not r2["keep"] and r2["status"] == "ok" and "남기는 행 없음" in r2["reason"]
+    assert g(_item("3", "pytest cve", tech="pytest"))["keep"]                                 # 개발 도구도 security는 남긴다
+    r4 = g(_item("4", "pytest breaking", tech="pytest"))
+    assert not r4["keep"] and r4["tiers"] == {"pytest": ["L7"]}                               # 모델은 L4라 했지만 dev 그룹 → L7 (스크립트 승)
+    st.data["overrides"][signals.norm("pytest")] = {"technology": "pytest", "tiers": ["L4"]}  # 사람이 L4로 고쳐도 경로는 dev 그대로 → 보정이 기록에 남는다
+    r5 = g(_item("4", "pytest breaking", tech="pytest"))
+    assert not r5["keep"] and r5["rows"][0]["base"] == Y and r5["rows"][0]["adjusted_by"] and "개발" in r5["rows"][0]["adjusted_by"][0]
+
+
+def test_gate_unclassified_makes_no_model_call():
+    st = _store(pydantic={"tiers": ["L4"]})
+    st.data["technologies"][signals.norm("weird")] = {"technology": "weird", "tiers": [], "unresolved": True, "path": "prod", "pin": None}
+    be = StubBackend()
+    g = gate_mod.Gate(be, st)
+    a = g(_item("1", "x", tech="nothing-known"))
+    b = g(_item("2", "x", tech="weird"))
+    assert a["status"] == b["status"] == "unclassified" and not a["keep"] and not b["keep"] and "weird" in b["reason"]
+    assert be.log.calls == []                                                                 # 모를 때는 모델을 부르지 않는다
+    st.data["overrides"][signals.norm("weird")] = {"technology": "weird", "tiers": ["L6"]}    # 사람이 등급을 주면 풀린다
+    assert g(_item("3", "weird breaking", tech="weird"))["status"] == "ok"
+
+
+class _Boom(Backend):
+    name = "boom"
+
+    def __init__(self, exc):
+        super().__init__()
+        self.exc = exc
+
+    def classify_tiers(self, q):
+        raise self.exc
+
+    def classify_changes(self, q):
+        raise self.exc
+
+
+def test_gate_error_is_safe_failure_but_boundary_stops():
+    st = _store(pydantic={"tiers": ["L4"]})
+    r = gate_mod.Gate(_Boom(RuntimeError("503 down")), st)(_item("1", "x", tech="pydantic"))
+    assert r["status"] == "error" and r["keep"] is False and "503 down" in r["reason"]
+    try:
+        gate_mod.Gate(_Boom(BoundaryError("api.example.com")), st)(_item("1", "x", tech="pydantic"))
+        raise AssertionError("경계 위반이 삼켜졌다")
+    except BoundaryError:
+        pass
+
+
+def _profile():
+    p, errors, _ = ip.parse_profile({"version": 1, "interests": [{"topic": "하이브리드 검색", "description": "d"}]}, __import__("datetime").date(2026, 10, 6))
+    assert not errors
+    return p
+
+
+def test_lane_a_gate_wiring_and_cap():
+    st = _store(pydantic={"tiers": ["L4"]}, fastapi={"tiers": ["L4"]}, langfuse={"tiers": ["L3", "L5"]})
+    changes = {f"d{i}": ["breaking"] for i in range(7)} | {"s": ["security"], "m": ["minor_patch"]}
+    be = StubBackend(changes=changes)
+    items = [_item(f"d{i}", f"pydantic {i}", tech="pydantic") for i in range(7)]
+    items += [_item("s", "langfuse cve", tech="langfuse"), _item("m", "fastapi patch", tech="fastapi")]
+    res = profile_filter.run_filter(items, _profile(), ["kw"], gate=gate_mod.Gate(be, st))
+    a = {e["id"]: e for e in res["lane_a"]}
+    assert all(e["gate_status"] == "ok" and e["gate"] is not None for e in a.values())
+    assert a["m"]["gate"]["keep"] is False and a["m"]["shown"] is None
+    summ = res["gate_summary"]
+    assert summ["total_kept"] == 8 and summ["label"] == "5/8" and len(summ["truncated"]) == 3
+    assert summ["shown"][0]["id"] == "s"                                                     # security가 같은 L3·L4 중 가장 먼저 (L3 행이 더 높은 등급)
+    assert sum(1 for e in a.values() if e["shown"] is True) == 5 and sum(1 for e in a.values() if e["shown"] is False) == 3
+    assert {c["id"] for c in summ["truncated"]} <= {e["id"] for e in a.values() if e["shown"] is False}
+    assert [(k["tier"]) for k in a["s"]["gate"]["kept_by"]] == ["L3", "L5"]                  # 두 등급 모두 기록
+    # 관문 없이는 예전 그대로
+    res0 = profile_filter.run_filter(items, _profile(), ["kw"])
+    assert all(e["gate"] is None and e["gate_status"] == "not-implemented" for e in res0["lane_a"]) and "gate_summary" not in res0
+
+
+def test_cli_run_with_stub_gate_and_real_api_refused():
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        _write(d / "p.yaml", "version: 1\ninterests:\n  - {topic: 하이브리드 검색, description: d}\n")
+        items = [_item("a1", "pydantic 3 breaking", tech="pydantic"), _item("a2", "pydantic 3.0.1", tech="pydantic")]
+        _write(d / "items.jsonl", "\n".join(json.dumps(i, ensure_ascii=False) for i in items) + "\n")
+        st = TierStore(d / "tiers.json")
+        st.ensure([TechQuery("pydantic", usage="u")], StubBackend(tiers={"pydantic": ["L4"]}))
+        st.save()
+        base = ["run", "--snapshot", str(d / "items.jsonl"), "--profile", str(d / "p.yaml"), "--no-stack", "--out", str(d / "out"),
+                "--tiers", str(d / "tiers.json")]
+        assert profile_filter.main(base + ["--gate", "stub"]) == 0
+        run = json.loads((d / "out" / "run.json").read_text(encoding="utf-8"))
+        assert run["lane_a_gate"]["model"] == "stub" and run["lane_a_gate"]["total_kept"] == 1 and run["lane_a_gate"]["calls"]["model_calls"] == 2
+        assert (d / "out" / "gate-calls.jsonl").exists()
+        la = json.loads((d / "out" / "lane_a.json").read_text(encoding="utf-8"))
+        assert [e["gate"]["keep"] for e in la] == [True, False]
+        try:
+            profile_filter.main(base + ["--gate", "gpt-6-luna"])
+            raise AssertionError("--real-api 없이 실제 모델이 돌았다")
+        except PermissionError:
+            pass
+        try:
+            profile_filter.main(["run", "--snapshot", str(d / "items.jsonl"), "--profile", str(d / "p.yaml"), "--no-stack", "--out", str(d / "o2"),
+                                 "--tiers", str(d / "nope.json"), "--gate", "stub"])
+            raise AssertionError("등급 파일 없이 관문이 돌았다")
+        except SystemExit:
+            pass
+
+
+# ---------------------------------------------------------------- 백엔드 인터페이스 · Jev 모양
+
+class JevLike(Backend):
+    """Jev 모양 — 문장을 쓰지 않고, 라벨마다 예/아니오 + 확률만 낸다. reason 없음. 임계값에서 라벨을 만든다."""
+    name = "jev-like"
+
+    def __init__(self, tier_probs, change_probs, threshold=0.5):
+        super().__init__()
+        self.tp, self.cp, self.th = tier_probs, change_probs, threshold
+
+    def _answer(self, probs, order):
+        per = {k: {"yes": p >= 0.5, "prob": p} for k, p in probs.items()}
+        labels = labels_from_scores(per, self.th, order)
+        self.log.add({"flow": "jev", "model": "jev-1.13.0", "input_tokens": 100, "output_tokens": 0, "estimated": False, "cost_usd": 0.0, "attempts": 1})
+        return LabelAnswer(labels=labels, per_label=per, unsure=not labels, reason=None)
+
+    def classify_tiers(self, q):
+        return self._answer(self.tp[q.name], policy.TIERS)
+
+    def classify_changes(self, q):
+        return self._answer(self.cp[q.id], policy.CHANGES)
+
+
+def test_labels_from_scores():
+    per = {"a": {"yes": True, "prob": 0.7}, "b": {"yes": True, "prob": 0.4}, "c": {"yes": False, "prob": None}, "d": {"yes": True, "prob": None}}
+    assert labels_from_scores(per) == ["a", "b", "d"]                       # 임계값 없음 → 예/아니오 그대로
+    assert labels_from_scores(per, 0.5) == ["a", "d"]                       # 확률이 있으면 임계값, 없으면 예/아니오
+    assert labels_from_scores(per, 0.5, order=["d", "a"]) == ["d", "a"]
+
+
+def test_interface_accepts_jev_shape_end_to_end():
+    be = JevLike({"pydantic": {"L4": 0.9, "L6": 0.3}, "langfuse": {"L3": 0.8, "L5": 0.7, "L6": 0.1}},
+                 {"n1": {"breaking": 0.95, "security": 0.05}, "n2": {"pricing": 0.9, "minor_patch": 0.4}})
+    st = TierStore()
+    r = st.classify(_q("langfuse"), be)
+    assert r["tiers"] == ["L3", "L5"] and r["reason"] is None and r["per_label"]["L5"]["prob"] == 0.7     # 근거 없음·확률 있음
+    st.classify(_q("pydantic"), be)
+    g = gate_mod.Gate(be, st)
+    assert g(_item("n1", "pydantic breaking", tech="pydantic"))["keep"]
+    out = g(_item("n2", "langfuse pricing", tech="langfuse"))
+    assert out["keep"] and [k["tier"] for k in out["kept_by"]] == ["L3"] and out["changes"] == ["pricing"]
+    # 평가 진입점도 같은 백엔드로 끝까지
+    gold = {"technologies": [{"name": "pydantic", "usage": "u"}, {"name": "langfuse", "usage": "u"}],
+            "items": [{"id": "n1", "technology": "pydantic", "title": "pydantic breaking", "text": "", "gold_changes": ["breaking"], "gold_keep": True, "basis": "b"},
+                      {"id": "n2", "technology": "langfuse", "title": "langfuse pricing", "text": "", "gold_changes": ["pricing"], "gold_keep": True, "basis": "b"}]}
+    res = evaluate.evaluate(be, gold, 1)
+    assert res["runs"][0]["c3_agree"] == 1.0 and res["runs"][0]["c1_miss_count"] == 0
+
+
+def test_make_backend_gating():
+    assert isinstance(make_backend("stub"), StubBackend)
+    orig = agents_backend.openai_key
+    agents_backend.openai_key = lambda: (_ for _ in ()).throw(AssertionError("키를 읽으려 했다"))
+    try:
+        for m in ("gpt-6-luna", "gpt-6.1-sol"):
+            try:
+                make_backend(m)
+                raise AssertionError("플래그 없이 실제 백엔드가 만들어졌다")
+            except PermissionError:
+                pass
+    finally:
+        agents_backend.openai_key = orig
+    for m, exc in (("jev-1.13.0", NotImplementedError), ("llama", ValueError)):
+        try:
+            make_backend(m, allow_real=True)
+            raise AssertionError(m)
+        except exc:
+            pass
+
+
+# ---------------------------------------------------------------- Agents SDK 백엔드 (가짜 모델 — 네트워크 없음)
+
+from agents import ModelResponse, Usage  # noqa: E402
+from agents.models.interface import Model  # noqa: E402
+from openai.types.responses import ResponseOutputMessage, ResponseOutputText  # noqa: E402
+
+
+class Transient(Exception):
+    status_code = 503
+
+
+class BadRequest(Exception):
+    status_code = 400
+
+
+class FakeModel(Model):
+    """script: 호출마다 하나씩 — dict(출력 JSON) · Exception(던짐) · callable(부르고 dict를 돌려줌)."""
+
+    def __init__(self, script, tokens=(10, 5)):
+        self.script, self.tokens, self.n, self.seen = list(script), tokens, 0, []
+
+    async def get_response(self, system_instructions, input, model_settings, tools, output_schema, handoffs, tracing, **kw):
+        self.seen.append((system_instructions, input, output_schema))
+        step = self.script.pop(0)
+        if callable(step):
+            step = step()
+        if isinstance(step, Exception):
+            raise step
+        self.n += 1
+        msg = ResponseOutputMessage(type="message", id=f"m{self.n}", role="assistant", status="completed",
+                                    content=[ResponseOutputText(type="output_text", text=json.dumps(step, ensure_ascii=False), annotations=[])])
+        return ModelResponse(output=[msg], usage=Usage(requests=1, input_tokens=self.tokens[0], output_tokens=self.tokens[1],
+                                                         total_tokens=sum(self.tokens)), response_id=None)
+
+    def stream_response(self, *a, **k):
+        raise NotImplementedError
+
+
+def _agents(fake, model="gpt-6-luna", guard=True):
+    b = agents_backend.AgentsBackend(model, key="sk-test", export_traces=False, guard=guard, model_factory=lambda client, name: fake)
+    b.retry.SLEEPER.sleep = lambda s: None
+
+    async def nosleep(s):
+        return None
+    b.retry.SLEEPER.asleep = nosleep
+    return b
+
+
+def test_agents_backend_structured_output_log_and_trace():
+    fake = FakeModel([{"tiers": ["L5", "L3"], "unsure": False, "reason": "서비스이자 SDK"},
+                      {"changes": ["security", "breaking", "breaking"], "reason": "CVE"},
+                      {"tiers": [], "unsure": True, "reason": "쓰임새 모른다"}], tokens=(2000, 100))
+    b = _agents(fake)
+    try:
+        a = b.classify_tiers(TechQuery("langfuse", usage="u"))
+        assert a.labels == ["L3", "L5"] and not a.unsure and a.reason == "서비스이자 SDK"            # 등급 순서로 정렬
+        c = b.classify_changes(NewsQuery("n1", "pydantic", "t", "text"))
+        assert c.labels == ["breaking", "security"]                                                  # 중복 제거 · 정책 순서
+        u = b.classify_tiers(TechQuery("zzz"))
+        assert u.unsure and u.labels == []
+        tot = b.log.totals()
+        assert tot["model_calls"] == 3 and tot["input_tokens"] == 6000 and tot["output_tokens"] == 300 and tot["errors"] == 0
+        rec = b.log.calls[0]
+        assert rec["type"] == "llm_call" and rec["model"] == "gpt-6-luna" and rec["attempts"] == 1 and rec["flow"] == "tiers"
+        assert abs(rec["cost_usd"] - (2000 / 1e6 * 0.10 + 100 / 1e6 * 0.50)) < 1e-9                  # Luna 단가 (ADR 0007)
+        assert "langfuse" in str(fake.seen[0][1]) and "L0" in str(fake.seen[0][0])                   # 프롬프트가 모델에 닿았다
+        assert fake.seen[0][2] is not None                                                           # 구조화 출력(output_type)이 걸렸다
+        assert b.trace_info()["traces"] >= 3 and b.trace_info()["spans"] >= 3                        # 트레이싱이 켜져 있다
+    finally:
+        b.close()
+
+
+def test_agents_backend_unpriced_model_is_none_not_zero():
+    b = _agents(FakeModel([{"changes": [], "reason": "r"}]), model="gpt-6.1-sol")
+    try:
+        b.classify_changes(NewsQuery("n", "t", "t"))
+        assert b.log.calls[0]["cost_usd"] is None and b.log.totals()["unpriced_calls"] == 1 and b.log.calls[0]["model"] == "gpt-6.1-sol"
+    finally:
+        b.close()
+
+
+def test_agents_backend_retry_policy_same_as_product():
+    fake = FakeModel([Transient("503"), Transient("503"), {"changes": ["major"], "reason": "r"}])
+    b = _agents(fake)
+    try:
+        assert b.classify_changes(NewsQuery("n", "t", "t")).labels == ["major"]
+        rec = b.log.calls[0]
+        assert rec["attempts"] == 3 and rec["retried"] == ["Transient(503)", "Transient(503)"] and not rec.get("error")
+        assert b.retry.MAX_ATTEMPTS == 5 and b.retry.BACKOFF_BASE == 2.0                              # product/radar/retry.py의 상수
+    finally:
+        b.close()
+    fake = FakeModel([BadRequest("400"), {"changes": [], "reason": "r"}])                             # 그 밖의 4xx는 재시도하지 않는다
+    b = _agents(fake)
+    try:
+        try:
+            b.classify_changes(NewsQuery("n", "t", "t"))
+            raise AssertionError("400이 삼켜졌다")
+        except BadRequest:
+            pass
+        assert b.log.calls[0]["attempts"] == 1 and "BadRequest" in b.log.calls[0]["error"] and len(fake.script) == 1
+    finally:
+        b.close()
+
+
+def test_netguard_blocks_outside_api_openai_and_stops_without_retry():
+    real = socket.getaddrinfo
+
+    def offline(host, *a, **k):          # 실제 DNS를 부르지 않는다 — 가드가 막지 못하면 여기서 gaierror가 아니라 통과로 보인다
+        raise socket.gaierror("offline test")
+    socket.getaddrinfo = offline
+    try:
+        def leaks():
+            socket.getaddrinfo("telemetry.example.invalid", 443)
+            return {"changes": [], "reason": "r"}
+        fake = FakeModel([leaks, {"changes": [], "reason": "r"}])
+        b = _agents(fake)
+        try:
+            try:
+                b.classify_changes(NewsQuery("n", "t", "t"))
+                raise AssertionError("허용 밖 호스트가 막히지 않았다")
+            except BoundaryError as e:
+                assert "telemetry.example.invalid" in str(e)
+            rec = b.log.calls[0]
+            assert rec["attempts"] == 1 and rec["blocked_hosts"] == ["telemetry.example.invalid"] and len(fake.script) == 1   # 재시도 없음
+            assert b.trace_info()["blocked_hosts"] == ["telemetry.example.invalid"]
+            g = b.guard
+            assert g._ok("api.openai.com") and not g._ok("api.anthropic.com") and not g._ok("evil.example")
+            assert agents_backend.ALLOWED_HOSTS == {"api.openai.com"}
+        finally:
+            b.close()
+    finally:
+        socket.getaddrinfo = real
+
+
+# ---------------------------------------------------------------- 채점
+
+def _g(i, keep, changes):
+    return {"id": i, "technology": "t", "title": "t", "gold_changes": changes, "gold_keep": keep, "basis": "b"}
+
+
+def _p(keep, status="ok", changes=()):
+    return {"keep": keep, "status": status, "changes": list(changes)}
+
+
+GOLD6 = [_g("g1", True, ["security"]), _g("g2", True, ["model_retirement"]), _g("g3", True, ["breaking"]),
+         _g("g4", False, ["minor_patch"]), _g("g5", False, ["major"]), _g("g6", False, ["minor_patch"])]
+
+
+def test_score_run_by_hand():
+    preds = {"g1": _p(True, changes=["security"]), "g2": _p(False, changes=["model_retirement"]), "g3": _p(True, changes=["breaking"]),
+             "g4": _p(True, changes=["minor_patch"]), "g5": _p(False, changes=["major"]), "g6": _p(False, "unclassified")}
+    r = evaluate.score_run(preds, GOLD6)
+    # 남김 g1·g3·g4 = 3, 그중 정답 ❌ = g4 → 1/3 · 일치 g1·g3·g5·g6 = 4/6 · C1: 정답 ✅ 안전 항목을 버린 것 = g2
+    assert r["kept"] == 3 and r["kept_but_gold_drop"] == 1 and abs(r["c2_noise"] - 1 / 3) < 1e-12
+    assert abs(r["c3_agree"] - 4 / 6) < 1e-12 and r["c1_misses"] == ["g2"] and r["c1_miss_count"] == 1
+    assert r["unclassified"] == ["g6"] and r["errors"] == [] and abs(r["change_label_exact"] - 5 / 6) < 1e-12
+    # 안전 항목이 아닌 ✅(breaking)을 버려도 C1은 아니다 — C3만 깎인다
+    r2 = evaluate.score_run({**preds, "g2": _p(True), "g3": _p(False)}, GOLD6)
+    assert r2["c1_miss_count"] == 0 and r2["kept"] == 3
+    # 정답이 ❌인 security는 버려도 C1이 아니다 / 정답 ✅인 security를 오류로 못 분류해도 버림으로 센다
+    r3 = evaluate.score_run({"g1": _p(False, "error")}, [_g("g1", True, ["security"]), _g("g7", False, ["security"])])
+    assert r3["c1_misses"] == ["g1", ] and r3["errors"] == ["g1"] and r3["unclassified"] == ["g7"]     # g7: 예측이 없다 → missing = 분류 안 됨
+    r4 = evaluate.score_run({"g1": _p(True, "error")}, [_g("g1", True, ["security"])])               # 오류 상태에서 keep=True가 와도 남김으로 세지 않는다
+    assert r4["kept"] == 0 and r4["c1_miss_count"] == 1
+    assert evaluate.score_run({}, GOLD6)["kept"] == 0 and evaluate.score_run({}, GOLD6)["c2_noise"] == 0.0   # 하나도 안 남기면 소음 0 (C3이 막는다)
+
+
+def _run(c1=0, noise=0.0, agree=1.0):
+    return {"c1_miss_count": c1, "c2_noise": noise, "c3_agree": agree}
+
+
+def test_judge_pass_k_and_thresholds():
+    assert evaluate.judge([_run()] * 3)["pass"] is True
+    j = evaluate.judge([_run(), _run(), _run(c1=1)])                              # k=3 중 한 번만 놓쳐도 불통과 (pass^k)
+    assert j["C1"]["pass"] is False and j["pass"] is False and j["C1"]["misses_per_run"] == [0, 0, 1]
+    assert evaluate.judge([_run(c1=1), _run(), _run()])["C1"]["pass"] is False    # 첫 번째만 놓친 경우도 (마지막만 보는 구현을 잡는다)
+    assert evaluate.judge([_run(noise=0.15)] * 3)["C2"]["pass"] is True           # 경계 ≤ 15%
+    assert evaluate.judge([_run(noise=0.1501)] * 3)["C2"]["pass"] is False
+    assert evaluate.judge([_run(), _run(noise=0.2), _run()])["C2"]["pass"] is False
+    assert evaluate.judge([_run(agree=0.80)] * 3)["C3"]["pass"] is True           # 경계 ≥ 80%
+    assert evaluate.judge([_run(agree=0.7999)] * 3)["C3"]["pass"] is False
+    assert evaluate.judge([_run(agree=0.9), _run(agree=0.79), _run(agree=0.9)])["C3"]["pass"] is False
+    s = evaluate.judge([_run()])                                                  # k=1은 스모크 — 판정하지 않는다
+    assert s["smoke"] and s["pass"] is None and "스모크" in s["note"]
+    assert (evaluate.C1_MAX_MISSES, evaluate.C2_MAX_NOISE, evaluate.C3_MIN_AGREE, evaluate.K_REQUIRED) == (0, 0.15, 0.80, 3)   # 등록된 기준
+    assert evaluate.SAFETY_CHANGES == {"model_retirement", "security"}
+
+
+def test_validate_gold():
+    ok = json.loads((REPO / "eval" / "importance" / "gold.example.json").read_text(encoding="utf-8"))
+    assert evaluate.validate_gold(ok) is ok
+    def bad(mut):
+        import copy
+        g = copy.deepcopy(ok)
+        mut(g)
+        try:
+            evaluate.validate_gold(g)
+        except evaluate.GoldError as e:
+            return str(e)
+        raise AssertionError("나쁜 정답지가 통과했다")
+    assert "모르는 변화 종류" in bad(lambda g: g["items"][0].__setitem__("gold_changes", ["breakin"]))
+    assert "id 중복" in bad(lambda g: g["items"][1].__setitem__("id", "ex-1"))
+    assert "technologies에 없다" in bad(lambda g: g["items"][0].__setitem__("technology", "nope"))
+    assert "gold_keep" in bad(lambda g: g["items"][0].__setitem__("gold_keep", "yes"))
+    assert "basis 없음" in bad(lambda g: g["items"][0].pop("basis"))
+    assert "items가 비었다" in bad(lambda g: g.__setitem__("items", []))
+
+
+def _gold_oracle():
+    gold = json.loads((REPO / "eval" / "importance" / "gold.example.json").read_text(encoding="utf-8"))
+    be_tiers = {"pydantic": ["L4"], "pytest": ["L7"], "gpt-6-luna": ["L2"], "python:3.12-slim": ["L1"]}
+    be_changes = {it["id"]: it["gold_changes"] for it in gold["items"]}
+    return gold, be_tiers, be_changes
+
+
+def test_evaluate_end_to_end_with_stub_oracle():
+    gold, tiers_, changes = _gold_oracle()
+    res = evaluate.evaluate(StubBackend(tiers=tiers_, changes=changes), gold, 3)
+    assert res["judgement"]["pass"] is True and all(r["c3_agree"] == 1.0 and r["c1_miss_count"] == 0 for r in res["runs"])
+    assert res["runs"][0]["kept"] == 4 and res["predictions"][0]["ex-2"]["keep"] is False
+    # 모델 은퇴를 못 짚는 모델(모델 은퇴 ✅를 ❌로 버림) → C1 불통과
+    blind = dict(changes, **{"ex-4": ["deprecation"]})
+    blind["ex-4"] = ["minor_patch"]
+    res = evaluate.evaluate(StubBackend(tiers=tiers_, changes=blind), gold, 3)
+    assert res["judgement"]["C1"]["pass"] is False and res["runs"][0]["c1_misses"] == ["ex-4"] and res["judgement"]["pass"] is False
+    # 매번 하나씩 번갈아 놓치는 모델 — k=3 중 일부 실행에서만 놓쳐도 불통과
+    flip = {"n": 0}
+
+    def flaky(q):
+        if q.id == "ex-3":
+            flip["n"] += 1
+            return ["minor_patch"] if flip["n"] == 2 else ["security"]
+        return changes[q.id]
+    res = evaluate.evaluate(StubBackend(tiers=tiers_, changes=flaky), gold, 3)
+    assert res["judgement"]["C1"]["misses_per_run"] == [0, 1, 0] and res["judgement"]["C1"]["pass"] is False
+    # 스크립트 검증이 모델을 이긴다: 모델이 pytest를 L4로 매겨도 dev 그룹이라 L7 → breaking 소식은 버려진다
+    res = evaluate.evaluate(StubBackend(tiers=dict(tiers_, pytest=["L4"]), changes=dict(changes, **{"ex-2": ["breaking"]})), gold, 1)
+    assert res["predictions"][0]["ex-2"]["keep"] is False and res["technologies"][0]["pytest"]["mismatch"]["rule"].startswith("S2")
+
+
+def test_tier_diag_sets_and_scoring():
+    sets = evaluate.tier_diag_sets()
+    assert [(n, len(q), len(g)) for n, q, g in sets] == [("tier-screen v1", 34, 34), ("tier-screen v2", 15, 15)]
+    gold = {}
+    for _, q, g in sets:
+        gold.update(g)
+    by_name = {q.name: gold[i] for _, qs, _g_ in sets for i, q in qs}
+    out = evaluate.run_tier_diag(StubBackend(tiers=lambda q: sorted(by_name[q.name])), sets)
+    assert out["tier-screen v1"]["correct"] == 34 and out["tier-screen v2"]["correct"] == 15 and out["tier-screen v1"]["wrong"] == []
+    wrong = evaluate.run_tier_diag(StubBackend(tiers=lambda q: ["L6"]), sets)
+    assert wrong["tier-screen v1"]["correct"] == sum(1 for _, q, g in sets[:1] for i, _q in q if g[i] == {"L6"})
+
+
+def test_eval_cli_refuses_real_run_without_flag_and_plan_needs_no_api():
+    gold_path = str(REPO / "eval" / "importance" / "gold.example.json")
+    orig = evaluate.make_backend
+    evaluate.make_backend = lambda *a, **k: (_ for _ in ()).throw(AssertionError("백엔드를 만들었다"))
+    try:
+        assert evaluate.main(["--gold", gold_path, "--model", "gpt-6-luna", "--k", "3"]) == 2                     # 플래그 없이 거부
+        assert evaluate.main(["--gold", gold_path, "--model", "gpt-6.1-sol", "--k", "3"]) == 2
+        assert evaluate.main(["--gold", gold_path, "--model", "gpt-6-luna", "--k", "3", "--plan"]) == 0           # 계획은 API 없이
+        pl = evaluate.plan(evaluate.load_gold(gold_path), 3, evaluate.tier_diag_sets())
+        assert pl["per_run"] == {"tier_calls": 4, "change_calls": 5, "tier_diag_calls": 49} and pl["total_calls"] == 58 * 3
+        assert evaluate.plan(evaluate.load_gold(gold_path), 3, None)["total_calls"] == 9 * 3
+    finally:
+        evaluate.make_backend = orig
+    with tempfile.TemporaryDirectory() as d:
+        assert evaluate.main(["--gold", gold_path, "--model", "stub", "--k", "1", "--no-tier-diag", "--out", d]) == 0   # 스모크는 0
+        s = json.loads((Path(d) / "summary.json").read_text(encoding="utf-8"))
+        assert s["model"] == "stub" and s["judgement"]["smoke"] and s["calls"]["model_calls"] == 9 and (Path(d) / "calls.jsonl").exists()
+
+
+def test_calllog_file_and_totals():
+    with tempfile.TemporaryDirectory() as d:
+        log = CallLog(Path(d) / "x" / "calls.jsonl")
+        log.add({"flow": "a", "model": "m", "input_tokens": 3, "output_tokens": 1, "cost_usd": 0.5})
+        log.add({"flow": "b", "model": "m", "input_tokens": 1, "output_tokens": 1, "cost_usd": None, "error": "E"})
+        rows = [json.loads(x) for x in (Path(d) / "x" / "calls.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert [r["seq"] for r in rows] == [1, 2] and rows[0]["type"] == "llm_call"
+        assert log.totals() == {"model_calls": 2, "errors": 1, "input_tokens": 4, "output_tokens": 2, "cost_usd": 0.5, "unpriced_calls": 1}
+
+
+# ---------------------------------------------------------------- 변이 검사 (규율 3)
+
+class Mutation:
+    def __init__(self, target, name, value):
+        self.target, self.name, self.value = target, name, value
+
+    def __enter__(self):
+        self.old = getattr(self.target, self.name)
+        setattr(self.target, self.name, self.value)
+
+    def __exit__(self, *exc):
+        setattr(self.target, self.name, self.old)
+
+
+_ORIG_DECIDE, _ORIG_CELL, _ORIG_JUDGE = policy.decide, policy.cell, evaluate.judge
+
+
+def _first_tier_only(tiers_, changes, ctx=None):
+    return _ORIG_DECIDE(tiers_[:1], changes, ctx)
+
+
+def _ignore_context(tier, change, ctx=None):
+    return _ORIG_CELL(tier, change, None)
+
+
+def _judge_first_run_only(runs, k_required=evaluate.K_REQUIRED):
+    j = _ORIG_JUDGE(runs, k_required)
+    j["C1"]["pass"] = runs[-1]["c1_miss_count"] <= 0        # 마지막 실행 하나만 본다
+    j["pass"] = None if j["smoke"] else (j["C1"]["pass"] and j["C2"]["pass"] and j["C3"]["pass"])
+    return j
+
+
+def _judge_mean_c1(runs, k_required=evaluate.K_REQUIRED):
+    j = _ORIG_JUDGE(runs, k_required)
+    j["C1"]["pass"] = sum(r["c1_miss_count"] for r in runs) / len(runs) < 1      # 평균으로 보면 한 번 놓친 것이 묻힌다
+    j["pass"] = None if j["smoke"] else (j["C1"]["pass"] and j["C2"]["pass"] and j["C3"]["pass"])
+    return j
+
+
+def _trust_model(model_tiers, model_unsure, signals_):
+    return {"tiers": list(model_tiers), "unresolved": not model_tiers, "path": "prod", "pin": (signals_ or {}).get("pin"), "mismatch": None}
+
+
+def _ignore_overrides(self, name):
+    rec = self.get(name)
+    return None if rec is None else {**rec, "sensitive": rec.get("sensitive", False), "local": rec.get("local", False)}
+
+
+def _severity_first(entry):
+    kb = entry["kept_by"]
+    return (min(policy.severity(r["change"]) for r in kb), min(policy.tier_rank(r["tier"]) for r in kb), str(entry.get("id", "")))
+
+
+def _widened_table():
+    t = {k: dict(v) for k, v in policy.TABLE.items()}
+    t["L2"]["model_retirement"] = N
+    return t
+
+
+_ORIG_SCORE = evaluate.score_run
+
+
+def _score_status_ignored(preds, gold_items):
+    """오류·분류 불가 상태를 무시하고 keep 값만 본다."""
+    fixed = {k: {**v, "status": "ok"} for k, v in preds.items()}
+    for it in gold_items:
+        fixed.setdefault(it["id"], {"keep": False, "status": "ok", "changes": []})
+    return _ORIG_SCORE(fixed, gold_items)
+
+
+def mutations():
+    return [
+        ("두 등급인데 첫 등급 행만 적용", [(policy, "decide", _first_tier_only)], test_two_tiers_any_row_keeps_and_records_which),
+        ("두 등급인데 첫 등급 행만 적용 (관문)", [(policy, "decide", _first_tier_only)], test_lane_a_gate_wiring_and_cap),
+        ("모델 은퇴 ✅를 ❌로", [(policy, "TABLE", _widened_table())], test_every_cell_default_context),
+        ("모델 은퇴 ✅를 ❌로 (문서 대조)", [(policy, "TABLE", _widened_table())], test_table_matches_policy_doc),
+        ("보정 축(경로·고정·민감)을 무시", [(policy, "cell", _ignore_context)], test_adjustments),
+        ("C1을 k번 중 마지막 하나만 봄", [(evaluate, "judge", _judge_first_run_only)], test_judge_pass_k_and_thresholds),
+        ("C1을 평균으로 봄", [(evaluate, "judge", _judge_mean_c1)], test_judge_pass_k_and_thresholds),
+        ("스크립트 검증 무시 (모델을 그대로)", [(tiers, "verify", _trust_model)], test_store_classify_applies_script_and_records_mismatch),
+        ("스크립트 검증 무시 (평가 흐름)", [(tiers, "verify", _trust_model)], test_evaluate_end_to_end_with_stub_oracle),
+        ("사람 수정 무시", [(TierStore, "effective", _ignore_overrides)], test_store_reuse_fingerprint_and_human_override),
+        ("상한 정렬: 심각도 먼저", [(policy, "rank_key", _severity_first)], test_cap_order_and_log),
+        ("채점이 오류·분류 불가 상태를 무시", [(evaluate, "score_run", _score_status_ignored)], test_score_run_by_hand),
+        ("허용 호스트를 넓힘", [(agents_backend, "ALLOWED_HOSTS", {"api.openai.com", "telemetry.example.invalid"})], test_netguard_blocks_outside_api_openai_and_stops_without_retry),
+    ]
+
+
+def run_mutations():
+    missed = 0
+    for name, patches, test in mutations():
+        ctxs = [Mutation(t, n, v) for t, n, v in patches]
+        for c in ctxs:
+            c.__enter__()
+        try:
+            test()
+            caught = False
+        except Exception:  # noqa: BLE001 — 망가뜨린 코드에서 테스트가 어떤 식으로든 빨개지면 잡힌 것이다
+            caught = True
+        finally:
+            for c in reversed(ctxs):
+                c.__exit__()
+        print(f"  {'잡힘' if caught else '놓침 !!'}  변이: {name}  ({test.__name__})")
+        missed += 0 if caught else 1
+    return missed
+
+
+def main():
+    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
+    bad = 0
+    for n, f in tests:
+        try:
+            f()
+            print(f"  ok   {n}")
+        except Exception:  # noqa: BLE001
+            bad += 1
+            print(f"  FAIL {n}")
+            traceback.print_exc()
+    print(f"{len(tests) - bad}/{len(tests)} 통과")
+    if bad:
+        return 1
+    print("변이 검사 — 망가뜨린 코드를 테스트가 잡아야 한다")
+    missed = run_mutations()
+    print(f"변이 {len(mutations())}개 중 {len(mutations()) - missed}개 잡힘")
+    return 1 if missed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
