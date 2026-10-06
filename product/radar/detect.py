@@ -106,7 +106,7 @@ def detect_graph(ctx, model):
             ctx.calls += 1
             item_id = hitl.new_item_id(ctx, "detect", cand["technology"])  # 별도 파일은 초안 파일을 쓰는 순간에 생긴다 (설계 §3-1)
             res = hitl.write_adr(ctx, item_id, "detect", AdrDraft.model_validate(body), lifecycle="REVIEW_CANDIDATE",
-                                 final_lifecycle="REVIEW_CANDIDATE", by="graph")
+                                 final_lifecycle="REVIEW_CANDIDATE", by="graph", hold_export=True)  # 내보내기를 켰으면 Inbox 검토까지 로컬에 둔다 (결정 8)
             written.append({"candidate": cand, "w": w, "body": d["draft"], "id": res["id"], "path": res["written"], "item": item_id,
                             "validate_errors": res["validate_errors"], "repaired": False})
         return {"written": written}

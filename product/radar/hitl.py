@@ -8,17 +8,20 @@
   결정 4  쓰기: 번호 → 별도 파일에 의도 → ADR 파일 + validate → 완료 (write-ahead). 각 단계 뒤 파일을 닫는다
   결정 5  thread_id = item-id (capture.py)
   결정 6  edit: 고친 초안도 validate를 지난다 — 실패하면 쓰지 않고 오류를 돌려준다. status·번호는 못 바꾼다
+  결정 7  지문 A′ = docs/adr/*.md 전체(기록용 칸 제외) + 대상 repo CLAUDE.md의 스택 절. `RADAR_FINGERPRINT=related`로 B′(관련만)로 끈다
+  결정 8  내보내기 = 승인하면 main에 바로 커밋·push (export.py). detect 초안은 Inbox 검토(`review_item`) 뒤에 내보낸다. eval·dry-run은 no-op
 
-**Q2(지문에 무엇을 넣나)는 미정이다 — 사용자가 다음 대화에서 정한다.** `Fingerprint` 인터페이스 뒤에 두 구현을 두고
-기본값은 (A) `RepoHashFingerprint`(docs/adr 파일 해시 전체)다. (B) `RelatedMatchFingerprint`는 정해지면 바꿔 끼운다.
-**Q3(git 내보내기)도 미정이다** — 로컬 파일 쓰기까지만 하고 `Exporter` 자리(no-op)만 둔다.
+지문은 `Fingerprint` 인터페이스 뒤에 있다. 기본값은 A′(`all`)이고, 원래의 (A) `repo_hash`·(B) `related_match`는 기록용 칸에 반응해서
+기각됐다 (결정 7) — 이미 저장된 지문을 읽는 호환용으로만 남겼다.
 """
 
 import abc
+import copy
 import dataclasses
 import datetime as dt
 import glob
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -31,6 +34,8 @@ from pydantic import ValidationError
 from common import ops
 from common.core import radar
 from common.schemas import AdrDraft
+
+from .export import Exporter, GitExporter
 
 ITEM_KINDS = ("capture", "detect", "experiment")
 ITEM_ID = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
@@ -153,13 +158,17 @@ def _event(ctx, **kw):
     return {"at": _now(ctx), **kw}
 
 
-# ── 지문 (결정 3) — Q2 미정: 사용자가 다음 대화에서 정한다 ─────────────────
+# ── 지문 (결정 3 · 7) ────────────────────────────────────────────────
 
 _FM = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.S)
 
 
-def _adr_files(ctx):
-    return sorted(glob.glob(os.path.join(os.path.abspath(ctx.adr_dir), "*.md")))
+def _adr_files(ctx, world=True):
+    """docs/adr/*.md. world=True면 「아직 내보내지 않은 로컬 초안」(검토 대기·내보내기 보류 항목의 ADR)을 뺀다 — 지문이 보는 세상은
+    main에 있는 ADR이다. 그 초안들은 사람이 검토하면 들어오거나 지워지는 것이라 세상의 변화가 아니다 (아니면 detect 초안 하나를 reject할 때마다
+    나머지 초안이 헛경보를 낸다). 내보내기를 안 쓰는 흐름(eval·dry-run)에는 보류 항목이 없어 달라지는 것이 없다."""
+    skip = pending_names(ctx) if world else set()
+    return sorted(p for p in glob.glob(os.path.join(os.path.abspath(ctx.adr_dir), "*.md")) if os.path.basename(p) not in skip)
 
 
 def _file_meta(path):
@@ -210,8 +219,8 @@ def _file_diff(old, new, names=None):
 
 
 class RepoHashFingerprint(Fingerprint):
-    """(A) ADR repo 전체 해시 — docs/adr/*.md 파일 해시 전부. git이 없어도 된다.
-    무엇이든 바뀌면 다르다고 한다: 빠뜨리는 변화는 없지만 무관한 변화에도 다시 묻는다. 기본값 (Q2 미정)."""
+    """(A) ADR repo 전체 해시 — docs/adr/*.md 파일 해시 전부. **기각 (결정 7)** — 기록용 칸(revisit_last_checked)에도 반응해서 매주 헛경보를 낸다.
+    이미 저장된 지문의 비교를 위해서만 남겼다 (check_resume은 저장된 impl 이름으로 구현을 고른다)."""
     name = "repo_hash"
 
     def compute(self, ctx, scope):
@@ -228,8 +237,8 @@ class RepoHashFingerprint(Fingerprint):
 
 
 class RelatedMatchFingerprint(Fingerprint):
-    """(B) 관련 ADR 파일 해시 + 같은 기술 `radar.py match` 결과.
-    관련 = 초안이 적은 관련 ADR + match가 돌려준 exact·overlap·related. 필요한 것만 다시 묻지만 「관련」의 정의에 기댄다."""
+    """(B) 관련 ADR 파일 해시 + 같은 기술 `radar.py match` 결과. **기각 (결정 7)** — (A)와 같은 이유. B′(`RelatedFingerprint`)가 이어받았다.
+    관련 = 초안이 적은 관련 ADR + match가 돌려준 exact·overlap·related."""
     name = "related_match"
 
     def _match(self, ctx, scope):
@@ -265,11 +274,225 @@ class RelatedMatchFingerprint(Fingerprint):
         return lines
 
 
-FINGERPRINTS = {f.name: f for f in (RepoHashFingerprint(), RelatedMatchFingerprint())}
-DEFAULT_FINGERPRINT = "repo_hash"  # Q2 미정 — 사용자가 다음 대화에서 정한다. 바꾸려면 이 한 줄 (또는 환경변수 RADAR_FINGERPRINT)
+# ── 기록용 칸 (결정 7) ────────────────────────────────────────────────
+# 지문에서 뺀다 — 기계가 쓰는 칸이 바뀐 것을 「세상이 바뀌었다」로 읽으면 매주 월요일 revisit routine이 대기 중인 모든 항목을
+# 의미 없이 다시 승인하게 만들고, 사람은 「계속」을 습관적으로 누르게 된다 (설계 §4-1).
+#
+# 스킬·radar.py가 자동으로 쓰는 칸을 전부 찾은 결과 (2026-10-06, `.claude/skills/jhs-decisions/`):
+#   - `revisit_last_checked` (최상위 칸 전체) — radar.py `write_updates`(scripts/radar.py:367-385)만 쓴다. `cmd_apply`(:361)·`cmd_decide --apply`(:357)가
+#     부르고, 다른 칸은 건드리지 않는다(:380 이 칸만 갈아 끼우고 :381 `assert status 불변`, R8). schema.md:29·:49가 「재검토 루프만 쓴다. 사람은 손대지
+#     않아도 된다」·「radar.py apply만 쓴다」, SKILL.md:22 「revisit_last_checked는 radar.py만 쓴다」.
+#   - 그 칸의 항목 안 `checked_at`·`result`·`reason`·`evidence_urls`·`condition_id`·`last_determined` — radar.py:320-322(`cmd_decide`의 entry)·:343-344
+#     (결과 누락 채움). 칸 전체를 빼므로 따로 빼지 않아도 되지만, `last_determined`는 어디에 나타나든 뺀다 (재검토 조건 안에 들어가도 기록용 — 방어).
+#   - 그 밖에 스킬이 ADR 파일에 자동으로 쓰는 칸은 없다 (radar.py의 쓰기는 write_updates와 next-id 예약 파일뿐; 초안은 ops.render가 새 파일로 만든다).
+# 사람이 쓰는 칸은 넣는다: status · technology · use · affected · evidence · eval_assets · revisit_when(조건 본문) · date · 본문 텍스트.
+# `date`는 초안을 만들 때 한 번 쓰고(ops.render) 그 뒤 기계가 바꾸지 않는다 — 사람 칸으로 본다.
+# 새 기록용 칸이 생기면 스킬 schema.md와 함께 이 목록을 본다 — 빠뜨리면 그 칸의 변화가 매번 「세상이 바뀌었다」가 된다.
+MACHINE_FIELDS = ("revisit_last_checked",)
+MACHINE_KEYS_ANYWHERE = ("last_determined",)
+
+
+def _strip_machine(obj, top=True):
+    """기록용 칸을 뺀 사본. 최상위에서는 MACHINE_FIELDS, 어디서든 MACHINE_KEYS_ANYWHERE."""
+    if isinstance(obj, dict):
+        return {k: _strip_machine(v, False) for k, v in obj.items()
+                if k not in MACHINE_KEYS_ANYWHERE and not (top and k in MACHINE_FIELDS)}  # MUT:machine
+    if isinstance(obj, list):
+        return [_strip_machine(v, False) for v in obj]
+    return obj
+
+
+def _canon(obj):
+    return json.dumps(obj, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _h12(obj):
+    return sha(_canon(obj))[:12]
+
+
+def _scalar(v):
+    return v is None or isinstance(v, (str, int, float, bool)) or hasattr(v, "isoformat")
+
+
+def adr_digest(path):
+    """ADR 한 파일의 지문 조각 — 기록용 칸을 뺀 프론트매터와 본문을 정규화해 해시한다.
+    프론트매터는 파싱한 값으로 비교한다 (radar.py가 `yaml.safe_dump`로 다시 쓰면 줄 모양이 바뀌므로 글자 비교는 헛경보다).
+    {"hash", "fm": {칸: 값(스칼라) | 해시(그 밖)}, "cond": {조건 id: 해시}, "body": 해시}."""
+    text = open(path, "rb").read().decode("utf-8", "replace").replace("\r\n", "\n")
+    m = _FM.match(text)
+    try:
+        fm = (yaml.safe_load(m.group(1)) or {}) if m else None
+    except yaml.YAMLError:
+        fm = None
+    if not isinstance(fm, dict):  # 프론트매터가 없거나 깨졌다 — 파일 전체를 본문으로 본다
+        return {"hash": sha(text), "fm": {}, "cond": {}, "body": sha(text)}
+    fm = _strip_machine(fm)
+    body = text[m.end():]
+    detail = {k: (str(v) if _scalar(v) else _h12(v)) for k, v in fm.items() if k != "revisit_when"}
+    cond = {}
+    for i, c in enumerate(fm.get("revisit_when") or []):
+        cond[str(c.get("id", i)) if isinstance(c, dict) else str(i)] = _h12(c)
+    return {"hash": sha(_canon({"fm": fm, "body": body})), "fm": detail, "cond": cond, "body": sha(body)[:12]}
+
+
+def _adr_part(ctx, names=None):
+    files, detail = {}, {}
+    for p in _adr_files(ctx):
+        n = os.path.basename(p)
+        if names is None or n in names:
+            d = adr_digest(p)
+            files[n], detail[n] = d["hash"], {k: d[k] for k in ("fm", "cond", "body")}
+    return files, detail
+
+
+def _adr_diff(old, new, names=None):
+    of, nf = old.get("files", {}), new.get("files", {})
+    od, nd = old.get("detail", {}), new.get("detail", {})
+    lines = []
+    for n in sorted(set(of) | set(nf)):
+        if names is not None and n not in names:
+            continue
+        if n not in of:
+            fm = nd.get(n, {}).get("fm", {})
+            lines.append(f"새 ADR {n} (technology: {fm.get('technology')}, status: {fm.get('status')})")
+        elif n not in nf:
+            lines.append(f"ADR {n}이 사라졌다")
+        elif of[n] != nf[n]:
+            a, b = od.get(n, {}), nd.get(n, {})
+            sub = []
+            for k in sorted(set(a.get("fm", {})) | set(b.get("fm", {}))):
+                x, y = a.get("fm", {}).get(k), b.get("fm", {}).get(k)
+                if x != y:
+                    sub.append(f"{k}: {x} → {y}" if (k in ("status", "technology", "use", "date") and x is not None and y is not None) else f"{k} 칸이 바뀌었다")
+            ac, bc = a.get("cond", {}), b.get("cond", {})
+            for c in sorted(set(ac) | set(bc)):
+                if c not in ac:
+                    sub.append(f"재검토 조건 {c} 추가")
+                elif c not in bc:
+                    sub.append(f"재검토 조건 {c} 삭제")
+                elif ac[c] != bc[c]:
+                    sub.append(f"재검토 조건 {c} 바뀜")
+            if a.get("body") != b.get("body"):
+                sub.append("본문이 바뀌었다")
+            lines.append(f"ADR {n[:4]} ({n}) " + "; ".join(sub or ["내용이 바뀌었다"]))
+    return lines
+
+
+# ── 대상 repo CLAUDE.md의 스택 절 (결정 7) ───────────────────────────────
+# 초안의 `affected`가 「의존성 → component」 매핑에서 나오므로, 대기 중에 대상 repo 의존성이 바뀌면 초안이 낡는다.
+# 절 찾는 규칙은 collector/sources/vendor.py `services_from_claude_md`·github.py `dependencies_from_claude_md`와 같다 —
+# 제목에 「외부 모델」 / 「의존성」이 들어간 절. 다만 그 함수들은 첫 열 이름만 돌려줘 component 열(매핑)을 버리고, product에서 collector를
+# import하지 않으므로 같은 규칙으로 행 전체를 읽는 이 함수를 따로 둔다 (같은 이름이 나오는지는 test_hitl이 collector 함수와 맞춰 본다).
+
+STACK_SECTIONS = (("deps", "의존성"), ("services", "외부 모델"))
+_HEAD = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
+
+
+def stack_rows(text):
+    """{"deps": [행…], "services": [행…]} — 절 안의 비지 않은 줄(공백 정리, 표 구분선 제외). 절이 없으면 빈 목록."""
+    out = {k: [] for k, _ in STACK_SECTIONS}
+    cur, level = None, 0
+    for line in text.replace("\r\n", "\n").split("\n"):
+        h = _HEAD.match(line)
+        if h:
+            lv, title = len(h.group(1)), h.group(2)
+            if cur is not None and lv <= level:
+                cur = None
+            if cur is None:
+                cur = next((k for k, mark in STACK_SECTIONS if mark in title), None)
+                level = lv if cur else 0
+            continue
+        if cur is None:
+            continue
+        row = re.sub(r"\s+", " ", line.strip())
+        if row and not set(row) <= set("|-: "):
+            out[cur].append(row)
+    return out
+
+
+def _stack_part(ctx, repos=None):
+    """{repo: {"deps": […], "services": […]} | {"missing": True}} — repos가 None이면 대상 repo 전부."""
+    out = {}
+    for repo in sorted(ctx.targets):
+        if repos is not None and repo not in repos:
+            continue
+        p = os.path.join(ctx.targets[repo], "CLAUDE.md")
+        out[repo] = stack_rows(open(p, encoding="utf-8").read()) if os.path.exists(p) else {"missing": True}
+    return out
+
+
+def _stack_diff(old, new):
+    lines = []
+    for repo in sorted(set(old) | set(new)):
+        a, b = old.get(repo), new.get(repo)
+        if a == b:
+            continue
+        if a is None or b is None:
+            lines.append(f"대상 repo {repo}가 {'목록에 새로 들어왔다' if a is None else '목록에서 빠졌다'}")
+            continue
+        if a.get("missing") or b.get("missing"):
+            lines.append(f"대상 repo {repo}의 CLAUDE.md가 {'생겼다' if a.get('missing') else '사라졌다'}")
+            continue
+        for k, label in (("deps", "의존성 → component"), ("services", "외부 모델·서비스")):
+            ra, rb = a.get(k, []), b.get(k, [])
+            if ra != rb:
+                add, rem = [r for r in rb if r not in ra], [r for r in ra if r not in rb]
+                parts = [f"추가 {add}" if add else "", f"삭제 {rem}" if rem else "", "" if add or rem else "순서만 바뀜"]
+                lines.append(f"{repo} CLAUDE.md 「{label}」: " + "; ".join(x for x in parts if x))
+    return lines
+
+
+class AllFingerprint(Fingerprint):
+    """A′ (결정 7, 기본) — docs/adr/*.md 전체(기록용 칸 제외) + 대상 repo CLAUDE.md의 스택 절.
+    의미 있는 ADR 변화는 드물어서 무관한 변화에 다시 묻는 일이 드물고, 「관련」을 정의하지 않으니 놓치는 것이 없다.
+    기록용 칸(revisit_last_checked 등)만 바뀐 것은 같다고 본다."""
+    name = "all"
+
+    def compute(self, ctx, scope):
+        files, detail = _adr_part(ctx)
+        return {"impl": self.name, "files": files, "detail": detail, "stack": _stack_part(ctx)}
+
+    def same(self, old, new):
+        return (old.get("impl") == new.get("impl") and old.get("files") == new.get("files")
+                and old.get("stack") == new.get("stack"))  # MUT:stack
+
+    def diff(self, old, new):
+        return _adr_diff(old, new) + _stack_diff(old.get("stack", {}), new.get("stack", {}))
+
+
+class RelatedFingerprint(RelatedMatchFingerprint):
+    """B′ (결정 7의 끄는 스위치, `RADAR_FINGERPRINT=related`) — 관련 ADR(초안이 적은 것 + `radar.py match`) 해시 + match 결과 +
+    초안이 가리키는 대상 repo의 스택 절. (B)와 같되 기록용 칸을 뺀다. 필요한 것만 다시 묻지만 「관련」의 정의(문자열 동일성)에 기댄다.
+    스택 절은 (B)에 없던 것이다 — 초안의 affected가 거기서 나왔는데 B′가 그 변화를 못 보면 낡은 매핑을 말없이 저장한다."""
+    name = "related"
+
+    def compute(self, ctx, scope):
+        match = self._match(ctx, scope)
+        ids = set(scope.get("related") or []) | set(match["exact"]) | set(match["overlap"]) | set(match["related"])
+        files, detail = _adr_part(ctx, {os.path.basename(p) for p in _adr_files(ctx) if os.path.basename(p)[:4] in ids})
+        repos = {a["repo"] for a in scope.get("affected") or []}
+        return {"impl": self.name, "files": files, "detail": detail, "match": match, "stack": _stack_part(ctx, repos)}
+
+    def same(self, old, new):
+        return (old.get("impl") == new.get("impl") and old.get("files") == new.get("files") and old.get("match") == new.get("match")
+                and old.get("stack") == new.get("stack"))
+
+    def diff(self, old, new):
+        lines = _adr_diff(old, new)
+        for k, label in (("exact", "3중 키가 같은 ADR"), ("overlap", "같은 기술·component ADR"), ("related", "관련 ADR")):
+            a, b = set(old.get("match", {}).get(k, [])), set(new.get("match", {}).get(k, []))
+            if a != b:
+                lines.append(f"match {label}: {sorted(a)} → {sorted(b)}")
+        return lines + _stack_diff(old.get("stack", {}), new.get("stack", {}))
+
+
+FINGERPRINTS = {f.name: f for f in (AllFingerprint(), RelatedFingerprint(), RepoHashFingerprint(), RelatedMatchFingerprint())}
+DEFAULT_FINGERPRINT = "all"  # 결정 7. 바꾸려면 환경변수 RADAR_FINGERPRINT=all|related (거슬리면 related로 끈다)
 
 
 def fingerprint_for(ctx=None, name=None):
+    """지문 구현을 고른다 — 이름이 있으면 그것(저장된 지문의 impl), 없으면 환경변수 RADAR_FINGERPRINT(all|related), 없으면 기본 all(A′).
+    「많이 알려 주다가 거슬리면 끈다」(사용자): RADAR_FINGERPRINT=related로 B′(관련만)로 바꾼다."""
     name = name or ((ctx.env.get("RADAR_FINGERPRINT") if ctx is not None else None) or DEFAULT_FINGERPRINT)
     if name not in FINGERPRINTS:
         raise HitlError(f"모르는 지문 구현 {name!r} — {sorted(FINGERPRINTS)}")
@@ -317,16 +540,48 @@ class StateStore:
         self._run("DELETE FROM radar_hitl WHERE thread_id=?", (thread_id,))
 
 
-# ── git 내보내기 자리 (Q3 미정) ─────────────────────────────────────
-
-class Exporter:
-    """ADR 파일·별도 파일을 git으로 내보내는 자리. 기본은 아무것도 안 한다 — 승인 = 바로 커밋인지, 브랜치 + PR인지(Q3)는 사용자가 정한다."""
-
-    def export(self, ctx, paths, message):
-        return None
-
-
+# ── 내보내기 (결정 8, §5-2) ──────────────────────────────────────────
+# git 기계장치는 export.py. 여기는 「무엇을 언제 내보내나」다.
+#   capture  승인(approve·edit) → write-ahead로 로컬에 쓴 뒤 바로 내보낸다 (`_complete` → `export_item`)
+#   detect   초안은 로컬에 쓰고 항목을 검토 대기(USER_REVIEW, export.state=review)로 둔다 → 사람이 검토(`review_item`)하면
+#            approve는 내보내기, reject는 그 초안(아직 커밋 안 된 새 파일)을 지우고 항목을 닫는다
+#   eval·dry-run·스텁은 늘 no-op — `exporter_for`가 두 가지(RADAR_EXPORT=git · dry-run 아님)를 모두 요구하고, GitExporter도 dry-run이면 git을 안 부른다
+#
+# 항목 별도 파일의 `export` 칸 (내보내기를 쓸 때만 생긴다): {state: review|pending|stale|blocked|done|closed, …}
+#   review  검토 대기(detect)  pending  내보낼 차례  stale  재개 검사에서 세상이 달라졌다 — 사람의 답을 기다린다 (changes)
+#   blocked 막혔다(동기화·push 실패·번호 충돌·허용 목록 밖 …) — 사람에게 보인다  done  커밋·push 끝  closed  검토에서 거부·버림
+PENDING_EXPORT = ("review", "pending", "stale", "blocked")
 DEFAULT_EXPORTER = Exporter()
+
+
+def exporter_for(ctx):
+    """기본은 no-op. `RADAR_EXPORT=git`이고 dry-run이 아닐 때만 GitExporter — 실수로 켜지는 것을 막으려 둘 다 요구한다 (eval 러너는 RADAR_DRY_RUN=1).
+    RADAR_EXPORT_REMOTE·RADAR_EXPORT_BRANCH(기본 origin·main) · RADAR_GIT_NAME·RADAR_GIT_EMAIL(없으면 git 설정을 따른다)."""
+    if ctx.env.get("RADAR_EXPORT") == "git" and not ctx.dry_run:  # MUT:exporter_for
+        return GitExporter(repo_root(ctx), dry_run=ctx.dry_run, remote=ctx.env.get("RADAR_EXPORT_REMOTE") or "origin",
+                           branch=ctx.env.get("RADAR_EXPORT_BRANCH") or "main",
+                           identity={"name": ctx.env.get("RADAR_GIT_NAME"), "email": ctx.env.get("RADAR_GIT_EMAIL")})
+    return DEFAULT_EXPORTER
+
+
+def pending_names(ctx):
+    """아직 내보내지 않은 로컬 초안의 ADR 파일 이름 — 지문이 세상으로 보지 않는다 (`_adr_files`)."""
+    d, out = items_dir(ctx), set()
+    if not os.path.isdir(d):
+        return out
+    for f in os.listdir(d):
+        if not f.endswith(".yaml"):
+            continue
+        try:
+            it = yaml.safe_load(open(os.path.join(d, f), encoding="utf-8").read()) or {}
+        except (yaml.YAMLError, OSError):
+            continue
+        if not isinstance(it, dict):
+            continue
+        wi = it.get("write_intent") or {}
+        if (it.get("export") or {}).get("state") in PENDING_EXPORT and wi.get("path"):
+            out.add(os.path.basename(wi["path"]))
+    return out
 
 
 # ── write-ahead 쓰기 (결정 4) ────────────────────────────────────────
@@ -364,10 +619,12 @@ def _file_hash(path):
     return hashlib.sha256(open(path, "rb").read()).hexdigest()
 
 
-def _result(ctx, item, errs=None, recovery=None, blocked=None):
+def _result(ctx, item, errs=None, recovery=None, blocked=None, export=None):
     wi = item.get("write_intent") or {}
     out = {"written": _abs(ctx, wi["path"]) if wi and not blocked else None, "id": wi.get("adr"), "validate_errors": errs or [],
            "item": item["id"], "state": wi.get("state")}
+    if export is not None:
+        out["export"] = export
     if recovery:
         out["recovery"] = recovery
     if blocked:
@@ -376,6 +633,7 @@ def _result(ctx, item, errs=None, recovery=None, blocked=None):
 
 
 def _complete(ctx, item, errs, final_lifecycle, exporter, event="adr_written"):
+    """4. 완료를 적고, 내보내기를 쓰면 이어서 내보낸다. 내보내기 결과(없으면 None)를 돌려준다."""
     wi = item["write_intent"]
     wi["state"] = "done"
     wi.pop("content", None)  # 완료되면 본문은 ADR 파일에 있다 — 해시만 남긴다
@@ -384,22 +642,31 @@ def _complete(ctx, item, errs, final_lifecycle, exporter, event="adr_written"):
     else:
         wi.pop("validate_errors", None)
     item["adr"] = wi["adr"]
+    ex = exporter or exporter_for(ctx)
+    if ex.active and (item.get("export") or {}).get("state") is None:  # 내보내기를 켠 뒤에 회복되는 항목 — 내보낼 차례로 둔다
+        item["export"] = {"state": "pending"}
+    exp = (item.get("export") or {}).get("state")
+    deferred = exp in PENDING_EXPORT  # 내보내기가 남은 항목은 아직 끝난 것이 아니다 — 마지막 lifecycle은 커밋하는 순간에 쓴다
     ev = {"event": event, "adr": wi["adr"], "by": "graph"}
     if errs:
         ev["validate_errors"] = len(errs)
-    if final_lifecycle:
+    if final_lifecycle and not deferred:
         item["lifecycle"] = final_lifecycle
         ev["to"] = final_lifecycle
     item["history"].append(_event(ctx, **ev))
     save_item(ctx, item)  # 4. 완료
-    (exporter or DEFAULT_EXPORTER).export(ctx, [_abs(ctx, wi["path"]), item_path(ctx, item["id"])], f"{item['id']}: ADR {wi['adr']}")
+    if ex.active and exp in ("pending", "stale", "blocked"):  # review는 사람의 검토를 기다린다 (detect)
+        return export_item(ctx, item["id"], ex)
+    return {"state": "review"} if exp == "review" else None
 
 
 def write_adr(ctx, item_id, kind, draft, *, lifecycle="USER_REVIEW", final_lifecycle="DONE", by="human",
-              approval=None, after=None, exporter=None):
+              approval=None, after=None, exporter=None, hold_export=False):
     """승인된 초안을 쓴다 — 1 번호 → 2 별도 파일에 의도 → 3 ADR 파일 + validate → 4 완료. 각 단계 뒤 파일은 닫혀 있다.
 
     approval: {"decision": "approve"|"edit", "fingerprint": 승인 근거 지문, "draft_hash_original": edit 전 초안의 해시}.
+    내보내기를 켰으면(exporter_for) 승인된 쓰기가 끝나는 대로 main에 커밋·push한다 (결정 8). hold_export=True(detect)면 쓰기까지만 하고
+    항목을 검토 대기(USER_REVIEW · export.state=review)로 둔다 — 사람이 `review_item`으로 답하면 그때 내보내거나 지운다.
     이미 의도가 있으면 새로 쓰지 않고 회복한다 (그래프가 같은 도구 노드를 다시 돌려도 ADR이 두 개가 되지 않는다 — S3).
     """
     approval = approval or {}
@@ -409,6 +676,7 @@ def write_adr(ctx, item_id, kind, draft, *, lifecycle="USER_REVIEW", final_lifec
             return _result(ctx, item, recovery={"action": "already_done"})
         rec = recover(ctx, item_id, after=after, final_lifecycle=final_lifecycle, exporter=exporter)
         return rec["result"]
+    ex = exporter or exporter_for(ctx)
 
     nid = radar(ctx, "next-id", ctx.adr_dir)["next_id"]  # 1. 번호는 쓰는 이 순간에 정한다
     _hook(after, "number")
@@ -417,8 +685,15 @@ def write_adr(ctx, item_id, kind, draft, *, lifecycle="USER_REVIEW", final_lifec
     path = os.path.join(os.path.abspath(ctx.adr_dir), f"{nid}-{ops.slug(draft.technology)}.md")
 
     item = item or new_item(ctx, item_id, kind, lifecycle)
+    if hold_export and ex.active:
+        lifecycle = "USER_REVIEW"
     item["lifecycle"] = lifecycle
+    item["scope"] = scope_of(draft)  # 재개 검사(지문)가 「관련」을 정의하는 데 쓴다 — 내보낼 때 다시 읽는다
     item["fingerprint"] = approval.get("fingerprint")
+    if ex.active:
+        if item["fingerprint"] is None:  # 승인 근거 지문이 없는 흐름(detect) — 초안을 쓰는 지금의 세상이 근거다
+            item["fingerprint"] = fingerprint_for(ctx).compute(_quiet(ctx), item["scope"])
+        item["export"] = {"state": "review" if hold_export else "pending"}
     item["write_intent"] = {"adr": nid, "path": _rel(ctx, path), "content_hash": chash, "state": "intended", "content": content}
     ev = {"to": lifecycle, "by": by, "decision": approval.get("decision", "approve")}
     if approval.get("decision") == "edit":  # 모델 초안을 사람이 얼마나 고쳤나 — 초안 품질 지표 (§5-1)
@@ -433,9 +708,9 @@ def write_adr(ctx, item_id, kind, draft, *, lifecycle="USER_REVIEW", final_lifec
     errs = _validate(ctx, nid)
     _hook(after, "adr")
 
-    _complete(ctx, item, errs, final_lifecycle, exporter)
+    exp = _complete(ctx, item, errs, final_lifecycle, ex)
     _hook(after, "done")
-    return _result(ctx, item, errs)
+    return _result(ctx, item, errs, export=exp)
 
 
 def _block(ctx, item, reason, **detail):
@@ -466,8 +741,8 @@ def recover(ctx, item_id, *, after=None, final_lifecycle="DONE", exporter=None):
         found = _file_hash(path)
         if found == wi["content_hash"]:  # 3과 4 사이: 우리가 쓴 그대로 — 완료만 적는다
             errs = _validate(ctx, wi["adr"])
-            _complete(ctx, item, errs, final_lifecycle, exporter, event="adr_confirmed")
-            return {"action": "completed", "result": _result(ctx, item, errs, recovery={"action": "completed"})}
+            exp = _complete(ctx, item, errs, final_lifecycle, exporter, event="adr_confirmed")
+            return {"action": "completed", "result": _result(ctx, item, errs, recovery={"action": "completed"}, export=exp)}
         # 3과 4 사이, 해시 다름: 사람이 고친 것이다 → 덮지 않고 보인다 (결정 1)
         return _block(ctx, item, "hash_differs", path=wi["path"], expected_hash=wi["content_hash"], found_hash=found)
 
@@ -486,9 +761,9 @@ def recover(ctx, item_id, *, after=None, final_lifecycle="DONE", exporter=None):
     _create_adr_file(ctx, path, wi["content"])  # 2와 3 사이: 쓴다
     errs = _validate(ctx, wi["adr"])
     _hook(after, "adr")
-    _complete(ctx, item, errs, final_lifecycle, exporter)
+    exp = _complete(ctx, item, errs, final_lifecycle, exporter)
     _hook(after, "done")
-    return {"action": action, "result": _result(ctx, item, errs, recovery={"action": action})}
+    return {"action": action, "result": _result(ctx, item, errs, recovery={"action": action}, export=exp)}
 
 
 def rewrite_adr(ctx, item_id, adr_id, draft, *, after=None):
@@ -582,7 +857,7 @@ def check_edit(ctx, edited):
     nid = radar(q, "next-id", q.adr_dir)["next_id"]
     tmp = tempfile.mkdtemp(prefix="radar-edit-", dir=ctx.env.get("TMP") or ctx.env.get("TEMP") or None)
     try:
-        for p in _adr_files(ctx):
+        for p in _adr_files(ctx, world=False):
             shutil.copy(p, tmp)
         with open(os.path.join(tmp, f"{nid}-{ops.slug(draft.technology)}.md"), "w", encoding="utf-8", newline="\n") as f:
             f.write(ops.render(draft, ctx.now))
@@ -591,3 +866,160 @@ def check_edit(ctx, edited):
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return (None, [f"validate: {e}" for e in verr]) if verr else (draft, [])
+
+
+# ── 내보내기 흐름 (결정 8, §5-2) ─────────────────────────────────────
+
+def _hold(ctx, item, state, kind, reason, **detail):
+    """내보내기가 멈췄다 — 별도 파일에 상태와 이유를 남겨 사람에게 보인다 (ADR 파일은 건드리지 않는다). 처음 멈춘 시각(since)은 유지한다."""
+    prev = item.get("export") or {}
+    since = prev.get("since") if prev.get("state") == state else None
+    item["export"] = {"state": state, "since": since or _now(ctx), **detail}
+    item["attention"] = {"kind": kind, "reason": reason, "since": item["export"]["since"], **detail}
+    item["history"].append(_event(ctx, event=f"export_{state}", reason=reason, by="graph"))
+    save_item(ctx, item)
+
+
+def _stale_info(ctx, item):
+    """재개 검사 — 승인 근거 지문과 지금 세상(내보내지 않은 로컬 초안 제외)을 비교한다. 같으면 None."""
+    old = item.get("fingerprint")
+    fp = fingerprint_for(ctx, (old or {}).get("impl"))
+    new = fp.compute(_quiet(ctx), item.get("scope") or {})
+    if old is not None and fp.same(old, new):  # MUT:recheck_same
+        return None
+    changes = fp.diff(old, new) if old is not None else ["승인 근거 지문이 없다 — 무엇이 바뀌었는지 비교할 수 없다"]
+    return {"state": "stale", "changes": changes, "new_fp": new}
+
+
+def export_item(ctx, item_id, exporter=None, *, answer=None):
+    """쓰기가 끝난 항목의 ADR 파일 + 별도 파일을 커밋 1개로 main에 내보낸다. 돌려주는 state:
+      exported 커밋·push 끝 · stale 원격이 앞서 있었고(또는 대기 중에) 세상이 달라졌다 — 커밋하지 않았다, `changes`를 보이고 사람의 답을 기다린다
+      blocked 막혔다(reason) · skipped 내보내기가 꺼져 있다(no-op) · already_exported
+    answer="continue"는 stale을 알고 넘기겠다는 사람의 답이다 — 그때의 세상이 승인 근거가 된다 (그 사이 또 바뀌면 다시 묻는다)."""
+    ex = exporter or exporter_for(ctx)
+    if not ex.active:
+        return {"state": "skipped", "reason": "no_exporter"}
+    item = read_item(ctx, item_id)
+    wi = (item or {}).get("write_intent")
+    if not item or not wi or wi["state"] != "done":
+        raise HitlError(f"{item_id}: 쓰기가 끝난 항목이 아니다 — 내보낼 것이 없다")
+    if (item.get("export") or {}).get("state") == "done":
+        return {"state": "already_exported", "item": item_id}
+    adr_path = _abs(ctx, wi["path"])
+    if not os.path.exists(adr_path) or _file_hash(adr_path) != wi["content_hash"]:  # 결정 1 — 사람이 고쳤거나 사라진 파일을 덮어 커밋하지 않는다
+        found = _file_hash(adr_path) if os.path.exists(adr_path) else None
+        _hold(ctx, item, "blocked", "export_blocked", "hash_differs" if found else "adr_missing", path=wi["path"], expected_hash=wi["content_hash"], found_hash=found)
+        return {"state": "blocked", "reason": "hash_differs" if found else "adr_missing", "item": item_id}
+
+    snap = copy.deepcopy(item)
+    accepted = {"fp": None}
+    paths = [wi["path"], _rel(ctx, item_path(ctx, item_id))]
+
+    def check():
+        taken = [os.path.basename(f) for f in _id_files(ctx, wi["adr"]) if f != adr_path]
+        if taken:  # 그 사이 같은 번호의 다른 ADR이 들어왔다 — 중복 번호를 커밋하지 않는다
+            return {"state": "blocked", "reason": "number_taken", "files": taken}
+        info = _stale_info(ctx, item)
+        if info is None:
+            return None
+        if answer == "continue" and accepted["fp"] in (None, info["new_fp"]):
+            accepted["fp"] = info["new_fp"]
+            return None
+        return info
+
+    def before():
+        if accepted["fp"] is not None:
+            item["fingerprint"] = accepted["fp"]
+            item["history"].append(_event(ctx, event="stale_accepted", by="human"))
+        item["lifecycle"] = "DONE"
+        item["export"] = {"state": "done"}
+        item.pop("attention", None)
+        item["history"].append(_event(ctx, event="exported", adr=wi["adr"], by="graph"))
+        save_item(ctx, item)
+
+    def undo():  # push가 경합으로 거부돼 커밋을 취소했다 — 별도 파일도 커밋 전 상태로
+        item.clear()
+        item.update(copy.deepcopy(snap))
+        save_item(ctx, item)
+
+    msg = f"{item_id}: ADR {wi['adr']} 추가\n\nitem: {item_id}\nkind: {item.get('kind')}\nadr: {wi['adr']}\n"
+    res = ex.publish(paths, msg, check=check, before=before, undo=undo)
+    res = {k: v for k, v in res.items() if k != "new_fp"}
+    if res["state"] == "stale":
+        _hold(ctx, item, "stale", "export_stale", "원격에 사람의 변경이 들어와 세상이 달라졌다 — 계속·다시 판정·버림", changes=res["changes"])
+    elif res["state"] == "blocked":
+        _hold(ctx, item, "blocked", "export_blocked", res.get("reason", "blocked"),
+              **{k: v for k, v in res.items() if k not in ("state", "reason")})
+    return {**res, "item": item_id, "adr": wi["adr"]}
+
+
+def review_item(ctx, item_id, decision, *, stale_answer=None, exporter=None):
+    """검토 대기·내보내기 보류 항목에 사람의 답을 넣는다 (웹 Inbox HYO-51 전의 입구 — review.py가 부른다).
+      approve  내보낸다. 재개 검사에서 달라졌으면 changes를 돌려주고 멈춘다 — stale_answer: continue | rejudge | discard
+      reject   ADR 초안(아직 커밋 안 된 새 파일)을 지우고 항목을 닫는다 (닫힌 기록은 별도 파일로 커밋한다)"""
+    ex = exporter or exporter_for(ctx)
+    if not ex.active:
+        raise HitlError("내보내기가 꺼져 있다 (RADAR_EXPORT=git · dry-run 아님이 필요하다) — 검토 답을 반영하지 않았다")
+    if decision not in ("approve", "reject"):
+        raise HitlError(f"모르는 답 {decision!r} — approve | reject")
+    if stale_answer not in (None, *STALE_ANSWERS):
+        raise HitlError(f"모르는 stale 답 {stale_answer!r}")
+    item = read_item(ctx, item_id)
+    if item is None:
+        raise HitlError(f"{item_id}: 별도 파일이 없다")
+    st = (item.get("export") or {}).get("state")
+    if st not in PENDING_EXPORT:
+        raise HitlError(f"{item_id}: 검토 대기 항목이 아니다 (export.state={st})")
+    if decision == "reject":
+        return _discard_draft(ctx, item, ex, "reject")
+    if stale_answer in ("rejudge", "discard"):
+        return _discard_draft(ctx, item, ex, stale_answer)
+    return export_item(ctx, item_id, ex, answer=stale_answer)
+
+
+def _discard_draft(ctx, item, ex, reason):
+    """초안을 버리고 항목을 닫는다. 이미 커밋된 파일은 지우지 않고(= 기존 ADR을 건드리지 않는다), 사람이 고친 파일도 덮어 지우지 않는다."""
+    wi = item.get("write_intent") or {}
+    rel = wi.get("path")
+    path = _abs(ctx, rel) if rel else None
+    if path and os.path.exists(path):
+        if ex.is_tracked(rel):
+            raise HitlError(f"{item['id']}: {rel}은 이미 커밋된 파일이다 — 지우지 않았다 (되돌리기는 git revert)")
+        if _file_hash(path) != wi.get("content_hash"):
+            _hold(ctx, item, "blocked", "export_blocked", "hash_differs", path=rel, expected_hash=wi.get("content_hash"), found_hash=_file_hash(path))
+            return {"state": "blocked", "reason": "hash_differs", "item": item["id"]}
+        os.remove(path)
+    item["lifecycle"] = "CLOSED"
+    item["export"] = {"state": "closed", "reason": reason}
+    item.pop("attention", None)
+    item["history"].append(_event(ctx, to="CLOSED", reason=reason, by="human"))
+    save_item(ctx, item)
+    res = ex.publish([_rel(ctx, item_path(ctx, item["id"]))], f"{item['id']}: 검토 {reason} — ADR {wi.get('adr')} 초안 폐기\n\nitem: {item['id']}\n")
+    return {**res, "outcome": reason, "item": item["id"], "adr": wi.get("adr")}
+
+
+def sync_exporter(ctx, exporter=None):
+    """재개 전에 원격을 따라잡는다 (fetch → fast-forward). 막히면 그 이유를 돌려주고, 꺼져 있거나 문제없으면 None."""
+    ex = exporter or exporter_for(ctx)
+    if not ex.active:
+        return None
+    s = ex.sync()
+    return s if s["state"] == "blocked" else None
+
+
+def review_queue(ctx):
+    """검토 대기·보류 항목 — Inbox가 보일 목록 (대기 일수는 since에서)."""
+    d, out = items_dir(ctx), []
+    if not os.path.isdir(d):
+        return out
+    for f in sorted(os.listdir(d)):
+        if not f.endswith(".yaml"):
+            continue
+        try:
+            it = read_item(ctx, f[:-5])
+        except (ItemInvalid, HitlError):
+            continue
+        ex = (it or {}).get("export") or {}
+        if ex.get("state") in PENDING_EXPORT:
+            out.append({"item": it["id"], "kind": it["kind"], "adr": (it.get("write_intent") or {}).get("adr"), "export": ex, "created": it["created"]})
+    return out

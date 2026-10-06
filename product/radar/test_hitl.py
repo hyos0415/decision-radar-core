@@ -447,7 +447,7 @@ def graph_tests():
     iid = rep["item_id"]
     check("thread_id = item-id (\"capture\" 고정이 아니다)", iid.startswith("2026-09-28-capture-") and iid != "capture", iid)
     check("R9 — 승인 전 ADR repo 쓰기 0 (파일 하나도 안 바뀌고, .radar도 없다)", w.snapshot() == before and not os.path.exists(os.path.join(w.root, ".radar")))
-    check("승인 대기 + 지문이 checkpoint 파일에 남았다", rep["awaiting_approval"] and hitl.StateStore(w.state).get(iid)[0]["impl"] == "repo_hash")
+    check("승인 대기 + 지문이 checkpoint 파일에 남았다", rep["awaiting_approval"] and hitl.StateStore(w.state).get(iid)[0]["impl"] == hitl.DEFAULT_FINGERPRINT == "all")  # 결정 7 — 기본은 A′
     rep2, _ = turn2(w, KOPII, "approve")
     it = w.item(iid)
     check("승인 순간에 별도 파일이 생겼고 ADR이 써졌다 (0006, validate 통과)", it["write_intent"]["state"] == "done" and it["adr"] == "0006" and "0006-kopii-small.md" in w.adrs(), it["write_intent"])

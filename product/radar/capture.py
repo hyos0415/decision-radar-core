@@ -7,7 +7,8 @@ create_agent(match_adr · propose_adr) + HumanInTheLoopMiddleware(propose_adr: a
        승인 순간에 별도 파일이 생긴다 (write-ahead 의도와 같은 단계, tools.propose_adr → hitl.write_adr)
 
 스파이크에서 바뀐 것: thread_id = item-id(결정 5, 더는 "capture" 고정이 아니다) · edit 채널(결정 6) · 재개 검사(결정 3)
-· write-ahead 쓰기(결정 4) · 끝난 항목의 checkpoint 삭제. 지문 구현은 Q2 미정이라 기본값(A)이다 — 사용자가 다음 대화에서 정한다.
+· write-ahead 쓰기(결정 4) · 끝난 항목의 checkpoint 삭제 · 지문 A′(결정 7) · git 내보내기(결정 8 — 켰을 때만. 재개 전에 원격을 따라잡고,
+쓰기가 끝나면 커밋·push. 재개 검사에서 또 달라졌으면 커밋하지 않고 항목에 남긴다 → review.py로 사람이 답한다).
 """
 
 import dataclasses
@@ -170,6 +171,9 @@ def capture_turn2(ctx, model, state_path, decision, now, model_name, *, item_id=
         approval["draft_hash_original"] = hitl.sha(ops.render(AdrDraft.model_validate(original), ctx.now)) if original else None
 
     if decision != "reject":
+        blocked = hitl.sync_exporter(ctx)  # 내보내기를 켰으면 원격을 먼저 따라잡는다 — 사람이 그 사이 push했으면 지문 비교가 그 세상을 본다 (결정 8)
+        if blocked:
+            return stop(f"멈춤: 원격 동기화 실패 ({blocked.get('reason')})", awaiting=True, preview=preview, blocked=blocked)
         plan = hitl.check_resume(ctx, item_id, stored_fp=stored_fp, scope=scope)
         act = plan["action"]
         if act == "recovered":  # 쓰다 만 것을 회복했다 — 항목이 끝났다
@@ -204,4 +208,5 @@ def capture_turn2(ctx, model, state_path, decision, now, model_name, *, item_id=
     item = hitl.read_item(ctx, item_id)
     if decision == "reject" or (item and (item.get("write_intent") or {}).get("state") == "done"):
         _finish_thread(state_path, store, item_id)  # 거부(별도 파일 없음)·쓰기 완료 — 끝난 항목
-    return _report(ctx, now, r, item_id), {**diag, "usage": log.calls}
+    exp = (item or {}).get("export")  # 내보내기를 쓴 항목만 — stale·blocked면 review.py로 이어 간다 (결정 8)
+    return _report(ctx, now, r, item_id, {"export": exp} if exp else None), {**diag, "usage": log.calls}
