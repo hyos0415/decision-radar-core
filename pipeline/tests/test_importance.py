@@ -1051,6 +1051,49 @@ def test_evaluate_end_to_end_with_stub_oracle():
     assert res["predictions"][0]["ex-2"]["keep"] is False and res["technologies"][0]["pytest"]["mismatch"]["rule"].startswith("S2")
 
 
+def _long_note():
+    """정리형 노트 모양: 앞에 긴 Highlights, 창 밖에 굵은 라벨 Security·Breaking과 제목 절, 소음 단어 줄."""
+    filler = "".join(f"* **Perf {i}**: faster kernels for model family {i} with fused attention paths\n" for i in range(60))
+    return ("# v9.1.0\n\n## Highlights\n\n" + filler
+            + "* **Security**: request kwargs are rejected unless `--trust` is set (#1)\n  continued detail line\n"
+            + "* **Breaking changes**: `tokenizer_mode=\"slow\"` removed (#2)\n"
+            + "* chore: migrate legacy tests and remove sponsor banner\n"
+            + "## Deprecations\n\n- `old_api()` will be removed in 10.0\n\n## Model Support\n\n- new models\n")
+
+
+def test_window_moves_only_risk_sections_from_outside_the_window():
+    from pipeline.importance import prompts
+    short = "### Security\n\n* fix CVE-2026-1\n"
+    assert prompts.window_text(short) == short                                    # 창 안에 다 들어오면 그대로
+    note = _long_note()
+    assert len(note) > prompts.TEXT_MAX and note.index("**Security**") > prompts.TEXT_MAX
+    w = prompts.window_text(note)
+    head = w.split("# v9.1.0")[0]                                                  # 옮긴 부분 = 원문 첫 줄 앞
+    assert len(w) <= prompts.TEXT_MAX and w.startswith("## Deprecations")          # 규칙 순위: 제목 절(R1)이 먼저
+    assert head.index("## Deprecations") < head.index("* **Security**") < head.index("continued detail line") < head.index("* **Breaking changes**")
+    assert "## Model Support" not in head                                          # R1 절은 다음 같은·상위 제목에서 끝난다
+    assert "migrate legacy tests" not in head                                      # 본문 위험 단어는 옮기지 않는다
+    assert w.count("**Security**") == 1                                            # 옮긴 것은 원래 자리에서 빠진다 (중복 없음)
+    # 창 안에 있던 위험 절은 옮기지 않는다
+    inside = "## Breaking changes\n\n- x removed\n\n" + "a" * 4000
+    assert prompts.window_text(inside) == inside[:prompts.TEXT_MAX]
+    # GPT 프롬프트와 Jev 상태가 같은 창을 쓴다
+    q = NewsQuery(id="n", technology="vLLM", title="v9.1.0", text=note, source="github")
+    assert prompts.window_text(note) in prompts.change_prompt(q) and prompts.jev_change_state(q)["body"] == prompts.window_text(note)
+
+
+def test_synthetic_subsets_are_reported_but_judgement_uses_all():
+    gold, tiers_, changes = _gold_oracle()
+    assert evaluate.subsets(gold["items"]) == {}                       # 보강이 없으면 나누지 않는다
+    gold["items"][3]["synthetic"] = True                               # ex-4 (모델 은퇴)를 보강 항목으로
+    blind = dict(changes, **{"ex-4": ["minor_patch"]})
+    res = evaluate.evaluate(StubBackend(tiers=tiers_, changes=blind), gold, 1)
+    real, syn = res["subsets"]["실데이터"][0], res["subsets"]["보강"][0]
+    assert (real["n"], syn["n"]) == (4, 1) and real["c1_miss_count"] == 0 and syn["c1_misses"] == ["ex-4"]
+    assert res["runs"][0]["c1_misses"] == ["ex-4"]                    # 판정은 합친 정답지 — 보강에서 놓친 것도 C1에 들어간다
+    assert "(보고) 보강 1건" in evaluate.format_report("stub", res, CallLog().totals())
+
+
 def test_tier_diag_sets_and_scoring():
     sets = evaluate.tier_diag_sets()
     assert [(n, len(q), len(g)) for n, q, g in sets] == [("tier-screen v1", 34, 34), ("tier-screen v2", 15, 15)]
@@ -1197,6 +1240,9 @@ def mutations():
         ("Jev 허용 목록에 api.openai.com을 섞음", [(jev_backend, "ALLOWED_HOSTS", {"api.typesafe.ai", "api.openai.com"})], test_jev_netguard_allows_only_typesafe_host),
         ("429 retry-after를 무시", [(jev_backend, "parse_retry_after", lambda headers: None)], test_jev_retry_429_respects_retry_after_and_4xx_is_not_retried),
         ("Jev 단가를 10배로", [(jev_backend, "INPUT_USD_PER_MTOK", 0.42)], test_jev_call_log_cost_and_returned_model),
+        ("창: 재배치 없이 앞에서 자르기만", [(prompts, "window_text", lambda text, text_max=3000: (text or "")[:text_max])], test_window_moves_only_risk_sections_from_outside_the_window),
+        ("창: 굵은 라벨(R2)을 못 봄", [(prompts, "_R2_LABEL", re.compile(r"(?!x)x"))], test_window_moves_only_risk_sections_from_outside_the_window),
+        ("창: 본문 위험 단어 줄도 옮김", [(prompts, "_R4_COMMIT", re.compile(r"(?i)\b(?:migrate|remove)\b"))], test_window_moves_only_risk_sections_from_outside_the_window),
     ]
 
 

@@ -3,6 +3,8 @@
 백엔드가 GPT면 이 프롬프트를 그대로 쓴다. Jev는 문장을 읽고 답하는 모델이 아니라 선택지 + 확률을 내므로,
 같은 정의를 질문의 `instructions`·`criteria`로 나눠 담게 된다 (같은 판정 기준이지 같은 프롬프트가 아니다 — finance_verifier run_eval_jev.py와 같은 단서).
 """
+import re
+
 from . import policy
 
 TIER_INSTRUCTIONS = """당신은 소프트웨어 프로젝트의 기술 하나에 「중요도 등급」을 매긴다. 주어진 정보만 쓰고 외부를 조회하지 않는다.
@@ -34,18 +36,18 @@ CHANGE_INSTRUCTIONS = """당신은 기술 소식(릴리스 노트·공지·페�
 
 | 종류 | 뜻 |
 |---|---|
-| breaking | 사용하는 코드가 깨질 수 있는 변경 (릴리스 노트의 Breaking changes) |
+| breaking | 사용하는 코드가 깨질 수 있는 변경 (릴리스 노트의 Breaking changes·커밋 제목의 `!:` 표시, 또는 업그레이드하려면 마이그레이션이 필요하다는 안내) |
 | deprecation | 곧 없어질 예정인 기능·API |
 | eol | 특정 버전의 지원 종료 (예: Python 3.12 EOL 일정) |
-| security | 보안 패치·CVE·보안 권고 |
+| security | 보안 패치·CVE·보안 권고 — 글이 보안 문제라고 밝힌 것만(security·CVE·GHSA·vulnerability·advisory). 대상 기술 자체의 수정이어야 한다(같은 저장소의 다른 언어 패키지·개발 의존성·CI 스캔 설정은 아니다) |
 | yanked | 배포 철회 (PyPI yanked 등) |
-| major | 메이저 버전 릴리스 |
+| major | 메이저 버전 릴리스 (첫 숫자가 오른 것. 0.x에서 둘째 숫자만 오른 것은 major가 아니다) |
 | minor_patch | 그 밖의 minor·patch 릴리스 |
 | model_retirement | 호스팅 모델의 은퇴(retirement)·지원 종료 일정 공지 |
 | pricing | 호스팅 서비스의 가격·사용 한도(rate limit) 변경 |
 
 규칙:
-- 「새 버전이 나왔다」만 있고 위의 어느 것도 말하지 않으면 해당 종류는 minor_patch 또는 major(버전 숫자로 판단)뿐이다
+- 「새 버전이 나왔다」만 있고 위의 어느 것도 말하지 않으면 해당 종류는 minor_patch 또는 major(버전 숫자로 판단 — 0.x에서 둘째 숫자만 오른 것은 minor_patch)뿐이다
 - 글에 적힌 사실만 쓴다. 짐작으로 breaking·security를 붙이지 않는다
 - `reason`은 한 문장
 """
@@ -55,12 +57,12 @@ CHANGE_INSTRUCTIONS = """당신은 기술 소식(릴리스 노트·공지·페�
 # 위 GPT 프롬프트의 표와 같은 뜻(같은 판정 기준)을 질문별 지시에 나눠 담는다. test_importance.py가 두 표의 문구가 같은지 대조한다.
 
 CHANGE_MEANING = {
-    "breaking": "사용하는 코드가 깨질 수 있는 변경 (릴리스 노트의 Breaking changes)",
+    "breaking": "사용하는 코드가 깨질 수 있는 변경 (릴리스 노트의 Breaking changes·커밋 제목의 `!:` 표시, 또는 업그레이드하려면 마이그레이션이 필요하다는 안내)",
     "deprecation": "곧 없어질 예정인 기능·API",
     "eol": "특정 버전의 지원 종료 (예: Python 3.12 EOL 일정)",
-    "security": "보안 패치·CVE·보안 권고",
+    "security": "보안 패치·CVE·보안 권고 — 글이 보안 문제라고 밝힌 것만(security·CVE·GHSA·vulnerability·advisory). 대상 기술 자체의 수정이어야 한다(같은 저장소의 다른 언어 패키지·개발 의존성·CI 스캔 설정은 아니다)",
     "yanked": "배포 철회 (PyPI yanked 등)",
-    "major": "메이저 버전 릴리스",
+    "major": "메이저 버전 릴리스 (첫 숫자가 오른 것. 0.x에서 둘째 숫자만 오른 것은 major가 아니다)",
     "minor_patch": "그 밖의 minor·patch 릴리스",
     "model_retirement": "호스팅 모델의 은퇴(retirement)·지원 종료 일정 공지",
     "pricing": "호스팅 서비스의 가격·사용 한도(rate limit) 변경",
@@ -78,7 +80,7 @@ TIER_MEANING = {
 }
 _CHANGE_RULE = "소식(state.title·state.body)에 적힌 사실만 쓴다. 외부를 조회하지 않고, 짐작으로 breaking·security를 붙이지 않는다. 대상 기술은 state.technology."
 _CHANGE_EXTRA = {
-    "major": "버전 숫자로 판단한다 (예: 3.x → 4.0).",
+    "major": "버전 숫자로 판단한다 (예: 3.x → 4.0. 0.22 → 0.23은 major가 아니다).",
     "minor_patch": "「새 버전이 나왔다」만 있고 다른 종류를 말하지 않는 minor·patch 릴리스일 때만 예.",
 }
 _TIER_RULE = ("기술(state.technology)이 이 프로젝트에서 쓰이는 방식(state.usage)으로 등급을 고른다. 같은 기술도 쓰임에 따라 등급이 달라진다. "
@@ -101,8 +103,69 @@ def jev_tier_question():
             "criteria": {t: f"{name} — {meaning}" for t, (name, meaning) in TIER_MEANING.items()}}
 
 
-def jev_change_state(q, text_max=3000):
-    return {"technology": q.technology, "title": q.title, "body": (q.text or "")[:text_max] or "(본문 없음)"}
+# ---------------------------------------------------------------------------- 본문 창 — 위험 절 순서 재배치 (importance-policy §8 변경 2026-10-06 밤)
+# 분류기는 본문 앞 TEXT_MAX자만 읽는다(비용). 정리형 노트(vLLM·transformers)는 Breaking·Security 절이 Highlights·새 모델 뒤에 있어
+# 창 밖으로 밀린다. 그래서 창 밖에서 시작하는 위험 절만 원문에서 빼 맨 앞으로 옮긴다 — 내용을 더하거나 줄이지 않고 순서만 바꾼다.
+# 규칙은 문서 구조에 붙은 표시만 본다. 본문 줄의 위험 단어(remove·migrate…)는 W41 창 밖 42줄이 전부 소음이라 쓰지 않는다.
+TEXT_MAX = 3000
+_RISK_WORD = r"(?:⚠\W*)?(?:breaking|security|deprecat\w*|removals?|migration)"
+_R1_HEADING = re.compile(r"^\s*(#{1,6})\s*" + _RISK_WORD, re.I)                       # 위험 제목 → 다음 같은·상위 제목까지 절 전체
+_R2_LABEL = re.compile(r"^(\s*)[*-]\s*\*\*\s*" + _RISK_WORD + r"[^*]*\*\*", re.I)      # * **Security**: … → 그 글머리 하나
+_R3_ADVISORY = re.compile(r"\b(?:CVE-\d{4}-\d+|GHSA(?:-[0-9a-z]{4}){3})\b", re.I)     # 권고 번호가 든 줄
+_R4_COMMIT = re.compile(r"^\s*[*-]\s*\w+(?:\([^)]*\))?!:|\(security\)", re.I)          # Conventional Commits breaking 표시 · security 범위
+_HEADING = re.compile(r"^\s*(#{1,6})\s")
+_BULLET = re.compile(r"^(\s*)[*-]\s")
+
+
+def _risk_spans(lines):
+    """[(규칙 순위, 시작 줄, 끝 줄(제외))] — 위험 절의 줄 범위."""
+    spans = []
+    for i, line in enumerate(lines):
+        m = _R1_HEADING.match(line)
+        if m:
+            level, j = len(m.group(1)), i + 1
+            while j < len(lines) and not ((h := _HEADING.match(lines[j])) and len(h.group(1)) <= level):
+                j += 1
+            spans.append((1, i, j))
+            continue
+        m = _R2_LABEL.match(line)
+        if m:
+            indent, j = len(m.group(1)), i + 1
+            while j < len(lines) and lines[j].strip() and not _HEADING.match(lines[j]) \
+                    and not ((b := _BULLET.match(lines[j])) and len(b.group(1)) <= indent):
+                j += 1
+            spans.append((2, i, j))
+        elif _R3_ADVISORY.search(line):
+            spans.append((3, i, i + 1))
+        elif _R4_COMMIT.search(line):
+            spans.append((4, i, i + 1))
+    return spans
+
+
+def window_text(text, text_max=TEXT_MAX):
+    """본문 → 분류기가 읽을 창. 창 밖에서 시작하는 위험 절을 맨 앞으로 옮긴 뒤 text_max에서 자른다. 창 안에 다 들어오면 그대로."""
+    text = text or ""
+    if len(text) <= text_max:
+        return text
+    lines = text.splitlines(keepends=True)
+    starts, pos = [], 0
+    for line in lines:
+        starts.append(pos)
+        pos += len(line)
+    taken, moved = set(), []
+    for rank, i, j in sorted(_risk_spans(lines), key=lambda s: (s[0], s[1])):
+        if starts[i] < text_max or taken & set(range(i, j)):
+            continue                                   # 이미 창 안이거나 앞 규칙이 가져간 줄
+        taken |= set(range(i, j))
+        moved.append("".join(lines[i:j]).rstrip("\n") + "\n")
+    if not moved:
+        return text[:text_max]
+    rest = "".join(line for k, line in enumerate(lines) if k not in taken)
+    return ("".join(moved) + "\n" + rest)[:text_max]
+
+
+def jev_change_state(q, text_max=TEXT_MAX):
+    return {"technology": q.technology, "title": q.title, "body": window_text(q.text, text_max) or "(본문 없음)"}
 
 
 def jev_tier_state(q):
@@ -113,8 +176,8 @@ def tier_prompt(q):
     return (f"기술: {q.name}\n이 프로젝트에서 쓰는 방식(usage): {q.usage or '(정보 없음)'}\n출처: {q.source or '(정보 없음)'}\n")
 
 
-def change_prompt(q, text_max=3000):
-    text = (q.text or "")[:text_max]
+def change_prompt(q, text_max=TEXT_MAX):
+    text = window_text(q.text, text_max)
     return f"대상 기술: {q.technology}\n제목: {q.title}\n\n본문:\n{text or '(본문 없음)'}\n"
 
 

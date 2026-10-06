@@ -206,16 +206,27 @@ def plan(gold, k, diag):
     return {"per_run": {"tier_calls": n_tech, "change_calls": n_items, "tier_diag_calls": per_run - n_tech - n_items}, "k": k, "total_calls": per_run * k}
 
 
+def subsets(gold_items):
+    """보강 세트(`synthetic: true`)가 섞였으면 {"실데이터": [...], "보강": [...]} — 판정은 합친 정답지로 내고 이 수치는 같이 보고만 한다
+    (importance-policy §8 변경 2026-10-06 밤, D7). 섞이지 않았으면 {}."""
+    syn = [it for it in gold_items if it.get("synthetic")]
+    if not syn or len(syn) == len(gold_items):
+        return {}
+    return {"실데이터": [it for it in gold_items if not it.get("synthetic")], "보강": syn}
+
+
 def evaluate(backend, gold, k, diag=None):
-    runs, all_preds, techs, diags = [], [], [], []
+    runs, all_preds, techs, diags, parts = [], [], [], [], {}
     for _ in range(k):
         preds, tech_recs = run_once(backend, gold)
         runs.append(score_run(preds, gold["items"]))
+        for name, items in subsets(gold["items"]).items():
+            parts.setdefault(name, []).append(score_run(preds, items))
         all_preds.append(preds)
         techs.append(tech_recs)
         if diag:
             diags.append(run_tier_diag(backend, diag))
-    return {"runs": runs, "judgement": judge(runs), "predictions": all_preds, "technologies": techs, "tier_diag": diags}
+    return {"runs": runs, "judgement": judge(runs), "subsets": parts, "predictions": all_preds, "technologies": techs, "tier_diag": diags}
 
 
 def format_report(model, res, calls, trace=None):
@@ -233,6 +244,9 @@ def format_report(model, res, calls, trace=None):
     for r_i, r in enumerate(res["runs"], 1):
         if r["c1_misses"] or r["errors"] or r["unclassified"]:
             lines.append(f"  실행 {r_i}: C1 놓침 {r['c1_misses']} · 오류 {r['errors']} · 분류 불가 {r['unclassified']}")
+    for name, rs in res.get("subsets", {}).items():
+        lines.append(f"  (보고) {name} {rs[0]['n']}건 — C1 놓침 {[r['c1_miss_count'] for r in rs]} · C2 {[round(r['c2_noise'], 4) for r in rs]}"
+                     f" · C3 {[round(r['c3_agree'], 4) for r in rs]} · 남김 {[r['kept'] for r in rs]}")
     for r_i, d in enumerate(res["tier_diag"], 1):
         lines.append(f"  (진단) 실행 {r_i} 등급 정확도: " + " · ".join(f"{n} {v['correct']}/{v['n']}" for n, v in d.items()))
     lines.append(f"  호출 {calls['model_calls']}회 · 입력 {calls['input_tokens']} · 출력 {calls['output_tokens']} 토큰 · 비용 ${calls['cost_usd']}"

@@ -180,3 +180,12 @@ tier-screen v2(`eval/tier-screen/results-v2.md`)에서 Elasticsearch·Neo4j 서�
 
 - 정답지: W41 스냅숏의 레인 A 항목으로 Claude가 초안 → 사용자 확인 (tier-screen과 같은 방식). 채점 대상이 GPT라 정답지 초안 작성자(Claude)와 회사가 다르다
 - 못 미치면 모델·프롬프트를 바꿀 수 있다. **기준은 바꾸지 않는다** (규율 7) — 바꾸려면 새 버전으로 재등록
+
+**변경 (2026-10-06 밤, 사용자 — 결과 0건): 정답지 정의와 안전 보강** — 정답지 초안(`eval/importance/gold-w41.json`, 검토 `gold-w41-review.md`)을 만들다 정답이 정의에 따라 갈리는 항목 15건과, **변화를 하나도 못 짚는 분류기도 C1~C3를 통과한다**는 것을 찾았다(W41 레인 A 정답 남김 4건 · 안전 항목 1건 — 그 vLLM도 `latest` 태그 보정으로 자동으로 남는다). 사용자 결정:
+- **D1 security = 명시만** — 글이 보안 문제라고 밝힌 것(security·CVE·GHSA·vulnerability·advisory)이고 대상 기술 자체의 수정일 때. 권한 우회·비밀 노출·넘침 수정이라도 표시가 없으면 security가 아니다 (소음 우선)
+- **D2 0.x에서 둘째 숫자만 오른 릴리스는 major가 아니다** · **D3 breaking = Breaking changes 표시 또는 업그레이드에 마이그레이션이 필요하다는 안내**
+- **D6 Claude Code(eval 러너·routine)는 L7**
+- **D7 안전 보강 세트를 넣는다** — 위 「정답지: W41 스냅숏의 레인 A 항목으로」를 넓힌다. Claude가 실제 릴리스 형식으로 우리 스택 기술의 안전·남김 항목을 써서 `synthetic: true`로 표시하고, 판정(C1~C3)은 합친 정답지로 내되 W41 실데이터만·보강만의 수치도 같이 보고한다
+- 분류기 프롬프트(`prompts.py` GPT 표·Jev 질문)의 breaking·security·major 정의에 D1~D3을 넣었다 — 정답지가 쓰는 정의를 분류기도 받게 한다 (규율 2: 정의를 안 알려 주고 정직을 벌하지 않는다)
+- 남은 것: 분류기는 본문 앞 3,000자만 읽는다(`change_prompt(text_max=3000)`) — vLLM 0.31.0의 Security(3,117자)·Breaking(3,507자)이 창 밖이다. 고칠지는 따로 정한다
+  → **결정 (같은 날, 사용자): 창 3,000자는 그대로 두고(비용), 창 밖에서 시작하는 위험 절만 맨 앞으로 옮긴다 — 순서 재배치, 글자 수 상한 없음** (`prompts.window_text`, GPT·Jev 공용). 규칙은 문서 구조의 표시만 본다: R1 위험 제목(Breaking·Security·Deprecat·Removal·Migration — 다음 같은·상위 제목까지) · R2 굵은 라벨 글머리(`* **Security**:`) · R3 CVE·GHSA 줄 · R4 커밋 표기(`type(scope)!:` · `(security)`). 본문 줄의 위험 단어는 쓰지 않는다 — W41 창 밖 42줄이 전부 소음이었다(테스트 이전·후원 정리 등). W41 레인 A 222건 중 재배치되는 것은 vLLM 0.31.0 · transformers 5.18.0 두 건이고, 둘 다 원문 첫머리가 창에 남는다. breaking 정의에 커밋의 `!:` 표시를 넣었다(litellm 3건 — 정답지도 고침, 남김은 그대로)
