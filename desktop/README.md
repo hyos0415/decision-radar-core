@@ -48,10 +48,17 @@ npm run dev          # Electron 창 + 트레이 + 백엔드 자동 기동. 처�
 | `POST /inbox/{id}/approve` `{stale_answer?}` | → `{outcome, message, adr?, path?, changes?, answers?, errors?}` | `capture_turn2(approve)` |
 | `POST /inbox/{id}/edit` `{draft, stale_answer?}` | 고친 초안. 검사 실패면 `edit_errors` — 쓰지 않는다 | `capture_turn2(edit)` → `hitl.check_edit` |
 | `POST /inbox/{id}/reject` | | `capture_turn2(reject)` |
-| `POST /events` `{event, item?, detail?}` | 화면 행동 로그 (`app_opened` · `item_opened` · `notification_shown` · `notification_clicked` · `capture_opened`) | — |
+| `POST /capture` `{conversation}` | 빠른 capture → `awaiting`(Inbox에 승인 대기) · `linked`(같은 결정이 이미 있음, `link_candidates`) · `no_draft` | `capture_turn1` (R9: 쓰기 0) |
+| `GET /decisions` · `/decisions/{id}` | ADR 목록(번호·제목·status·technology·재검토 조건별 최근 결과·요약) · 상세(+원문). **읽기만** — status를 바꾸는 엔드포인트가 없다(R8) | `radar.py list` + 파일 제목 |
+| `POST /runs/detect` · `/runs/revisit` · `GET /runs` | 흐름을 한 번 돌리고 요약(`summary`·`drafts`·`alerts`) — `<data>/runs.jsonl` | `detect` · `revisit` 그래프 (스냅숏 모드 + dry-run) |
+| `POST /events` `{event, item?, detail?}` | 화면 행동 로그 (`app_opened` · `item_opened` · `notification_shown` · `notification_clicked` · `capture_opened` · `decision_opened`) | — |
 
 `outcome`: `written` · `rejected` · `stale`(바뀐 점을 보이고 계속·다시 판정·버림을 `stale_answer`로 다시 보낸다) · `edit_errors` · `discarded` · `rejudge`(원래 대화로 capture 1턴을 다시 돌려 새 대기 항목) · `blocked` · `recovered` · `error`.
-detect 검토 항목은 목록·상세만 — 답하려면 내보내기가 켜져 있어야 한다(`hitl.review_item`).
+detect 검토 항목은 목록·상세만 — 답하려면 내보내기가 켜져 있어야 한다(`hitl.review_item`). 내보내기가 꺼진 지금은 detect 초안이 Inbox가 아니라 Decisions에 `proposed`로 보인다.
+
+**스텁 모드에서 무엇이 진짜인가.** 그래프·도구·`radar.py`·HITL(write-ahead·지문·edit 검사)은 코어 그대로 돈다. 가짜는 모델의 판단뿐이다 —
+capture는 대화에 나온 기술·repo로 미리 적은 대본(`product/radar/stub_script.json`)을 고르고(`service.pick_stub`, 맞는 게 없으면 기본 대본 + 표시),
+detect·revisit는 eval 스냅숏(`<data>/snapshots` — Jev v0.9.0 릴리스로 0001 c1 충족, 소식 6건)에 정해진 판단표로 답한다. 웹에는 나가지 않는다.
 
 ## 행동 로그 (실사용 지표 — 비교 프로토콜 §7)
 
@@ -61,6 +68,6 @@ detect 검토 항목은 목록·상세만 — 답하려면 내보내기가 켜�
 {"at": "2026-10-06T16:36:51+09:00", "event": "approve", "item": "2026-10-06-capture-e4598395", "source": "backend", "mode": "stub", "detail": {"outcome": "written", "adr": "0006"}}
 ```
 
-- `source: backend` — `approve` · `edit` · `reject`(detail에 outcome·stale_answer·adr·errors) · `item_created`
+- `source: backend` — `approve` · `edit` · `reject`(detail에 outcome·stale_answer·adr·errors) · `item_created` · `capture_submitted`(outcome·글자 수·대본) · `run`(flow·초안·알림 수)
 - `source: app` — 화면이 `POST /events`로 보낸 것
 - **무시**는 기록하지 않고 계산한다: 알림(`notification_shown`)·항목 생성 뒤 답이 없는 항목

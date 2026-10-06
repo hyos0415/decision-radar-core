@@ -2,22 +2,43 @@
 
 실제 ADR repo(hyos0415/adr)는 건드리지 않는다. 사본은 `<data>/`(기본 desktop/.dev-data, gitignore)에 있고 git도 아니다.
 대기 항목은 스텁 모델로 capture 1턴을 돌려 만든다 — 코어가 실제로 멈춘 thread라서 승인도 코어 경로 그대로 돈다.
+스냅숏(detect 소식·revisit 출처)은 eval 러너의 픽스처 조립(`run_case.build`)을 빌려 `<data>/snapshots`에 둔다 — 웹에 나가지 않는다.
 """
 
 import datetime as dt
 import json
 import os
 import shutil
+import sys
+import tempfile
 
 from service import REPO, RadarService
 
 FIX = os.path.join(REPO, "eval", "fixture")
 # (스텁 대본 = eval 케이스, 대화 = 픽스처 대화, 며칠 전부터 대기) — 대본은 대화를 읽고 사람이 적은 판단이다 (product/radar/stub_script.json)
 SEED = [("JHS-031", "V4", 6), ("JHS-014", "V2", 3), ("JHS-029", "V9", 0)]
+# 스냅숏: revisit은 Jev v0.9.0 릴리스(S02 — 0001 c1 충족), 나머지는 조용한 기본. detect 소식은 후보·겹침(LEANN)·제외가 섞이게
+DEV_CASE = {"id": "DEV", "setup": {"snapshots": {"jev_releases": "S02"}, "feed": ["D01", "D02", "D04", "D05", "D06", "D08"]}}
 
 
 def is_seeded(data_dir):
     return os.path.isdir(os.path.join(data_dir, "adr-fixture", "docs", "adr"))
+
+
+def ensure_snapshots(data_dir):
+    """없으면 만든다 (앞 버전에서 만든 개발 데이터에도 붙는다). 만들었으면 True."""
+    dst = os.path.join(data_dir, "snapshots")
+    if os.path.isdir(dst):
+        return False
+    sys.path.insert(0, os.path.join(REPO, "eval", "runner"))
+    import run_case
+    work = tempfile.mkdtemp(prefix="radar-dev-snap-")
+    try:
+        run_case.build(DEV_CASE, work)
+        shutil.copytree(os.path.join(work, "snapshots"), dst)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return True
 
 
 def seed(data_dir):
@@ -25,6 +46,7 @@ def seed(data_dir):
     shutil.copytree(os.path.join(FIX, "adr-fixture"), os.path.join(data_dir, "adr-fixture"))
     for r in ("finance-verifier", "medical-mate"):  # radar-targets.json이 ../<repo>로 가리킨다
         shutil.copytree(os.path.join(FIX, "repos", r), os.path.join(data_dir, r))
+    ensure_snapshots(data_dir)
     svc = RadarService(data_dir)
     convs = json.load(open(os.path.join(FIX, "conversations.json"), encoding="utf-8"))
     out = []

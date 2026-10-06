@@ -5,9 +5,12 @@
   상세       대기 초안 · 저장될 ADR 미리보기(`ops.render`) · 「바뀐 점」(멈출 때의 지문과 지금의 지문 비교 — 읽기만)
   답         `capture_turn2`(approve·edit·reject + stale 답)를 그대로 부른다
   행동 로그   `<data>/events.jsonl` (실사용 지표, 비교 프로토콜 §7)
+  capture    대화 → `capture_turn1` → 승인 대기 (R9: ADR repo 쓰기 0)
+  Decisions  `radar.py list` + ADR 파일 제목 — 읽기만 (R8: status는 화면에서 바꾸지 않는다)
+  실행       `detect`·`revisit` 그래프를 그대로 한 번 돌리고 보고서를 요약한다 (`<data>/runs.jsonl`)
 
 안전 (작업 지시서 §5):
-  - 모델은 스텁이 기본이다. 실제 모델은 `RADAR_APP_MODEL=anthropic`일 때만이고, 마일스톤 1에서는 그것도 거부한다(과금 전 사용자 승인)
+  - 모델은 스텁이 기본이다. 실제 모델은 `RADAR_APP_MODEL=anthropic`일 때만이고, 지금은 그것도 거부한다(과금 전 사용자 승인)
   - `RADAR_EXPORT`는 자식 환경에서 지우고 `RADAR_DRY_RUN=1`을 강제한다 — 내보내기(git push)가 켜질 길이 둘 다 막힌다 (`hitl.exporter_for`)
   - 키(.env)는 이 프로세스만 읽는다 (스텁 모드에서는 읽지도 않는다)
 """
@@ -27,17 +30,23 @@ sys.path.insert(0, os.path.join(REPO, "product"))
 from radar import hitl  # noqa: E402  — radar/__init__이 spike/common을 경로에 올린다
 from radar import script as stub_scripts  # noqa: E402
 from radar.capture import capture_agent, capture_turn1, capture_turn2, thread_config  # noqa: E402
+from radar.detect import detect  # noqa: E402
+from radar.revisit import revisit  # noqa: E402
 from radar.stub_model import StubChat  # noqa: E402
 from common import ops  # noqa: E402
-from common.core import SKILL_RADAR, Ctx  # noqa: E402
+from common.core import SKILL_RADAR, Ctx, RadarError, radar  # noqa: E402
 from common.schemas import AdrDraft  # noqa: E402
 from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: E402
+import yaml  # noqa: E402
 
 STATE_FILE = "capture-checkpoint.sqlite"
 META_FILE = "app-meta.json"
 EVENTS_FILE = "events.jsonl"
+RUNS_FILE = "runs.jsonl"
 DEFAULT_STUB = "JHS-014"  # 2턴 스텁 대본 — 2턴에서는 도구 결과 순서만 보고 끝내므로 항목마다 달라도 같다 (stub_policy.capture_step)
-UI_EVENTS = ("app_opened", "item_opened", "notification_shown", "notification_clicked", "capture_opened")
+UI_EVENTS = ("app_opened", "item_opened", "notification_shown", "notification_clicked", "capture_opened", "decision_opened")
+FLOWS = ("detect", "revisit")
+MAX_CONVERSATION = 200_000
 OK_OUTCOMES = ("written", "rejected", "discarded", "rejudge", "recovered")
 NUMBER_NOTE = "번호는 저장할 때 정해짐"
 
@@ -84,6 +93,8 @@ class RadarService:
         self.state_path = os.path.join(self.data_dir, STATE_FILE)
         self.meta_path = os.path.join(self.data_dir, META_FILE)
         self.events_path = os.path.join(self.data_dir, EVENTS_FILE)
+        self.runs_path = os.path.join(self.data_dir, RUNS_FILE)
+        self.snapshot_dir = os.path.join(self.data_dir, "snapshots")
         self.tmp = os.path.join(self.data_dir, "tmp")
         self.radar_py = radar_py
         self.mode = model or os.environ.get("RADAR_APP_MODEL") or "stub"
@@ -100,6 +111,8 @@ class RadarService:
         env.update({
             "RADAR_ADR_DIR": self.adr_dir, "RADAR_TARGETS": self.targets,
             "RADAR_DRY_RUN": "1",  # exporter_for가 dry-run이면 no-op — RADAR_EXPORT가 어디서 들어와도 git을 안 부른다
+            "RADAR_SNAPSHOT_DIR": self.snapshot_dir,  # detect·revisit는 스냅숏 모드만 (check_scope) — 웹에 나가지 않는다
+            "RADAR_SERVED_LOG": os.path.join(self.data_dir, "served.log"),
             "LANGSMITH_TRACING": "false", "LANGCHAIN_TRACING_V2": "false",
             "PYTHONIOENCODING": "utf-8", "TEMP": self.tmp, "TMP": self.tmp, "TMPDIR": self.tmp,
         })
@@ -293,3 +306,165 @@ class RadarService:
                 self._put_meta(item_id, since=since or ctx.now, conversation=conversation, stub=stub or DEFAULT_STUB)
                 self.log("item_created", item_id, kind="capture")
             return item_id, rep
+
+    def submit_capture(self, conversation):
+        """화면의 빠른 capture 창 — 대화 → 1턴. 스텁 대본은 대화에 나온 기술로 고른다 (`pick_stub`)."""
+        if not isinstance(conversation, str) or not conversation.strip():
+            raise ServiceError(400, "대화가 비었다")
+        if len(conversation) > MAX_CONVERSATION:
+            raise ServiceError(413, f"대화가 너무 길다 ({len(conversation)}자 > {MAX_CONVERSATION})")
+        stub, matched = pick_stub(conversation)
+        item_id, rep = self.capture(conversation, stub=stub)
+        note = "" if matched else " — 스텁: 대화와 맞는 대본이 없어 기본 대본(KoPII-small)으로 만들었다 (내용은 대화와 무관)"
+        if item_id:
+            res = {"outcome": "awaiting", "item": item_id, "message": "Inbox에 추가됨 — 승인 대기" + note, "link_candidates": []}
+        elif rep.get("link_candidates"):
+            res = {"outcome": "linked", "item": None, "link_candidates": list(rep["link_candidates"]),
+                   "message": "이미 같은 결정이 있다: " + ", ".join(rep["link_candidates"]) + " — 새 초안을 만들지 않았다"}
+        else:
+            res = {"outcome": "no_draft", "item": None, "link_candidates": [], "message": rep.get("note") or "초안이 나오지 않았다"}
+        self.log("capture_submitted", res["item"], outcome=res["outcome"], chars=len(conversation), stub=stub,
+                 **({"link_candidates": res["link_candidates"]} if res["link_candidates"] else {}))
+        return res
+
+    # ── Decisions (읽기만 — R8) ──────────────────────────────────
+
+    def decisions(self):
+        with self.lock:
+            ctx = self.ctx()
+            try:
+                rows = radar(ctx, "list", self.adr_dir)
+            except RadarError as e:
+                raise ServiceError(500, f"radar.py list 실패: {e}")
+        return [self._decision_row(r) for r in rows]
+
+    def decision(self, adr_id):
+        for row in self.decisions():
+            if row["id"] == adr_id:
+                return {**row, "markdown": open(os.path.join(self.adr_dir, row["file"]), encoding="utf-8").read()}
+        raise ServiceError(404, f"ADR {adr_id}가 없다")
+
+    def _decision_row(self, r):
+        path = os.path.join(self.adr_dir, os.path.basename(r["file"].replace("\\", "/")))
+        text = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+        m = _TITLE.search(text)
+        fm = _front_matter(text)
+        last = {c.get("condition_id"): c for c in (r.get("revisit_last_checked") or []) if isinstance(c, dict)}
+        conds, summary = [], {"met": 0, "not_met": 0, "undetermined": 0, "unchecked": 0}
+        for c in r.get("revisit_when") or []:
+            lc = last.get(c.get("id"))
+            res = (lc or {}).get("result")
+            summary[res if res in summary else "unchecked"] += 1
+            conds.append({"id": c.get("id"), "check_type": c.get("check_type"), "condition": c.get("condition"),
+                          "last": {"result": res, "checked_at": str(lc.get("checked_at")), "reason": lc.get("reason")} if lc else None})
+        times = [str(c.get("checked_at")) for c in last.values() if c.get("checked_at")]
+        return {"id": r["id"], "title": m.group(1).strip() if m else os.path.basename(path), "file": os.path.basename(path),
+                "status": r.get("status"), "technology": r.get("technology"), "use": r.get("use"),
+                "date": str(fm.get("date")) if fm.get("date") else None, "affected": r.get("affected") or [],
+                "revisit": conds, "revisit_summary": summary, "last_checked": max(times) if times else None}
+
+    # ── 실행 (detect · revisit) ──────────────────────────────────
+
+    def run(self, flow):
+        """흐름 하나를 스텁 모델로 한 번 돌린다. 코어 그래프를 그대로 부르고 보고서만 요약한다. 스냅숏 모드 + dry-run (check_scope)."""
+        if flow not in FLOWS:
+            raise ServiceError(404, f"모르는 흐름 {flow!r} — {list(FLOWS)}")
+        with self.lock:
+            ctx = self.ctx()
+            if flow == "detect":
+                fn, script = detect, stub_scripts.detect_script()
+            else:  # JHS-001 대본 — 스냅숏 S02(Jev v0.9.0 릴리스)에서 0001 c1이 충족된다
+                fn, script = revisit, stub_scripts.revisit_script(stub_scripts.SCRIPT["cases"]["JHS-001"])
+            res = {"id": f"{ctx.now}-{flow}", "flow": flow, "at": ctx.now, "mode": self.mode, "ok": True, "error": None,
+                   "summary": [], "drafts": [], "alerts": []}
+            try:
+                rep, diag = asyncio.run(fn(ctx, StubChat(script=script, flow=flow), ctx.now, self.mode))
+                res.update(self._summarize_detect(rep) if flow == "detect" else self._summarize_revisit(rep))
+                if diag.get("p3_errors"):
+                    res["summary"].append(f"오류 {len(diag['p3_errors'])}건: " + "; ".join(e.get("kind", "?") for e in diag["p3_errors"]))
+            except Exception as e:  # 실행이 죽어도 앱은 산다 — 기록에 남기고 보인다
+                res.update(ok=False, error=f"{type(e).__name__}: {str(e)[:300]}")
+            with open(self.runs_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(res, ensure_ascii=False) + "\n")
+            self.log("run", res["id"], flow=flow, ok=res["ok"], drafts=len(res["drafts"]), alerts=len(res["alerts"]))
+            return res
+
+    def runs(self, limit=50):
+        try:
+            lines = open(self.runs_path, encoding="utf-8").read().splitlines()
+        except OSError:
+            return []
+        return [json.loads(x) for x in reversed(lines[-limit:]) if x.strip()]
+
+    def _summarize_detect(self, rep):
+        try:
+            n_feed = len(json.load(open(os.path.join(self.snapshot_dir, "feed.json"), encoding="utf-8")))
+        except (OSError, ValueError):
+            n_feed = None
+        cands, skipped = rep.get("candidates") or [], rep.get("skipped_existing") or []
+        drafts = []
+        for c in cands:
+            if not c.get("adr"):
+                continue
+            f = next(iter(sorted(p for p in os.listdir(self.adr_dir) if p.startswith(c["adr"] + "-"))), None)
+            m = _TITLE.search(open(os.path.join(self.adr_dir, f), encoding="utf-8").read()) if f else None
+            drafts.append({"adr": c["adr"], "title": m.group(1).strip() if m else c["technology"], "technology": c["technology"],
+                           "validate_errors": c.get("validate_errors") or []})
+        head = f"소식 {n_feed}건 → " if n_feed is not None else ""
+        summary = [f"{head}후보 {len(cands)}건 · 이미 있는 결정이라 건너뜀 {len(skipped)}건 · 제외 {len(rep.get('excluded') or [])}건"]
+        if drafts:
+            bad = sum(1 for d in drafts if d["validate_errors"])
+            summary.append(f"초안 {len(drafts)}건 작성 (proposed)" + (f" — validate 실패 {bad}건" if bad else ""))
+        else:
+            summary.append("새 초안 없음")
+        return {"summary": summary, "drafts": drafts}
+
+    def _summarize_revisit(self, rep):
+        results = rep.get("results") or []
+        by = {(r["adr"], r["condition_id"]): r for r in results}
+        conds = {(row["id"], c["id"]): c["condition"] for row in self.decisions() for c in row["revisit"]}
+        alerts = [{"adr": a["adr"], "condition": a["condition_id"],
+                   "result": (by.get((a["adr"], a["condition_id"])) or {}).get("result", "met"),
+                   "message": conds.get((a["adr"], a["condition_id"])) or ""} for a in rep.get("alerts") or []]
+        met = sum(1 for r in results if r.get("result") == "met")
+        changed = sum(1 for r in results if r.get("changed"))
+        summary = [f"ADR {len(rep.get('adrs_checked') or [])}개 · 조건 {len(results)}개 확인",
+                   f"조건 충족 {met}건 · 지난번과 달라짐 {changed}건 · 알림 {len(alerts)}건"]
+        return {"summary": summary, "alerts": alerts}
+
+
+def _front_matter(text):
+    m = re.match(r"\A---\s*\n(.*?)\n---\s*\n", text, re.S)
+    if not m:
+        return {}
+    try:
+        d = yaml.safe_load(m.group(1))
+    except yaml.YAMLError:
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _capture_stubs():
+    """대화에서 고를 수 있는 capture 스텁 대본 — 초안이 있는 것 + 같은 결정이 이미 있는 것(Jev, JHS-013: link로 끝난다)."""
+    out = {}
+    for cid, sc in stub_scripts.SCRIPT["capture"].items():
+        if cid.startswith("_") or not isinstance(sc, dict):
+            continue
+        if sc.get("draft") is not None or cid == "JHS-013":
+            out[cid] = sc
+    return out
+
+
+def pick_stub(conversation):
+    """스텁 모드에서만 — 대화에 나온 기술·repo·component·용도로 대본을 고른다 → (대본 ID, 기술이 맞았나).
+    실제 모델은 대화를 읽고 초안을 쓴다. 스텁은 미리 적은 초안 중 가장 가까운 것을 낼 뿐이다."""
+    text = conversation.lower()
+    best, score = None, 0
+    for cid, sc in sorted(_capture_stubs().items()):
+        m = sc["match"]
+        if (m.get("technology") or "").lower() not in text:
+            continue
+        s = 4 + sum(1 for k in ("repo", "component", "use") if (m.get(k) or "").lower() in text)
+        if s > score:
+            best, score = cid, s
+    return (best, True) if best else (DEFAULT_STUB, False)

@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import devdata  # noqa: E402
 import server  # noqa: E402
+import service  # noqa: E402
 from service import RadarService, ServiceError, hitl  # noqa: E402
 
 FAILS = []
@@ -156,11 +157,73 @@ def main():
         check("로그: 승인·edit·거부·열어 봄", {"approve", "edit", "reject", "item_opened", "item_created"} <= set(kinds), kinds)
         check("로그: 승인 결과가 남음", any(x["event"] == "approve" and x["detail"]["outcome"] == "written" for x in ev))
         check("로그: 화면 이벤트는 source=app", all(x["source"] == "app" for x in ev if x["event"] == "item_opened"))
+
+        scenario_m2(os.path.join(tmp, "data2"))
     finally:
         os.environ.pop("RADAR_EXPORT", None)
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\n{'OK' if not FAILS else 'FAILED'} — 실패 {len(FAILS)}")
     return 1 if FAILS else 0
+
+
+def scenario_m2(data):
+    """마일스톤 2 — 빠른 capture · Decisions(읽기만) · 실행(detect·revisit)."""
+    print("\n— 마일스톤 2 —")
+    devdata.seed(data)
+    svc = RadarService(data)
+    c = TestClient(server.create_app(svc))
+    convs = json.load(open(os.path.join(devdata.FIX, "conversations.json"), encoding="utf-8"))
+
+    # 스텁 대본 고르기 — 대화에 나온 기술·repo로
+    check("대본: Bedrock + finance-verifier → JHS-031", service.pick_stub(convs["V4"]) == ("JHS-031", True), service.pick_stub(convs["V4"]))
+    check("대본: Bedrock + pii-guard → JHS-033", service.pick_stub(convs["V8"]) == ("JHS-033", True), service.pick_stub(convs["V8"]))
+    check("대본: 모르는 대화 → 기본(표시)", service.pick_stub("오늘 점심 뭐 먹지") == (service.DEFAULT_STUB, False))
+
+    # capture
+    base, n_items = adrs(svc), len(c.get("/inbox").json()["items"])
+    check("capture: 빈 대화 400", c.post("/capture", json={"conversation": "  "}).status_code == 400)
+    r = c.post("/capture", json={"conversation": convs["V8"]}).json()
+    check("capture → 승인 대기", r["outcome"] == "awaiting" and r["item"] in {i["id"] for i in c.get("/inbox").json()["items"]}, r)
+    check("capture: R9 쓰기 0", adrs(svc) == base and len(c.get("/inbox").json()["items"]) == n_items + 1)
+    r = c.post("/capture", json={"conversation": convs["V1"]}).json()
+    check("capture: 같은 결정(Jev) → linked 0001", r["outcome"] == "linked" and r["link_candidates"] == ["0001"], r)
+    r = c.post("/capture", json={"conversation": "회의 메모: 다음 주에 뭔가 정하자"}).json()
+    check("capture: 대본 없음 → 기본 대본 + 표시", r["outcome"] == "awaiting" and "스텁" in r["message"], r)
+    pending = r["item"]
+
+    # Decisions — 읽기만
+    ds = c.get("/decisions").json()["items"]
+    check("decisions: 5개 번호 순", [d["id"] for d in ds] == ["0001", "0002", "0003", "0004", "0005"], [d["id"] for d in ds])
+    d1 = next(d for d in ds if d["id"] == "0001")
+    check("decisions: 0001 보류·재검토 3조건", d1["status"] == "hold" and sum(d1["revisit_summary"].values()) == 3 and d1["title"], d1)
+    check("decisions: 상세 원문", c.get("/decisions/0001").json()["markdown"].startswith("---"))
+    check("decisions: 없는 번호 404", c.get("/decisions/9999").status_code == 404)
+    check("decisions: status 바꾸는 길 없음 (R8)", all(getattr(c, m)("/decisions/0001", json={"status": "accepted"}).status_code == 405
+                                                 for m in ("post", "put", "patch")))
+    statuses = {d["id"]: d["status"] for d in ds}
+
+    # revisit — 기록용 칸만 바뀐다 → 대기 항목은 낡지 않는다 (결정 7)
+    r = c.post("/runs/revisit", json={}).json()
+    check("revisit 실행 ok", r["ok"] and r["flow"] == "revisit", r)
+    check("revisit: 0001 c1 충족 알림", any(a["adr"] == "0001" and a["condition"] == "c1" and a["result"] == "met" for a in r["alerts"]), r["alerts"])
+    d1 = c.get("/decisions/0001").json()
+    check("decisions: 0001 c1 최근 결과 met", next(x for x in d1["revisit"] if x["id"] == "c1")["last"]["result"] == "met")
+    check("revisit 뒤 대기 항목은 안 낡음", c.get(f"/inbox/{pending}").json()["changes"] == [], c.get(f"/inbox/{pending}").json()["changes"])
+
+    # detect — 초안을 쓴다 → 대기 항목은 낡는다
+    r = c.post("/runs/detect", json={}).json()
+    check("detect 실행 ok + 초안", r["ok"] and r["drafts"], r)
+    check("detect: 겹침(LEANN) 건너뜀이 요약에", "건너뜀 1건" in r["summary"][0], r["summary"])
+    ds2 = {d["id"]: d for d in c.get("/decisions").json()["items"]}
+    check("detect 초안은 proposed", all(ds2[x["adr"]]["status"] == "proposed" for x in r["drafts"]))
+    check("기존 ADR status 그대로 (R8)", all(ds2[k]["status"] == v for k, v in statuses.items()))
+    check("detect 뒤 대기 항목은 바뀜", c.get(f"/inbox/{pending}").json()["changes"] != [])
+    check("실행: 모르는 흐름 404", c.post("/runs/rm", json={}).status_code == 404)
+    runs = c.get("/runs").json()["items"]
+    check("실행 기록: 최신 먼저", [x["flow"] for x in runs] == ["detect", "revisit"], [x["flow"] for x in runs])
+    kinds = {x["event"] for x in events(svc)}
+    check("로그: capture_submitted·run", {"capture_submitted", "run"} <= kinds, kinds)
+    check("화면 이벤트 decision_opened", c.post("/events", json={"event": "decision_opened", "item": "0001"}).status_code == 200)
 
 
 if __name__ == "__main__":

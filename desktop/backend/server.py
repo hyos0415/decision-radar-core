@@ -57,6 +57,26 @@ def create_app(svc: RadarService) -> FastAPI:
     def reject(item_id: str, body: dict = Body(default={})):
         return svc.answer(item_id, "reject")
 
+    @app.post("/capture")
+    def capture(body: dict = Body(...)):
+        return svc.submit_capture(body.get("conversation"))
+
+    @app.get("/decisions")
+    def decisions():
+        return {"items": svc.decisions()}
+
+    @app.get("/decisions/{adr_id}")
+    def decision(adr_id: str):
+        return svc.decision(adr_id)
+
+    @app.post("/runs/{flow}")
+    def run(flow: str, body: dict = Body(default={})):
+        return svc.run(flow)
+
+    @app.get("/runs")
+    def runs():
+        return {"items": svc.runs()}
+
     @app.post("/events")
     def events(body: dict = Body(...)):
         if not isinstance(body.get("event"), str):
@@ -80,6 +100,8 @@ def main(argv=None):
     if not devdata.is_seeded(a.data_dir):
         print(f"개발 데이터를 만든다: {a.data_dir}", flush=True)
         print(devdata.seed(a.data_dir), flush=True)
+    elif devdata.ensure_snapshots(a.data_dir):
+        print("개발 데이터에 스냅숏을 더했다", flush=True)
     svc = RadarService(a.data_dir)
     import uvicorn
     uvicorn.run(create_app(svc), host=a.host, port=a.port, log_level="warning")
