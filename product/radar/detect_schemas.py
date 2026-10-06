@@ -6,7 +6,9 @@ from common.schemas import Affected, Evidence, RevisitCondition
 
 
 class Candidate(BaseModel):
-    technology: str
+    # 스킬은 references/schema.md의 ADR 예시(`technology: LEANN`)로 이 칸의 모양을 배운다. 제품 모델은 그 예시를 안 읽어서
+    # 첫 실제 실행(2026-10-06)에서 6/7이 「vllm 0.9.0 (scheduler rewrite …)」처럼 써 동일성 비교(R14 match·채점)가 깨졌다
+    technology: str = Field(description="ADR의 technology 칸 = 동일성 키. 기술 이름만 쓴다 — 버전·설명·괄호를 붙이지 않는다 (예: LEANN, vLLM, pydantic)")
     dependency: bool = Field(description="대상 repo의 의존성(manifest)에 있는 패키지의 릴리스면 true. 새 모델·논문·서비스면 false")
     affected: list[Affected] = Field(description="실재하는 repo·component. 의존성이면 CLAUDE.md의 「의존성 → component」 매핑과 정확히 같게 (R16). 의존성 밖이면 하나 이상 (R10)")
     source_urls: list[str] = Field(description="이 후보의 근거가 된 소식의 URL (소식 목록의 url 그대로)")

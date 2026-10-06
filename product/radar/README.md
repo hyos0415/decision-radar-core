@@ -108,3 +108,4 @@ detect    load ─▶ triage ─▶ screen ─Send─▶ draft ─▶ write ─�
 | 9 | **스택·매핑 읽기** | 모델이 `CLAUDE.md`를 도구로 연다 | `load`(코드)가 읽어 프롬프트에 넣는다 | 제품만 — 도구 호출 수(R12)가 다르게 센다 |
 | 10 | **비용 단위** | `claude -p` 구독 | API 호출, `llm_call`로 토큰·달러 | 프로토콜 §3 — 토큰으로 나란히 두고 달러는 API 단가로 환산 |
 | 11 | **R16 매핑 집행** | 모델 | 모델 (같음) | 대칭 — `radar.py`에 `affected` 검사가 생기면 R10과 함께 옮길 후보 |
+| 12 | **technology 칸의 모양** | `references/schema.md` ADR 예시(`technology: LEANN`)와 기존 ADR을 읽고 배운다 | triage 스키마 필드 설명에 「이름만, 버전·설명 없이」를 직접 적는다 | 2026-10-06 첫 실제 실행에서 이 안내 없이 6/7이 이름에 버전·설명을 붙여 동일성 비교가 깨졌다 — 같은 정보를 다른 경로로 준다 |
