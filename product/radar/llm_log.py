@@ -13,6 +13,8 @@ from langchain_core.callbacks import BaseCallbackHandler
 
 from common.env import cost_usd
 
+from . import retry
+
 
 class CallLog(BaseCallbackHandler):
     def __init__(self, ctx, flow, default_model):
@@ -23,6 +25,12 @@ class CallLog(BaseCallbackHandler):
         md = metadata or {}
         self._start[run_id] = {"agent": md.get("lc_agent_name") or md.get("langgraph_node") or "?",
                                "model": (kw.get("invocation_params") or {}).get("model")}
+
+    @staticmethod
+    def _attempts(run_id):
+        """시도 횟수·재시도한 오류 종류 (retry.py). 재시도가 없었으면 attempts=1만 남긴다. 실패한 시도는 토큰 0이라 비용에 안 든다."""
+        info = retry.pop_info(run_id)
+        return {"attempts": info["attempts"], **({"retried": info["retried"]} if info["retried"] else {})}
 
     def _emit(self, rec):
         with self._lock:
@@ -38,15 +46,16 @@ class CallLog(BaseCallbackHandler):
         model = meta.get("model_name") or meta.get("model") or st.get("model") or self.default_model
         i, o = um.get("input_tokens", 0), um.get("output_tokens", 0)
         stub = self.default_model == "stub"
-        self._emit({"type": "llm_call", "flow": self.flow, "agent": st.get("agent"), "model": model,
-                    "input_tokens": i, "output_tokens": o, "estimated": stub,
-                    "cost_usd": 0.0 if stub else cost_usd(i, o)})
+        rec = {"type": "llm_call", "flow": self.flow, "agent": st.get("agent"), "model": model,
+               "input_tokens": i, "output_tokens": o, "estimated": stub,
+               "cost_usd": 0.0 if stub else cost_usd(i, o)}
+        self._emit({**rec, **self._attempts(run_id)})
 
     def on_llm_error(self, error, *, run_id, **kw):
         st = self._start.pop(run_id, {})
         self._emit({"type": "llm_call", "flow": self.flow, "agent": st.get("agent"), "model": self.default_model,
                     "input_tokens": 0, "output_tokens": 0, "estimated": False, "cost_usd": 0.0,
-                    "error": f"{type(error).__name__}: {str(error)[:200]}"})
+                    "error": f"{type(error).__name__}: {str(error)[:200]}", **self._attempts(run_id)})
 
     def totals(self):
         return {"model_calls": len(self.calls), "input_tokens": sum(c["input_tokens"] for c in self.calls),
