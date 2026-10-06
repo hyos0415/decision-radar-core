@@ -7,7 +7,8 @@
 스크립트 검증 규칙 (지금 대상 repo에서 읽을 수 있는 신호만):
   S1 Dockerfile `FROM` · compose `image`로 나온 기술      → L1 (베이스 이미지·서빙 엔진·우리가 띄우는 서버, V3-1). 경로 prod
   S2 dev 그룹(requirements-dev · optional-dependencies/dependency-groups의 dev·test·lint… · poetry group)의 패키지 → L7, 경로 dev
-  S3 manifest(main 그룹)에 직접 적힌 패키지 → 등급은 L4~L8 중에서만. 모델이 L0~L3을 냈으면 그 등급을 떨어낸다. 남는 게 없으면 분류 불가
+  S3 manifest(main 그룹)에 직접 적힌 패키지 → 언어 런타임(L0)·실행 기반(L1)일 수 없다 — 모델이 낸 L0·L1만 떨어낸다. 호스팅 등급(L2·L3)은 떨어내지 않는다
+     (langfuse = L3 서비스 + L5 SDK 같은 두 등급이 유지돼야 한다 — importance-policy §4 예시 · §8 판정 세부). 남는 게 없으면 분류 불가
 분류 불가(unresolved)는 이번 주 후보에서 빼고 로그에 남긴다 (v1.1 U4).
 NOT_IMPLEMENTED: 구현하지 못한 신호 목록 — 보고서와 같은 내용.
 """
@@ -27,7 +28,7 @@ NOT_IMPLEMENTED = [
     "민감 경로(PII 경로) · 로컬 서빙 모델 여부: 자동으로 알 수 없어 overrides(사람 입력)로만 켠다",
     "운영 기본값 vs 비교용 호스팅 모델 구분 (importance-policy §7)",
 ]
-MANIFEST_TIERS = {"L4", "L5", "L6", "L7", "L8"}
+MANIFEST_DROP_TIERS = {"L0", "L1"}      # S3이 떨어내는 등급 (L2·L3은 두 등급 기술의 한 축이라 남긴다)
 
 
 def verify(model_tiers, model_unsure, signals):
@@ -40,8 +41,8 @@ def verify(model_tiers, model_unsure, signals):
     elif sig.get("group") == "dev":
         script, path, rule = ["L7"], "dev", "S2 dev 그룹 → L7"
     elif sig.get("manifest") and sig.get("group") == "main":
-        kept = [t for t in model_tiers if t in MANIFEST_TIERS]
-        rule, path = "S3 manifest 직접 의존성 → L4~L8만", "prod"
+        kept = [t for t in model_tiers if t not in MANIFEST_DROP_TIERS]
+        rule, path = "S3 manifest 직접 의존성 → L0·L1 제외", "prod"
         if not kept:
             mm = {"rule": rule, "model": model_tiers, "script": [], "note": "남는 등급이 없다 — 분류 불가"}
             return {"tiers": [], "unresolved": True, "path": path, "pin": pin, "mismatch": mm}

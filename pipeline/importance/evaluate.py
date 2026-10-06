@@ -3,6 +3,7 @@
   python -m pipeline.importance evaluate --gold eval/importance/gold.json --model stub                # 모델 없이 배관 확인 (판정 아님)
   python -m pipeline.importance evaluate --gold ... --model gpt-6-luna --k 3 --plan                   # 호출 수만 센다
   python -m pipeline.importance evaluate --gold ... --model gpt-6-luna --k 3 --real-api               # 실제 API (과금) — 플래그 없으면 거부
+  python -m pipeline.importance evaluate --gold ... --model jev-1.13.0 --k 3 --plan                   # Jev: 요청 수 (요청 하나가 질문 여럿 — 비용은 입력 토큰당 $0.042/Mtok)
   (같은 것: python pipeline/importance/evaluate.py ...)
 
 ## 정답지 형식 (JSON) — eval/importance/gold.example.json 참고
@@ -247,7 +248,7 @@ def main(argv=None):
             s.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(prog="pipeline.importance evaluate")
     ap.add_argument("--gold", required=True, help="정답지 JSON (형식: 이 파일 머리말)")
-    ap.add_argument("--model", required=True, help="stub | gpt-6-luna | gpt-6.1-sol | (나중에) jev-1.13.0")
+    ap.add_argument("--model", required=True, help="stub | gpt-6-luna | gpt-6.1-sol | jev-1.13.0 (고정 ID — alias 거부)")
     ap.add_argument("--k", type=int, default=3)
     ap.add_argument("--real-api", action="store_true", help="실제 API 호출(과금)을 허용한다. 없으면 stub 외에는 거부")
     ap.add_argument("--plan", action="store_true", help="호출 수만 세고 끝 (API·키 접근 없음)")
@@ -271,11 +272,14 @@ def main(argv=None):
         res = evaluate(backend, gold, a.k, diag)
     finally:
         trace = backend.trace_info() if hasattr(backend, "trace_info") else None
+        info = backend.run_info() if hasattr(backend, "run_info") else None
         backend.close()
     calls = backend.log.totals()
-    (out / "summary.json").write_text(json.dumps({"model": a.model, "gold": str(a.gold), "plan": pl, "calls": calls, "trace": trace, **res},
+    (out / "summary.json").write_text(json.dumps({"model": a.model, "gold": str(a.gold), "plan": pl, "calls": calls, "trace": trace, "backend_info": info, **res},
                                                  ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
     print(format_report(a.model, res, calls, trace))
+    if info:
+        print(f"  백엔드: {info}")
     print(f"-> {out}")
     return 0 if (res["judgement"]["pass"] or res["judgement"]["smoke"]) else 1
 
