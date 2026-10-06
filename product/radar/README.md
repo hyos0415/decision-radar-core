@@ -109,3 +109,4 @@ detect    load ─▶ triage ─▶ screen ─Send─▶ draft ─▶ write ─�
 | 10 | **비용 단위** | `claude -p` 구독 | API 호출, `llm_call`로 토큰·달러 | 프로토콜 §3 — 토큰으로 나란히 두고 달러는 API 단가로 환산 |
 | 11 | **R16 매핑 집행** | 모델 | 모델 (같음) | 대칭 — `radar.py`에 `affected` 검사가 생기면 R10과 함께 옮길 후보 |
 | 12 | **technology 칸의 모양** | `references/schema.md` ADR 예시(`technology: LEANN`)와 기존 ADR을 읽고 배운다 | triage 스키마 필드 설명에 「이름만, 버전·설명 없이」를 직접 적는다 | 2026-10-06 첫 실제 실행에서 이 안내 없이 6/7이 이름에 버전·설명을 붙여 동일성 비교가 깨졌다 — 같은 정보를 다른 경로로 준다 |
+| 13 | **API 연결 오류 재시도** | `claude -p`(Claude Code)가 API 오류를 내부에서 재시도한다 — 횟수·대기는 모른다 | `retry.py` — 연결 오류·타임아웃·429·5xx만 최대 5회 시도(대기 2·4·8·16초, 합 ≤30초), 4xx는 안 함. `llm_call`에 `attempts`·`retried` | 대칭이 목적이지 횟수가 같다는 주장이 아니다(스킬 쪽 값은 확인하지 못했다). 2026-10-06 제품 53케이스 k=1에서 detect triage 첫 호출 연결 오류 4건(재실행 시 전부 통과)이 계기 — 게이트에서 안전 실패로 세지 않게 |

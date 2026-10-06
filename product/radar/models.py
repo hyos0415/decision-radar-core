@@ -11,6 +11,8 @@ from langchain_anthropic import ChatAnthropic
 
 from common.env import EFFORT, MODEL, anthropic_key
 
+from .retry import RetryMixin
+
 
 class RequestShapes:
     def __init__(self):
@@ -31,11 +33,12 @@ class RequestShapes:
 
 def make_anthropic(shapes=None):
     """NetGuard 안에서 부른다."""
-    class _Recording(ChatAnthropic):
+    class _Recording(RetryMixin, ChatAnthropic):
         def _get_request_payload(self, *a, **k):
             body = super()._get_request_payload(*a, **k)
             if shapes is not None:
                 shapes.add(body)
             return body
 
-    return _Recording(model=MODEL, api_key=anthropic_key(), effort=EFFORT, max_tokens=16000)
+    return _Recording(model=MODEL, api_key=anthropic_key(), effort=EFFORT, max_tokens=16000,
+                      max_retries=0)  # SDK 재시도(기본 2회, 총 ~1.5초)는 끄고 retry.py가 맡는다 — 시도 횟수를 기록하려고
