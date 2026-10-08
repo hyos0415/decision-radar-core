@@ -56,11 +56,12 @@ edit의 `draft`만 모양 검사 없이(dict) 받는다 — 모델로 받으면 
 | | 무엇 | 감싸는 코어 |
 |---|---|---|
 | `GET /health` | `{ok, mode(stub · demo), profile, model, flows, data_dir, adr_dir, demo?}` — `profile`은 개발 데이터 프로필(`default` · `andbread`), `flows`는 이 모드에서 돌릴 수 있는 흐름(데모는 `detect`만), `demo`는 `{adr_source, adr_copy, snapshot, funnel}` | — |
-| `GET /inbox` | 대기 항목 — capture(승인 대기 thread) + detect 초안(검토 대기 별도 파일). 오래된 순, `waiting_days`·`state`(awaiting_approval · stale · review …)·`actions`·`why`(detect만: 관문 판정 「왜 왔나」, 예 `anthropic L5 × deprecation` — 관문 없이 만든 입력이면 null) | `StateStore.threads` + checkpoint `get_state` · `hitl.review_queue` · `gate.json` |
+| `GET /inbox` | 대기 항목 — capture(승인 대기 thread) + detect 초안(검토 대기 별도 파일) + pending(접수된 capture: queued · running · error · linked · no_draft — 화면 설계 ①) + revisit(충족 알림, `adr`·`message` — 화면 설계 ③). 오래된 순, `waiting_days`·`state`(awaiting_approval · stale · review …)·`actions`·`why`(detect만: 관문 판정 「왜 왔나」, 예 `anthropic L5 × deprecation` — 관문 없이 만든 입력이면 null) | `StateStore.threads` + checkpoint `get_state` · `hitl.review_queue` · `gate.json` |
 | `GET /inbox/{id}` | + `draft`(detect는 초안 파일을 읽어 편집용으로) · `markdown`(저장될 ADR 미리보기) · `changes`(대기 중 바뀐 점) | `ops.render` · 지문 `compute`·`same`·`diff` (읽기만) |
 | `POST /inbox/{id}/approve` `{stale_answer?}` | → `{outcome, message, adr?, path?, changes?, answers?, errors?, validate_errors?}` | capture `capture_turn2(approve)` · detect `hitl.review_item(approve)` |
 | `POST /inbox/{id}/edit` `{draft, stale_answer?}` | 고친 초안. 검사 실패면 `edit_errors` — 쓰지 않는다 | capture `capture_turn2(edit)` · detect `check_edit` → `rewrite_adr`(같은 번호) → `review_item` |
 | `POST /inbox/{id}/reject` | detect는 초안 파일을 지우고 닫는다 | capture `capture_turn2(reject)` · detect `hitl.review_item(reject)` |
+| `POST /inbox/{id}/ack` | **확인함** (HYO-92) — `kind: pending`(끝난 접수)·`kind: revisit`(충족 알림)을 Inbox에서 치운다. ADR은 안 바꾼다(R8). 초안(capture·detect)에는 409 | `jobs.ack` · `<data>/alerts.json` |
 | `POST /jobs/{capture\|detect\|revisit}` `{conversation?}` | **작업 + 폴링** (HYO-85) — 202 `{job}`으로 바로 돌아온다. 입력 오류는 4xx(작업이 되지 않음). 일꾼 하나가 접수 순서대로 돈다 | `jobs.py` → `submit_capture` · `run` |
 | `GET /jobs` · `/jobs/{id}` | 상태 창 — `{id, kind, state(queued · running · done · error), created, started, finished, message(한 줄), result(아래 동기 엔드포인트와 같은 모양), error, item(capture가 만든 Inbox 항목), mode}`. 끝나면 화면이 Inbox를 다시 읽고 알림. 백엔드가 다시 뜨면 끝나지 않은 작업은 error(다시 돌리지 않음) | `<data>/jobs.json` |
 | `POST /capture` `{conversation}` | 빠른 capture(동기 — 작업 API로 옮기는 동안 남겨 둔다) → `awaiting`(Inbox에 승인 대기) · `linked`(같은 결정이 이미 있음, `link_candidates`) · `no_draft` | `capture_turn1` (R9: 쓰기 0) |

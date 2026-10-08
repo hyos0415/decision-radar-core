@@ -42,6 +42,17 @@ Renderer: React + TypeScript (Vite, electron-vite)  ── FastAPI JSON API만 �
 | **Must** | 트레이 상주 · **Inbox** — 대기 항목 승인·edit·거부, detect 초안 검토, 재개 때 「바뀐 점」 표시, 대기 일수 · **빠른 capture 창** — 전역 단축키 → 대화 붙여넣기 → capture 흐름 → 승인 · 새 항목 **네이티브 알림** · **Decisions** 목록(읽기 — ADR·status·재검토 상태) · 행동 이벤트 로깅(실사용 지표, 비교 프로토콜 §7: 알림 대비 행동·후보 대비 검토·무시) |
 | **Won't (지금)** | 설치 파일 패키징·코드 서명·자동 업데이트 · 여러 사용자·인증 · 앱 안 터미널 창(CLI는 백그라운드 실행이면 된다 — 사용자) · 화면에서 status 바꾸기(R8 — status는 ADR 파일에서 사람이) |
 
+## 3-1. 화면 설계 — 정할 것 4건 결정 (2026-10-08, 프론트 담당과)
+
+원본: 프론트 담당과의 결정 기록(`2026-10-08-desktop-screen-design.md`)을 근거로 옮겼다. 백엔드 API는 HYO-85(②·작업 API)·HYO-92(①·③)에서 확정했다 — 칸의 정확한 모양은 `desktop/openapi.json`.
+
+| # | 질문 | 결정 | 백엔드(API) | 프론트(UI) |
+|---|---|---|---|---|
+| 1 | capture 창은 기다리지 않고 「접수됨」만 → 초안은 Inbox로 | **채택** | 작업 API(`POST /jobs/capture` → `GET /jobs`) + Inbox에 `kind: pending` 행(queued · running · error · linked · no_draft). 초안이 나오면 그 행은 빠지고 capture 항목이 잇는다. 초안 없이 끝난 것은 「확인함」(`POST /inbox/{id}/ack`)으로 치운다 | Inbox에 「접수된 항목」 표시 |
+| 2 | detect 항목 맨 위에 「왜 왔나」 한 줄 (관문 이유) | **채택** | Inbox 항목 `why` (관문 kept_by, 예 `anthropic L5 × deprecation`) | 목록 항목에 선정 이유 |
+| 3 | revisit 충족 알림을 Inbox에 넣을지, Decisions에서 표시만 할지 | **Inbox에 넣는다** | revisit 실행의 충족 알림 → Inbox `kind: revisit` 행(`adr` · 조건 문장 `message`). 「확인함」은 Inbox에서 치울 뿐 ADR 파일·status를 바꾸지 않는다(R8). 안 치운 같은 (ADR, 조건)은 다시 만들지 않는다. 기록은 앱 데이터(`alerts.json`)에만 | 「ADR 열기 · 확인함」 — 열기는 `/decisions/{adr}` |
+| 4 | 실행 화면을 사이드바에서 내릴지 | **보류** — 주말 Figma Make 시안 뒤 결정 | — | Figma Make로 실행 버튼 위치·UI 시안 |
+
 ## 4. 비교 공정성
 
 스킬은 GitHub 알림(issue·PR 메일), 제품은 OS 네이티브 알림이다. 실사용에서 제품이 이겨도 「한곳에 모여서」(G4)인지 「알림이 더 세서」인지 섞인다 — 막지 않고 **판정문에 교란으로 적는다** (비교 프로토콜 §7 교란 표).

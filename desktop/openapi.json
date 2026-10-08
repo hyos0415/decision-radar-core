@@ -517,6 +517,96 @@
         }
       }
     },
+    "/inbox/{item_id}/ack": {
+      "post": {
+        "summary": "Ack",
+        "description": "「확인함」 — 접수된 capture(끝난 것)·revisit 충족 알림을 Inbox에서 치운다. ADR은 안 바꾼다 (R8).",
+        "operationId": "ack",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/capture": {
       "post": {
         "summary": "Capture",
@@ -1346,6 +1436,7 @@
               "rejudge",
               "blocked",
               "recovered",
+              "acked",
               "error"
             ],
             "title": "Outcome"
@@ -2172,7 +2263,9 @@
             "type": "string",
             "enum": [
               "capture",
-              "detect"
+              "detect",
+              "pending",
+              "revisit"
             ],
             "title": "Kind"
           },
@@ -2213,10 +2306,18 @@
               "stale",
               "review",
               "pending",
-              "blocked"
+              "blocked",
+              "queued",
+              "running",
+              "error",
+              "linked",
+              "no_draft",
+              "met",
+              "not_met",
+              "undetermined"
             ],
             "title": "State",
-            "description": "capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked"
+            "description": "capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked / pending: queued · running · error · linked · no_draft / revisit: met (판정 결과)"
           },
           "actions": {
             "items": {
@@ -2224,7 +2325,8 @@
               "enum": [
                 "approve",
                 "edit",
-                "reject"
+                "reject",
+                "ack"
               ]
             },
             "type": "array",
@@ -2242,6 +2344,30 @@
             ],
             "title": "Why",
             "description": "detect만: 왜 왔나 — 관문 판정 (예 `anthropic L5 × deprecation`). 관문 없이 만든 입력·capture는 null"
+          },
+          "adr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adr",
+            "description": "revisit: 조건이 충족된 ADR 번호 (「ADR 열기」 → /decisions/{adr})"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message",
+            "description": "pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장"
           },
           "draft": {
             "anyOf": [
@@ -2313,7 +2439,9 @@
             "type": "string",
             "enum": [
               "capture",
-              "detect"
+              "detect",
+              "pending",
+              "revisit"
             ],
             "title": "Kind"
           },
@@ -2354,10 +2482,18 @@
               "stale",
               "review",
               "pending",
-              "blocked"
+              "blocked",
+              "queued",
+              "running",
+              "error",
+              "linked",
+              "no_draft",
+              "met",
+              "not_met",
+              "undetermined"
             ],
             "title": "State",
-            "description": "capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked"
+            "description": "capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked / pending: queued · running · error · linked · no_draft / revisit: met (판정 결과)"
           },
           "actions": {
             "items": {
@@ -2365,7 +2501,8 @@
               "enum": [
                 "approve",
                 "edit",
-                "reject"
+                "reject",
+                "ack"
               ]
             },
             "type": "array",
@@ -2383,6 +2520,30 @@
             ],
             "title": "Why",
             "description": "detect만: 왜 왔나 — 관문 판정 (예 `anthropic L5 × deprecation`). 관문 없이 만든 입력·capture는 null"
+          },
+          "adr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adr",
+            "description": "revisit: 조건이 충족된 ADR 번호 (「ADR 열기」 → /decisions/{adr})"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message",
+            "description": "pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장"
           }
         },
         "type": "object",
@@ -2398,7 +2559,8 @@
           "actions",
           "why"
         ],
-        "title": "InboxItem"
+        "title": "InboxItem",
+        "description": "Inbox 한 줄. kind: capture(승인 대기 초안) · detect(검토 대기 초안) · pending(접수된 capture — 처리 중이거나 초안 없이 끝남, 화면 설계 ①) ·\nrevisit(재검토 조건 충족 알림, 화면 설계 ③). pending·revisit의 답은 「확인함」(ack)뿐 — Inbox에서 치울 뿐 ADR은 안 바꾼다 (R8)."
       },
       "InboxList": {
         "properties": {
@@ -2524,6 +2686,24 @@
               "demo"
             ],
             "title": "Mode"
+          },
+          "preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview",
+            "description": "capture: 대화 첫 줄 (Inbox에 접수된 항목 제목)"
+          },
+          "acked": {
+            "type": "boolean",
+            "title": "Acked",
+            "description": "Inbox에서 「확인함」으로 치웠나",
+            "default": false
           }
         },
         "type": "object",

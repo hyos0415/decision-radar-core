@@ -170,6 +170,7 @@ def main():
         scenario_m2(os.path.join(tmp, "data2"))
         scenario_profile(os.path.join(tmp, "data-andbread"))
         scenario_hyo85(tmp)
+        scenario_hyo92(tmp)
     finally:
         os.environ.pop("RADAR_EXPORT", None)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -493,6 +494,79 @@ def scenario_hyo85(tmp):
     check("데모: 원본 ADR repo 무변경", _tree_hash(src) == before)
     dsvc2 = RadarService(ddir, model="anthropic", demo=True, demo_adr=src, demo_snapshot=snap, chat_factory=fake)
     check("데모 재시작: 사본을 이어 쓴다 (다시 복사하지 않음)", glob.glob(os.path.join(dsvc2.adr_dir, a["adr"] + "-*.md")))
+
+
+def scenario_hyo92(tmp):
+    """HYO-92 화면 설계 ①·③ — 접수된 capture가 Inbox에(대기 → 처리 → 초안이면 빠짐 / 초안 없이 끝나면 확인함) · revisit 충족 알림이 Inbox에(확인함은 ADR을 안 바꾼다, R8)."""
+    print("\n— HYO-92: 접수된 capture · revisit 충족 알림 —")
+    import jobs as jobs_mod
+    data = os.path.join(tmp, "data92")
+    devdata.seed(data)
+    svc = RadarService(data)
+    jobs = jobs_mod.Jobs(svc, start=False)  # 일꾼을 안 띄우고 손으로 하나씩 돌린다 — 대기 상태를 볼 수 있게
+    c = TestClient(server.create_app(svc, jobs=jobs))
+    convs = json.load(open(os.path.join(devdata.FIX, "conversations.json"), encoding="utf-8"))
+
+    def rows(kind):
+        return [i for i in c.get("/inbox").json()["items"] if i["kind"] == kind]
+
+    def step():
+        jid, payload = jobs.q.get()
+        jobs.run_one(jid, payload)
+        jobs.q.task_done()
+
+    # ① 접수 → 대기 행 → 처리 → 초안이면 대기 행은 빠지고 capture 항목이 잇는다
+    j1 = c.post("/jobs/capture", json={"conversation": "\n  " + convs["V8"]}).json()["job"]
+    p = rows("pending")
+    check("① 접수 즉시 Inbox에 대기 행 (queued · 답 없음 · 제목=대화 첫 줄)", len(p) == 1 and p[0]["id"] == j1["id"] and p[0]["state"] == "queued"
+          and p[0]["actions"] == [] and convs["V8"].strip().startswith(p[0]["title"].rstrip("…")) and len(p[0]["title"]) <= 81, p)
+    check("① 처리 중인 접수는 확인함으로 못 치움 409", c.post(f"/inbox/{j1['id']}/ack").status_code == 409)
+    step()
+    done = c.get(f"/jobs/{j1['id']}").json()
+    check("① 초안이 나오면 대기 행은 빠지고 capture 항목", not rows("pending") and done["item"] in {i["id"] for i in rows("capture")}, (rows("pending"), done))
+    # 초안 없이 끝남(같은 결정 있음) → 확인함으로 치운다
+    j2 = c.post("/jobs/capture", json={"conversation": convs["V1"]}).json()["job"]
+    step()
+    p = rows("pending")
+    check("① 같은 결정 → 대기 행 linked + 확인함", len(p) == 1 and p[0]["state"] == "linked" and p[0]["actions"] == ["ack"] and "0001" in (p[0]["message"] or ""), p)
+    check("① 대기 행에 승인은 409", c.post(f"/inbox/{j2['id']}/approve", json={}).status_code == 409)
+    det = c.get(f"/inbox/{j2['id']}").json()
+    check("① 대기 행 상세", det["kind"] == "pending" and det["draft"] is None, det)
+    a = c.post(f"/inbox/{j2['id']}/ack").json()
+    check("① 확인함 → 사라짐 · 작업 기록엔 acked", a["outcome"] == "acked" and not rows("pending") and c.get(f"/jobs/{j2['id']}").json()["acked"], a)
+    check("① 두 번 확인함 404", c.post(f"/inbox/{j2['id']}/ack").status_code == 404)
+    # 실패한 접수
+    orig = svc.submit_capture
+    svc.submit_capture = lambda conv: (_ for _ in ()).throw(RuntimeError("모델 연결 실패"))
+    j3 = c.post("/jobs/capture", json={"conversation": "아무 대화"}).json()["job"]
+    step()
+    svc.submit_capture = orig
+    p = rows("pending")
+    check("① 실패 → 대기 행 error + 이유 + 확인함", len(p) == 1 and p[0]["id"] == j3["id"] and p[0]["state"] == "error" and "모델 연결 실패" in p[0]["message"]
+          and p[0]["actions"] == ["ack"], p)
+    c.post(f"/inbox/{j3['id']}/ack")
+    check("① 초안(capture)에 확인함은 409", c.post(f"/inbox/{done['item']}/ack").status_code == 409)
+
+    # ③ revisit 충족 → Inbox (0001 c1 — 스냅숏 S02)
+    adr1 = glob.glob(os.path.join(svc.adr_dir, "0001-*.md"))[0]
+    r = c.post("/runs/revisit", json={}).json()
+    before = open(adr1, "rb").read()  # revisit 실행은 기록용 칸(revisit_last_checked)을 쓴다 — 확인함 전후를 비교한다
+    rv = rows("revisit")
+    check("③ 충족 알림이 Inbox에 (adr · 조건 문장 · 확인함)", r["alerts"] and len(rv) == len(r["alerts"]) and rv[0]["adr"] == "0001" and rv[0]["state"] == "met"
+          and rv[0]["actions"] == ["ack"] and rv[0]["message"].startswith("c1") and rv[0]["title"].startswith("재검토 조건 충족"), rv)
+    det = c.get(f"/inbox/{rv[0]['id']}").json()
+    check("③ 상세 = ADR 원문 (「ADR 열기」 재료)", det["markdown"] == before.decode("utf-8") and det["number_note"] == "ADR 0001", det["number_note"])
+    n = len(svc._record_alerts(r["alerts"], "2026-10-09T09:00:00+09:00"))
+    check("③ 안 치운 같은 알림은 다시 안 만든다", n == 0 and len(rows("revisit")) == len(rv))
+    check("③ 알림에 승인은 409", c.post(f"/inbox/{rv[0]['id']}/approve", json={}).status_code == 409)
+    a = c.post(f"/inbox/{rv[0]['id']}/ack").json()
+    st = {d["id"]: d["status"] for d in c.get("/decisions").json()["items"]}
+    check("③ 확인함 → 사라짐 · ADR 파일 바이트 그대로 · status 그대로 (R8)", a["outcome"] == "acked" and len(rows("revisit")) == len(rv) - 1
+          and open(adr1, "rb").read() == before and st["0001"] == "hold", (a, st.get("0001")))
+    check("③ 치운 뒤 같은 조건이 다시 충족되면 새 알림", len(svc._record_alerts([{"adr": "0001", "condition": "c1", "result": "met", "message": "x"}],
+                                                                      "2026-10-16T09:00:00+09:00")) == 1)
+    kinds = [x["event"] for x in events(svc)]
+    check("로그: ack · item_created(revisit)", "ack" in kinds and any(x["event"] == "item_created" and (x.get("detail") or {}).get("kind") == "revisit" for x in events(svc)))
 
 
 if __name__ == "__main__":

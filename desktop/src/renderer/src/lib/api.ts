@@ -26,7 +26,8 @@ export const SUCCESS_OUTCOMES: Outcome[] = [
   'rejected',
   'discarded',
   'rejudge',
-  'recovered'
+  'recovered',
+  'acked'
 ]
 
 export type CaptureResult = S['CaptureResult']
@@ -96,6 +97,9 @@ export const api = {
     ),
   reject: (id: string) =>
     unwrap(client.POST('/inbox/{item_id}/reject', { params: { path: { item_id: id } } })),
+  /** 「확인함」 — 접수된 capture(끝난 것)·revisit 충족 알림을 Inbox에서 치운다. ADR은 안 바꾼다 (R8) */
+  ack: (id: string) =>
+    unwrap(client.POST('/inbox/{item_id}/ack', { params: { path: { item_id: id } } })),
   event: (event: EventName, item?: string): void => {
     unwrap(client.POST('/events', { body: { event, item: item ?? null, detail: {} } })).catch(
       () => {}
