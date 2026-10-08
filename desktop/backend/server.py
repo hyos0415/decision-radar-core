@@ -73,6 +73,11 @@ def create_app(svc: RadarService = None, scheduler_on: bool = False, jobs: Jobs 
     def reject(item_id: str):
         return svc.answer(item_id, "reject")
 
+    @app.post("/inbox/{item_id}/ack", response_model=S.ActionResult, operation_id="ack")
+    def ack(item_id: str):
+        """「확인함」 — 접수된 capture(끝난 것)·revisit 충족 알림을 Inbox에서 치운다. ADR은 안 바꾼다 (R8)."""
+        return svc.ack(item_id)
+
     @app.post("/capture", response_model=S.CaptureResult, operation_id="capture")
     def capture(body: S.CaptureRequest):
         return svc.submit_capture(body.conversation)

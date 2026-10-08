@@ -106,6 +106,26 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/inbox/{item_id}/ack': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Ack
+     * @description 「확인함」 — 접수된 capture(끝난 것)·revisit 충족 알림을 Inbox에서 치운다. ADR은 안 바꾼다 (R8).
+     */
+    post: operations['ack']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/capture': {
     parameters: {
       query?: never
@@ -295,6 +315,7 @@ export interface components {
         | 'rejudge'
         | 'blocked'
         | 'recovered'
+        | 'acked'
         | 'error'
       /** Message */
       message?: string | null
@@ -575,7 +596,7 @@ export interface components {
        * Kind
        * @enum {string}
        */
-      kind: 'capture' | 'detect'
+      kind: 'capture' | 'detect' | 'pending' | 'revisit'
       /** Title */
       title: string
       /** Technology */
@@ -588,20 +609,43 @@ export interface components {
       waiting_days: number
       /**
        * State
-       * @description capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked
+       * @description capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked / pending: queued · running · error · linked · no_draft / revisit: met (판정 결과)
        * @enum {string}
        */
-      state: 'awaiting_approval' | 'stale' | 'review' | 'pending' | 'blocked'
+      state:
+        | 'awaiting_approval'
+        | 'stale'
+        | 'review'
+        | 'pending'
+        | 'blocked'
+        | 'queued'
+        | 'running'
+        | 'error'
+        | 'linked'
+        | 'no_draft'
+        | 'met'
+        | 'not_met'
+        | 'undetermined'
       /**
        * Actions
        * @description 이 항목에 할 수 있는 답. 빈 목록이면 보기만
        */
-      actions: ('approve' | 'edit' | 'reject')[]
+      actions: ('approve' | 'edit' | 'reject' | 'ack')[]
       /**
        * Why
        * @description detect만: 왜 왔나 — 관문 판정 (예 `anthropic L5 × deprecation`). 관문 없이 만든 입력·capture는 null
        */
       why: string | null
+      /**
+       * Adr
+       * @description revisit: 조건이 충족된 ADR 번호 (「ADR 열기」 → /decisions/{adr})
+       */
+      adr?: string | null
+      /**
+       * Message
+       * @description pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장
+       */
+      message?: string | null
       /** @description 편집용 초안. detect는 초안 파일을 읽어 만든다 — 못 읽으면 null */
       draft: components['schemas']['AdrDraft'] | null
       /**
@@ -622,7 +666,11 @@ export interface components {
        */
       note?: string | null
     }
-    /** InboxItem */
+    /**
+     * InboxItem
+     * @description Inbox 한 줄. kind: capture(승인 대기 초안) · detect(검토 대기 초안) · pending(접수된 capture — 처리 중이거나 초안 없이 끝남, 화면 설계 ①) ·
+     *     revisit(재검토 조건 충족 알림, 화면 설계 ③). pending·revisit의 답은 「확인함」(ack)뿐 — Inbox에서 치울 뿐 ADR은 안 바꾼다 (R8).
+     */
     InboxItem: {
       /** Id */
       id: string
@@ -630,7 +678,7 @@ export interface components {
        * Kind
        * @enum {string}
        */
-      kind: 'capture' | 'detect'
+      kind: 'capture' | 'detect' | 'pending' | 'revisit'
       /** Title */
       title: string
       /** Technology */
@@ -643,20 +691,43 @@ export interface components {
       waiting_days: number
       /**
        * State
-       * @description capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked
+       * @description capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked / pending: queued · running · error · linked · no_draft / revisit: met (판정 결과)
        * @enum {string}
        */
-      state: 'awaiting_approval' | 'stale' | 'review' | 'pending' | 'blocked'
+      state:
+        | 'awaiting_approval'
+        | 'stale'
+        | 'review'
+        | 'pending'
+        | 'blocked'
+        | 'queued'
+        | 'running'
+        | 'error'
+        | 'linked'
+        | 'no_draft'
+        | 'met'
+        | 'not_met'
+        | 'undetermined'
       /**
        * Actions
        * @description 이 항목에 할 수 있는 답. 빈 목록이면 보기만
        */
-      actions: ('approve' | 'edit' | 'reject')[]
+      actions: ('approve' | 'edit' | 'reject' | 'ack')[]
       /**
        * Why
        * @description detect만: 왜 왔나 — 관문 판정 (예 `anthropic L5 × deprecation`). 관문 없이 만든 입력·capture는 null
        */
       why: string | null
+      /**
+       * Adr
+       * @description revisit: 조건이 충족된 ADR 번호 (「ADR 열기」 → /decisions/{adr})
+       */
+      adr?: string | null
+      /**
+       * Message
+       * @description pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장
+       */
+      message?: string | null
     }
     /** InboxList */
     InboxList: {
@@ -705,6 +776,17 @@ export interface components {
        * @enum {string}
        */
       mode: 'stub' | 'demo'
+      /**
+       * Preview
+       * @description capture: 대화 첫 줄 (Inbox에 접수된 항목 제목)
+       */
+      preview?: string | null
+      /**
+       * Acked
+       * @description Inbox에서 「확인함」으로 치웠나
+       * @default false
+       */
+      acked: boolean
     }
     /** JobEnvelope */
     JobEnvelope: {
@@ -1277,6 +1359,82 @@ export interface operations {
     }
   }
   reject: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        item_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ActionResult']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  ack: {
     parameters: {
       query?: never
       header?: never

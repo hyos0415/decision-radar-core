@@ -25,7 +25,8 @@ export const SUCCESS_OUTCOMES: Outcome[] = [
   'rejected',
   'discarded',
   'rejudge',
-  'recovered'
+  'recovered',
+  'acked'
 ]
 
 export type CaptureResult = S['CaptureResult']
@@ -84,6 +85,8 @@ export const api = {
   edit: (id: string, draft: AdrDraft, stale_answer: StaleAnswer | null = null) =>
     request<ActionResult>('POST', `/inbox/${enc(id)}/edit`, { draft, stale_answer }),
   reject: (id: string) => request<ActionResult>('POST', `/inbox/${enc(id)}/reject`, {}),
+  /** 「확인함」 — 접수된 capture(끝난 것)·revisit 충족 알림을 Inbox에서 치운다. ADR은 안 바꾼다 (R8) */
+  ack: (id: string) => request<ActionResult>('POST', `/inbox/${enc(id)}/ack`, {}),
   event: (event: EventName, item?: string): void => {
     request('POST', '/events', { event, item: item ?? null, detail: {} }).catch(() => {})
   },

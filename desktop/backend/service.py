@@ -52,6 +52,7 @@ STATE_FILE = "capture-checkpoint.sqlite"
 META_FILE = "app-meta.json"
 EVENTS_FILE = "events.jsonl"
 RUNS_FILE = "runs.jsonl"
+ALERTS_FILE = "alerts.json"  # revisit 충족 알림 — Inbox 항목 (화면 설계 ③). 앱 데이터에만, ADR repo에는 안 쓴다
 DEFAULT_STUB = "JHS-014"  # 2턴 스텁 대본 — 2턴에서는 도구 결과 순서만 보고 끝내므로 항목마다 달라도 같다 (stub_policy.capture_step)
 UI_EVENTS = ("app_opened", "item_opened", "notification_shown", "notification_clicked", "capture_opened", "decision_opened")
 FLOWS = ("detect", "revisit")
@@ -113,6 +114,8 @@ class RadarService:
         self.meta_path = os.path.join(self.data_dir, META_FILE)
         self.events_path = os.path.join(self.data_dir, EVENTS_FILE)
         self.runs_path = os.path.join(self.data_dir, RUNS_FILE)
+        self.alerts_path = os.path.join(self.data_dir, ALERTS_FILE)
+        self.jobs = None  # jobs.Jobs가 붙는다 (접수된 capture를 Inbox에)
         self.snapshot_dir = os.path.join(self.data_dir, "snapshots")
         self.tmp = os.path.join(self.data_dir, "tmp")
         self.radar_py = radar_py
@@ -307,7 +310,84 @@ class RadarService:
         ctx = self.ctx()  # 읽기 — 쓰기 잠금을 기다리지 않는다 (머리말)
         rows = [self._capture_row(ctx, c)[0] for c in self._captures(ctx)]
         rows += [self._review_row(ctx, q)[0] for q in hitl.review_queue(ctx)]
+        rows += [self._pending_row(j) for j in (self.jobs.pending() if self.jobs else [])]
+        rows += [self._alert_row(a) for a in self._alerts() if not a.get("acked")]
         return sorted(rows, key=lambda r: str(r["since"]))
+
+    # ── 접수된 capture (화면 설계 ①) · revisit 충족 알림 (화면 설계 ③) — 답은 「확인함」뿐 ──────
+
+    PENDING_MSG = {"queued": "접수됨 — 차례를 기다린다", "running": "처리 중", "error": None, "linked": None, "no_draft": None}
+
+    def _pending_row(self, j):
+        st = j["pending_state"]
+        done = st in ("error", "linked", "no_draft")
+        return {"id": j["id"], "kind": "pending", "title": j.get("preview") or "capture", "technology": None, "affected": [],
+                "since": j["created"], "waiting_days": _days(j["created"]), "state": st, "actions": ["ack"] if done else [],
+                "why": None, "adr": None, "message": self.PENDING_MSG.get(st) or j.get("error") or j.get("message")}
+
+    def _alerts(self):
+        try:
+            return json.load(open(self.alerts_path, encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+
+    def _save_alerts(self, alerts):
+        tmp = self.alerts_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(alerts, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, self.alerts_path)
+
+    def _record_alerts(self, alerts, at):
+        """revisit 실행의 충족 알림 → Inbox 항목. 같은 (ADR, 조건)이 아직 안 치운 채 있으면 새로 만들지 않고 시각만 갱신한다."""
+        if not alerts:
+            return []
+        rows = {d["id"]: d for d in self._safe_decisions()}
+        cur, new_ids = self._alerts(), []
+        for a in alerts:
+            open_one = next((x for x in cur if not x.get("acked") and x["adr"] == a["adr"] and x["condition"] == a["condition"]), None)
+            if open_one:
+                open_one["last_seen"] = at
+                continue
+            d = rows.get(a["adr"]) or {}
+            aid = f"revisit-{a['adr']}-{a['condition']}-{re.sub(r'[^0-9]', '', at)[:14]}"
+            cur.append({"id": aid, "adr": a["adr"], "condition": a["condition"], "result": a.get("result") or "met", "message": a.get("message") or "",
+                        "title": d.get("title") or f"ADR {a['adr']}", "technology": d.get("technology"), "affected": d.get("affected") or [],
+                        "since": at, "last_seen": at, "acked": False})
+            new_ids.append(aid)
+            self.log("item_created", aid, kind="revisit", adr=a["adr"], condition=a["condition"])
+        self._save_alerts(cur)
+        return new_ids
+
+    def _safe_decisions(self):
+        try:
+            return self.decisions()
+        except ServiceError:
+            return []
+
+    def _alert_row(self, a):
+        return {"id": a["id"], "kind": "revisit", "title": f"재검토 조건 충족 — {a['title']}", "technology": a.get("technology"),
+                "affected": a.get("affected") or [], "since": a["since"], "waiting_days": _days(a["since"]),
+                "state": a["result"] if a["result"] in ("met", "not_met", "undetermined") else "met", "actions": ["ack"],
+                "why": None, "adr": a["adr"], "message": f"{a['condition']}: {a['message']}" if a.get("message") else a["condition"]}
+
+    def ack(self, item_id):
+        """「확인함」 — Inbox에서 치운다. ADR 파일·status는 건드리지 않는다 (R8). 승인·거부할 초안(capture·detect)에는 쓰지 않는다."""
+        with self.lock:
+            alerts = self._alerts()
+            a = next((x for x in alerts if x["id"] == item_id and not x.get("acked")), None)
+            if a is not None:
+                a.update(acked=True, acked_at=now_iso())
+                self._save_alerts(alerts)
+                res = {"outcome": "acked", "message": f"확인함 — ADR {a['adr']}은 그대로다 (status는 ADR 파일에서 사람이 바꾼다)", "adr": a["adr"]}
+            elif self.jobs and any(j["id"] == item_id for j in self.jobs.pending()):
+                self.jobs.ack(item_id)
+                res = {"outcome": "acked", "message": "확인함 — 접수 기록을 치웠다"}
+            elif any(r["id"] == item_id for r in self.inbox()):
+                raise ServiceError(409, f"{item_id}: 초안은 승인·수정·거부로 답한다 — 확인함은 접수·재검토 알림만")
+            else:
+                raise ServiceError(404, f"{item_id}: 대기 항목이 아니다")
+            self.log("ack", item_id, **({"adr": res["adr"]} if res.get("adr") else {}))
+            return res
 
     def detail(self, item_id):
         ctx = self.ctx()  # 읽기 — 쓰기 잠금을 기다리지 않는다
@@ -324,6 +404,15 @@ class RadarService:
                 if not row["actions"]:
                     out["note"] = "내보내기가 꺼져 있어 답할 수 없다"
                 return out
+        for r in self.inbox():
+            if r["id"] == item_id and r["kind"] in ("pending", "revisit"):
+                md = ""
+                if r["kind"] == "revisit":
+                    try:
+                        md = self.decision(r["adr"])["markdown"]
+                    except ServiceError:
+                        md = ""
+                return {**r, "draft": None, "markdown": md, "changes": [], "number_note": f"ADR {r['adr']}" if r["adr"] else ""}
         raise ServiceError(404, f"{item_id}: 대기 항목이 아니다")
 
     # ── 답 ───────────────────────────────────────────────────────
@@ -339,6 +428,8 @@ class RadarService:
             if item_id not in ids:
                 q = next((q for q in hitl.review_queue(ctx) if q["item"] == item_id), None)
                 if q is None:
+                    if any(r["id"] == item_id for r in self.inbox()):
+                        raise ServiceError(409, f"{item_id}: 접수·재검토 알림은 「확인함」(ack)으로 답한다")
                     raise ServiceError(404, f"{item_id}: 대기 항목이 아니다")
                 return self._done(item_id, decision, stale_answer, self._review_answer(ctx, q, decision, stale_answer, draft))
             try:
@@ -526,6 +617,8 @@ class RadarService:
             try:
                 rep, diag = asyncio.run(fn(ctx, self.chat(flow, script), ctx.now, self.model_name))
                 res.update(self._summarize_detect(rep) if flow == "detect" else self._summarize_revisit(rep))
+                if flow == "revisit":
+                    self._record_alerts(res["alerts"], ctx.now)  # 충족 알림은 Inbox로 (화면 설계 ③)
                 if self.mode != "stub":
                     res["usage"] = {k: diag.get(k) for k in ("model_calls", "input_tokens", "output_tokens")}
                 if diag.get("p3_errors"):

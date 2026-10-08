@@ -32,6 +32,7 @@ class Jobs:
         self.lock = threading.Lock()
         self.q = queue.Queue()
         self.items = self._load()
+        svc.jobs = self  # Inbox가 접수된 capture를 보인다 (화면 설계 ①)
         self.thread = threading.Thread(target=self._loop, name="radar-jobs", daemon=True)
         if start:
             self.thread.start()
@@ -59,11 +60,14 @@ class Jobs:
         if kind == "capture":
             self.svc.check_conversation(body.get("conversation"))
             payload = {"conversation": body["conversation"]}
+            first = next((x.strip() for x in body["conversation"].splitlines() if x.strip()), "")
+            preview = first[:80] + ("…" if len(first) > 80 else "")
         else:
             self.svc.check_flow(kind)
-            payload = {}
+            payload, preview = {}, None
         job = {"id": f"job-{uuid.uuid4().hex[:10]}", "kind": kind, "state": "queued", "created": now_iso(), "started": None,
-               "finished": None, "message": "대기 중", "result": None, "error": None, "item": None, "mode": self.svc.mode}
+               "finished": None, "message": "대기 중", "result": None, "error": None, "item": None, "mode": self.svc.mode,
+               "preview": preview, "acked": False}
         with self.lock:
             self.items.append(job)
             self._save()
@@ -81,6 +85,25 @@ class Jobs:
         if j is None:
             raise ServiceError(404, f"작업 {job_id}가 없다")
         return dict(j)
+
+    PENDING_SHOWN = ("queued", "running", "error", "linked", "no_draft")
+
+    def pending(self):
+        """Inbox에 보일 접수된 capture — 처리 중이거나 초안 없이 끝난 것(실패 · 같은 결정 있음 · 초안 없음). 초안이 나오면 그 항목이 대신한다."""
+        out = []
+        for j in self.list(KEEP):
+            if j["kind"] != "capture" or j.get("acked"):
+                continue
+            st = j["state"] if j["state"] != "done" else (j.get("result") or {}).get("outcome")
+            if st in self.PENDING_SHOWN:
+                out.append({**j, "pending_state": st})
+        return out
+
+    def ack(self, job_id):
+        j = self.get(job_id)
+        if j["kind"] != "capture" or j["state"] in ("queued", "running"):
+            raise ServiceError(409, f"{job_id}: 끝난 capture 작업만 치울 수 있다 (지금 {j['state']})")
+        self._update(job_id, acked=True)
 
     def _update(self, job_id, **kw):
         with self.lock:

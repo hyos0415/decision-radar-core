@@ -16,10 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from common.schemas import AdrDraft, Affected  # noqa: F401 — 계약에 그대로 쓴다
 
-Action = Literal["approve", "edit", "reject"]
+Action = Literal["approve", "edit", "reject", "ack"]
 StaleAnswer = Literal["continue", "rejudge", "discard"]
 Mode = Literal["stub", "demo"]
-ItemState = Literal["awaiting_approval", "stale", "review", "pending", "blocked"]
+ItemState = Literal["awaiting_approval", "stale", "review", "pending", "blocked",  # capture · detect
+                    "queued", "running", "error", "linked", "no_draft",  # 접수된 capture (화면 설계 ①)
+                    "met", "not_met", "undetermined"]  # revisit 충족 알림 (화면 설계 ③)
 Flow = Literal["detect", "revisit"]
 
 
@@ -56,16 +58,21 @@ class Health(BaseModel):
 # ── Inbox ─────────────────────────────────────────────────────────
 
 class InboxItem(BaseModel):
+    """Inbox 한 줄. kind: capture(승인 대기 초안) · detect(검토 대기 초안) · pending(접수된 capture — 처리 중이거나 초안 없이 끝남, 화면 설계 ①) ·
+    revisit(재검토 조건 충족 알림, 화면 설계 ③). pending·revisit의 답은 「확인함」(ack)뿐 — Inbox에서 치울 뿐 ADR은 안 바꾼다 (R8)."""
     id: str
-    kind: Literal["capture", "detect"]
+    kind: Literal["capture", "detect", "pending", "revisit"]
     title: str
     technology: Optional[str]
     affected: list[Affected]
     since: str
     waiting_days: int
-    state: ItemState = Field(description="capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked")
+    state: ItemState = Field(description="capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked / "
+                                         "pending: queued · running · error · linked · no_draft / revisit: met (판정 결과)")
     actions: list[Action] = Field(description="이 항목에 할 수 있는 답. 빈 목록이면 보기만")
     why: Optional[str] = Field(description="detect만: 왜 왔나 — 관문 판정 (예 `anthropic L5 × deprecation`). 관문 없이 만든 입력·capture는 null")
+    adr: Optional[str] = Field(default=None, description="revisit: 조건이 충족된 ADR 번호 (「ADR 열기」 → /decisions/{adr})")
+    message: Optional[str] = Field(default=None, description="pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장")
 
 
 class InboxList(BaseModel):
@@ -89,7 +96,7 @@ class EditRequest(BaseModel):
     stale_answer: Optional[StaleAnswer] = None
 
 
-Outcome = Literal["written", "rejected", "stale", "edit_errors", "discarded", "rejudge", "blocked", "recovered", "error"]
+Outcome = Literal["written", "rejected", "stale", "edit_errors", "discarded", "rejudge", "blocked", "recovered", "acked", "error"]
 
 
 class ActionResult(BaseModel):
@@ -238,6 +245,8 @@ class Job(BaseModel):
     error: Optional[str]
     item: Optional[str] = Field(description="capture가 만든 Inbox 항목 (알림을 누르면 여기로)")
     mode: Mode
+    preview: Optional[str] = Field(default=None, description="capture: 대화 첫 줄 (Inbox에 접수된 항목 제목)")
+    acked: bool = Field(default=False, description="Inbox에서 「확인함」으로 치웠나")
 
 
 class JobEnvelope(BaseModel):
