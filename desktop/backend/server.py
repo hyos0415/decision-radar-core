@@ -1,6 +1,8 @@
 """Decision Radar 데스크톱 백엔드 — FastAPI (localhost). Electron main이 자식 프로세스로 띄우고 끈다 (desktop-app.md §2).
 
-  <레포 .venv python> desktop/backend/server.py --port P [--data-dir D]
+  <레포 .venv python> desktop/backend/server.py --port P [--data-dir D] [--profile NAME]
+
+개발 데이터 프로필은 `--profile` 또는 `RADAR_DEVDATA` (비우면 default) — 데이터 폴더는 `RADAR_APP_DATA` > `--data-dir` > 프로필의 기본 폴더 순.
 
 API 모양: desktop/README.md 「백엔드 API」. 엔드포인트는 전부 동기 함수다 — 코어(capture)가 안에서 asyncio.run을 쓰고,
 FastAPI가 동기 함수를 스레드 풀에서 돌리므로 이벤트 루프가 겹치지 않는다. 쓰기는 RadarService의 lock 하나로 줄 세운다.
@@ -18,10 +20,11 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 
 import devdata  # noqa: E402
+import devprofiles  # noqa: E402
 import scheduling  # noqa: E402
 from service import REPO, RadarService, ServiceError  # noqa: E402
 
-DEFAULT_DATA = os.path.join(REPO, "desktop", ".dev-data")
+DEFAULT_DATA = devprofiles.data_dir_for(devprofiles.DEFAULT)
 
 
 def create_app(svc: RadarService, scheduler_on: bool = False) -> FastAPI:
@@ -36,7 +39,7 @@ def create_app(svc: RadarService, scheduler_on: bool = False) -> FastAPI:
 
     @app.get("/health")
     def health():
-        return {"ok": True, "mode": svc.mode, "data_dir": svc.data_dir, "adr_dir": svc.adr_dir}
+        return {"ok": True, "mode": svc.mode, "profile": svc.profile, "data_dir": svc.data_dir, "adr_dir": svc.adr_dir}
 
     @app.get("/inbox")
     def inbox():
@@ -93,22 +96,37 @@ def create_app(svc: RadarService, scheduler_on: bool = False) -> FastAPI:
     return app
 
 
+def resolve_target(profile_arg, data_dir_arg, env=None):
+    """(프로필, 데이터 폴더) — 프로필은 인자 > RADAR_DEVDATA, 폴더는 RADAR_APP_DATA(명시) > --data-dir > 프로필의 기본 폴더."""
+    env = os.environ if env is None else env
+    profile = devprofiles.resolve(profile_arg or env.get("RADAR_DEVDATA"))
+    return profile, env.get("RADAR_APP_DATA") or data_dir_arg or devprofiles.data_dir_for(profile)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--data-dir", default=os.environ.get("RADAR_APP_DATA") or DEFAULT_DATA)
+    ap.add_argument("--data-dir", default=None)
+    ap.add_argument("--profile", default=None)
     a = ap.parse_args(argv)
+    try:
+        profile, a.data_dir = resolve_target(a.profile, a.data_dir)
+    except ValueError as e:
+        sys.exit(str(e))
     if a.host not in ("127.0.0.1", "localhost"):
         sys.exit("localhost에서만 띄운다")
     for s in (sys.stdout, sys.stderr):
         s.reconfigure(encoding="utf-8")
     if not devdata.is_seeded(a.data_dir):
-        print(f"개발 데이터를 만든다: {a.data_dir}", flush=True)
-        print(devdata.seed(a.data_dir), flush=True)
+        print(f"개발 데이터를 만든다: {a.data_dir} (프로필 {profile})", flush=True)
+        print(devdata.seed(a.data_dir, profile), flush=True)
     elif devdata.ensure_snapshots(a.data_dir):
         print("개발 데이터에 스냅숏을 더했다", flush=True)
-    svc = RadarService(a.data_dir)
+    try:
+        svc = RadarService(a.data_dir, profile=profile)  # 폴더를 만든 프로필과 다르면 거부한다
+    except ServiceError as e:
+        sys.exit(e.message)
     scheduler_on = os.environ.get("RADAR_SCHEDULE") == "on"  # 기본 꺼짐 — scheduling.py 머리말
     if scheduler_on:
         scheduling.Scheduler(svc).start()

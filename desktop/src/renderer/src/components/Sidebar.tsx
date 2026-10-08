@@ -38,12 +38,14 @@ export function Sidebar({
   onView,
   pending,
   stub,
+  profile,
   info
 }: {
   view: View
   onView: (v: View) => void
   pending: number
   stub: boolean
+  profile?: string | null
   info: RadarInfo | null
 }): React.JSX.Element {
   return (
@@ -85,7 +87,9 @@ export function Sidebar({
         )}
         {stub && (
           <div className="px-1 text-[11px] text-muted-foreground">
-            <span className="rounded-md border px-1.5 py-0.5">스텁</span>
+            <span className="rounded-md border px-1.5 py-0.5">
+              {profile && profile !== 'default' ? `스텁 · ${profile}` : '스텁'}
+            </span>
           </div>
         )}
       </div>

@@ -27,6 +27,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(REPO, "product"))
 
+import devprofiles  # noqa: E402
 from radar import hitl  # noqa: E402  — radar/__init__이 spike/common을 경로에 올린다
 from radar import script as stub_scripts  # noqa: E402
 from radar.capture import capture_agent, capture_turn1, capture_turn2, thread_config  # noqa: E402
@@ -86,8 +87,16 @@ _TITLE = re.compile(r"^#\s+(.+)$", re.M)
 class RadarService:
     """한 프로세스에 하나. 쓰는 일은 전부 lock 하나로 줄 세운다 (Inbox 답 · capture · 시드)."""
 
-    def __init__(self, data_dir, *, adr_dir=None, targets=None, model=None, radar_py=SKILL_RADAR):
+    def __init__(self, data_dir, *, adr_dir=None, targets=None, model=None, radar_py=SKILL_RADAR, profile=None):
         self.data_dir = os.path.abspath(data_dir)
+        # 개발 데이터 프로필 — 폴더를 만든 프로필이 이긴다. 다른 프로필을 달라고 하면 섞이지 않게 거부한다 (devprofiles.py)
+        made = devprofiles.read_marker(self.data_dir)
+        want = devprofiles.resolve(profile) if profile else made
+        if want != made:
+            raise ServiceError(500, f"데이터 폴더 {self.data_dir}는 프로필 {made!r}로 만들어졌다 — {want!r}를 쓰려면 다른 폴더를 쓴다")
+        self.profile = made
+        self.pscript = devprofiles.stub_script(self.profile)  # default는 None (코어 대본)
+        self.default_stub = DEFAULT_STUB if self.pscript is None else devprofiles.load_json(self.profile, "profile.json")["default_capture"]
         self.adr_dir = os.path.abspath(adr_dir or os.path.join(self.data_dir, "adr-fixture", "docs", "adr"))
         self.targets = os.path.abspath(targets or os.path.join(self.adr_dir, "..", "..", "radar-targets.json"))
         self.state_path = os.path.join(self.data_dir, STATE_FILE)
@@ -125,7 +134,16 @@ class RadarService:
 
     def model(self, item_id=None):
         sid = (self._meta().get("items", {}).get(item_id) or {}).get("stub") if item_id else None
-        return StubChat(script=stub_scripts.capture_script(sid or DEFAULT_STUB), flow="capture")
+        return StubChat(script=self.capture_script(sid or self.default_stub), flow="capture")
+
+    def capture_script(self, sid):
+        """capture 스텁 대본 — 프로필 것이 있으면 그것, 없으면 코어 대본 (product/radar/stub_script.json)."""
+        if self.pscript is None:
+            return stub_scripts.capture_script(sid)
+        return {**self.pscript["capture"][sid], "force_propose": False}
+
+    def _stubs(self):
+        return None if self.pscript is None else self.pscript["capture"]
 
     # ── 앱 메타 (대기 시작 시각 · 원래 대화) — 코어 상태가 아니라 화면용 곁다리. 없어도 목록은 나온다 ─────
 
@@ -299,11 +317,11 @@ class RadarService:
         """대화 → capture 1턴 → 승인 대기에서 멈춘다 (R9: ADR repo 쓰기 0). (item_id 또는 None, 보고서)."""
         with self.lock:
             ctx = self.ctx()
-            model = StubChat(script=stub_scripts.capture_script(stub or DEFAULT_STUB), flow="capture")
+            model = StubChat(script=self.capture_script(stub or self.default_stub), flow="capture")
             rep, _ = asyncio.run(capture_turn1(ctx, model, conversation, ctx.now, self.state_path, self.mode))
             item_id = rep.get("item_id") if rep.get("awaiting_approval") else None
             if item_id:
-                self._put_meta(item_id, since=since or ctx.now, conversation=conversation, stub=stub or DEFAULT_STUB)
+                self._put_meta(item_id, since=since or ctx.now, conversation=conversation, stub=stub or self.default_stub)
                 self.log("item_created", item_id, kind="capture")
             return item_id, rep
 
@@ -313,9 +331,10 @@ class RadarService:
             raise ServiceError(400, "대화가 비었다")
         if len(conversation) > MAX_CONVERSATION:
             raise ServiceError(413, f"대화가 너무 길다 ({len(conversation)}자 > {MAX_CONVERSATION})")
-        stub, matched = pick_stub(conversation)
+        stub, matched = pick_stub(conversation, self._stubs(), self.default_stub)
         item_id, rep = self.capture(conversation, stub=stub)
-        note = "" if matched else " — 스텁: 대화와 맞는 대본이 없어 기본 대본(KoPII-small)으로 만들었다 (내용은 대화와 무관)"
+        tech = self.capture_script(self.default_stub)["match"]["technology"]
+        note = "" if matched else f" — 스텁: 대화와 맞는 대본이 없어 기본 대본({tech})으로 만들었다 (내용은 대화와 무관)"
         if item_id:
             res = {"outcome": "awaiting", "item": item_id, "message": "Inbox에 추가됨 — 승인 대기" + note, "link_candidates": []}
         elif rep.get("link_candidates"):
@@ -371,7 +390,12 @@ class RadarService:
             raise ServiceError(404, f"모르는 흐름 {flow!r} — {list(FLOWS)}")
         with self.lock:
             ctx = self.ctx()
-            if flow == "detect":
+            if self.pscript is not None:  # 프로필 대본 — 판단표는 프로필 스냅숏(`<data>/snapshots`)의 소식·출처를 읽고 적은 것
+                if flow == "detect":
+                    fn, script = detect, {"detect": self.pscript["detect"]}
+                else:
+                    fn, script = revisit, stub_scripts.revisit_script(self.pscript["revisit"])
+            elif flow == "detect":
                 fn, script = detect, stub_scripts.detect_script()
             else:  # JHS-001 대본 — 스냅숏 S02(Jev v0.9.0 릴리스)에서 0001 c1이 충족된다
                 fn, script = revisit, stub_scripts.revisit_script(stub_scripts.SCRIPT["cases"]["JHS-001"])
@@ -444,27 +468,29 @@ def _front_matter(text):
     return d if isinstance(d, dict) else {}
 
 
-def _capture_stubs():
-    """대화에서 고를 수 있는 capture 스텁 대본 — 초안이 있는 것 + 같은 결정이 이미 있는 것(Jev, JHS-013: link로 끝난다)."""
+def _capture_stubs(scripts=None):
+    """대화에서 고를 수 있는 capture 스텁 대본 — 초안이 있는 것 + 같은 결정이 이미 있는 것(Jev, JHS-013: link로 끝난다).
+    프로필 대본은 `"link": true`로 같은 결정이 있는 쪽을 표시한다."""
     out = {}
-    for cid, sc in stub_scripts.SCRIPT["capture"].items():
+    for cid, sc in (scripts if scripts is not None else stub_scripts.SCRIPT["capture"]).items():
         if cid.startswith("_") or not isinstance(sc, dict):
             continue
-        if sc.get("draft") is not None or cid == "JHS-013":
+        if sc.get("draft") is not None or cid == "JHS-013" or sc.get("link"):
             out[cid] = sc
     return out
 
 
-def pick_stub(conversation):
+def pick_stub(conversation, scripts=None, default=DEFAULT_STUB):
     """스텁 모드에서만 — 대화에 나온 기술·repo·component·용도로 대본을 고른다 → (대본 ID, 기술이 맞았나).
-    실제 모델은 대화를 읽고 초안을 쓴다. 스텁은 미리 적은 초안 중 가장 가까운 것을 낼 뿐이다."""
+    실제 모델은 대화를 읽고 초안을 쓴다. 스텁은 미리 적은 초안 중 가장 가까운 것을 낼 뿐이다.
+    scripts는 프로필의 capture 대본 (없으면 코어 대본)."""
     text = conversation.lower()
     best, score = None, 0
-    for cid, sc in sorted(_capture_stubs().items()):
+    for cid, sc in sorted(_capture_stubs(scripts).items()):
         m = sc["match"]
         if (m.get("technology") or "").lower() not in text:
             continue
         s = 4 + sum(1 for k in ("repo", "component", "use") if (m.get(k) or "").lower() in text)
         if s > score:
             best, score = cid, s
-    return (best, True) if best else (DEFAULT_STUB, False)
+    return (best, True) if best else (default, False)

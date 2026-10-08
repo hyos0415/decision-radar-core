@@ -28,6 +28,7 @@ function App(): React.JSX.Element {
   const [decisionId, setDecisionId] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
   const [mode, setMode] = useState<string | null>(null)
+  const [profile, setProfile] = useState<string | null>(null)
   const [info, setInfo] = useState<RadarInfo | null>(null)
   const sentOpened = useRef(false)
   const selectedRef = useRef<string | null>(null)
@@ -83,7 +84,10 @@ function App(): React.JSX.Element {
     if (!ready) return
     api
       .health()
-      .then((h) => setMode(h.mode))
+      .then((h) => {
+        setMode(h.mode)
+        setProfile(h.profile)
+      })
       .catch(() => {})
   }, [ready])
 
@@ -204,6 +208,7 @@ function App(): React.JSX.Element {
         onView={setView}
         pending={items?.length ?? 0}
         stub={mode === 'stub'}
+        profile={profile}
         info={info}
       />
       <main className="flex min-w-0 flex-1">{body}</main>

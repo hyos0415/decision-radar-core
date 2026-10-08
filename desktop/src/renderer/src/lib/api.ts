@@ -156,7 +156,7 @@ async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown):
 const enc = encodeURIComponent
 
 export const api = {
-  health: () => request<{ ok: boolean; mode: string }>('GET', '/health'),
+  health: () => request<{ ok: boolean; mode: string; profile: string }>('GET', '/health'),
   inbox: () => request<{ items: InboxItem[] }>('GET', '/inbox').then((r) => r.items),
   detail: (id: string) => request<InboxDetail>('GET', `/inbox/${enc(id)}`),
   approve: (id: string, stale_answer: StaleAnswer | null = null) =>

@@ -22,9 +22,16 @@ npm run dev          # Electron 창 + 트레이 + 백엔드 자동 기동. 처�
 
 - Python: `RADAR_PYTHON` → `<레포>/.venv` → 메인 worktree의 `.venv` 순으로 찾는다
 - 개발 데이터: `desktop/.dev-data/` (gitignore) — eval 픽스처(ADR 5개·대상 repo 2개) 사본 + 스텁 capture 대기 3건. 다시 만들기: `<python> desktop/backend/devdata.py --reset`
-- 백엔드만: `<python> desktop/backend/server.py --port 8765`
+- **개발 데이터 프로필 고르기** — 기본(default)은 위의 레포 주인 스택이다. `RADAR_DEVDATA=andbread`로 프론트 담당의 스택(Andbread_Frontend = 엔빵)을 고른다. 프로필마다 데이터 폴더가 따로라(`desktop/.dev-data-andbread/`, gitignore) 바꿔 띄워도 섞이지 않는다.
+  - Windows (PowerShell): `$env:RADAR_DEVDATA='andbread'; npm run dev` (끝나면 `Remove-Item Env:RADAR_DEVDATA`)
+  - macOS: `RADAR_DEVDATA=andbread npm run dev`
+  - 다시 만들기: `<python> desktop/backend/devdata.py --profile andbread --reset` · 사이드바 「스텁」 옆에 프로필 이름이 뜬다(`/health`의 `profile`)
+  - 내용은 `desktop/backend/profiles/andbread/`에 있다 — 대상 repo 사본(package.json + 예시 CLAUDE.md) · 예시 ADR 4개(제목이 `(예시)`) · Inbox 대기 3건(Supabase Realtime · Next.js 캐싱 · zod) · 실행 화면용 소식·출처. **전부 예시다** — 소식은 `[예시]`·`example.invalid`로 지어낸 것이고 Andbread 팀의 실제 문서·결정이 아니다. 진짜 W42 소식으로 바꾸는 건 별도 작업
+  - 빠른 capture에 `profiles/andbread/conversations.json`의 `link-zustand`를 붙이면 「이미 같은 결정이 있다: 0001」(linked)이 나온다
+  - 폴더는 만든 프로필을 `profile.txt`에 적어 둔다 — 다른 프로필로 같은 폴더를 열려 하면 백엔드가 거부한다. `RADAR_APP_DATA`(명시한 폴더)가 있으면 그 폴더가 프로필 기본 폴더보다 먼저다
+- 백엔드만: `<python> desktop/backend/server.py --port 8765 [--profile andbread]`
 - 회귀: `<python> desktop/backend/test_backend.py` (스텁, 임시 폴더, 네트워크 없음) · 화면은 `npm run build`(타입 검사 포함)
-- 환경 변수: `RADAR_PYTHON` · `RADAR_APP_DATA`(데이터 폴더) · `RADAR_BACKEND_URL`(이미 떠 있는 백엔드에 붙고 띄우지 않음) · `RADAR_SCREENSHOT=<png>`(백엔드 준비 뒤 화면을 저장하고 종료 — 확인용, `RADAR_SCREENSHOT_DELAY_MS`)
+- 환경 변수: `RADAR_PYTHON` · `RADAR_APP_DATA`(데이터 폴더) · `RADAR_DEVDATA`(개발 데이터 프로필, 비우면 default) · `RADAR_BACKEND_URL`(이미 떠 있는 백엔드에 붙고 띄우지 않음) · `RADAR_SCREENSHOT=<png>`(백엔드 준비 뒤 화면을 저장하고 종료 — 확인용, `RADAR_SCREENSHOT_DELAY_MS`)
 - 창을 닫으면 트레이로 숨는다. 끝내기는 트레이 메뉴 「종료」 — 백엔드 자식 프로세스도 같이 끈다(Windows는 `taskkill /T`)
 - 백엔드는 localhost 출처만 CORS로 허용한다(개발 화면 `localhost:5173`이 다른 포트라서). `npm start`(빌드본, file://)는 아직 확인하지 않았다
 
@@ -42,7 +49,7 @@ npm run dev          # Electron 창 + 트레이 + 백엔드 자동 기동. 처�
 
 | | 무엇 | 감싸는 코어 |
 |---|---|---|
-| `GET /health` | `{ok, mode, data_dir, adr_dir}` | — |
+| `GET /health` | `{ok, mode, profile, data_dir, adr_dir}` — `profile`은 개발 데이터 프로필(`default` · `andbread`) | — |
 | `GET /inbox` | 대기 항목 — capture(승인 대기 thread) + 검토 대기 별도 파일. 오래된 순, `waiting_days`·`state`(awaiting_approval · stale · review …)·`actions` | `StateStore.threads` + checkpoint `get_state` · `hitl.review_queue` |
 | `GET /inbox/{id}` | + `draft` · `markdown`(저장될 ADR 미리보기) · `changes`(대기 중 바뀐 점) | `ops.render` · 지문 `compute`·`same`·`diff` (읽기만) |
 | `POST /inbox/{id}/approve` `{stale_answer?}` | → `{outcome, message, adr?, path?, changes?, answers?, errors?}` | `capture_turn2(approve)` |
