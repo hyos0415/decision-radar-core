@@ -26,6 +26,7 @@ import threading
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(REPO, "product"))
+sys.path.insert(1, REPO)  # pipeline.detect_feed — 실행 요약의 건수 한 줄 (HYO-84)
 
 import devprofiles  # noqa: E402
 from radar import hitl  # noqa: E402  — radar/__init__이 spike/common을 경로에 올린다
@@ -35,6 +36,7 @@ from radar.detect import detect  # noqa: E402
 from radar.revisit import revisit  # noqa: E402
 from radar.stub_model import StubChat  # noqa: E402
 from common import ops  # noqa: E402
+from pipeline.detect_feed import funnel_line  # noqa: E402
 from common.core import SKILL_RADAR, Ctx, RadarError, radar  # noqa: E402
 from common.schemas import AdrDraft  # noqa: E402
 from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: E402
@@ -435,7 +437,12 @@ class RadarService:
             drafts.append({"adr": c["adr"], "title": m.group(1).strip() if m else c["technology"], "technology": c["technology"],
                            "validate_errors": c.get("validate_errors") or []})
         head = f"소식 {n_feed}건 → " if n_feed is not None else ""
-        summary = [f"{head}후보 {len(cands)}건 · 이미 있는 결정이라 건너뜀 {len(skipped)}건 · 제외 {len(rep.get('excluded') or [])}건"]
+        summary = []
+        try:  # 수집 스냅숏에서 만든 입력이면(pipeline.detect_feed) 깔때기 건수 한 줄 — 버린 이유는 기록(lane_a.json)에만 (HYO-84)
+            summary.append(funnel_line(json.load(open(os.path.join(self.snapshot_dir, "funnel.json"), encoding="utf-8"))))
+        except (OSError, ValueError):
+            pass
+        summary += [f"{head}후보 {len(cands)}건 · 이미 있는 결정이라 건너뜀 {len(skipped)}건 · 제외 {len(rep.get('excluded') or [])}건"]
         if drafts:
             bad = sum(1 for d in drafts if d["validate_errors"])
             summary.append(f"초안 {len(drafts)}건 작성 (proposed)" + (f" — validate 실패 {bad}건" if bad else ""))

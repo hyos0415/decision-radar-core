@@ -1,7 +1,8 @@
 """정기 실행 — 앱이 떠 있으면 앱이 백엔드에 시킨다 (desktop-app.md §2). 꺼져 있던 동안 지난 칸은 켜질 때 한 번 따라잡는다.
 
   revisit  매주 월 09:00 (스킬 routine과 같은 요일 — HYO-21)
-  detect   매주 화 10:00 (수집기가 화요일에 스냅숏을 만든 뒤 — collector/README.md)
+  detect   매주 화 18:00 (수집기가 화 16:00에 모으고 스냅숏을 얼린 뒤 — collector/README.md. 10:00이면 지난주 스냅숏을 읽었다, HYO-84)
+           관문 → detect 입력(`pipeline.detect_feed`)을 만드는 단계는 아직 이 예약에 없다 — 데모(HYO-85·88)는 손으로 만든다
 
 기본은 꺼짐 — `RADAR_SCHEDULE=on`일 때만 돈다. 개발 데이터가 저절로 바뀌면(detect 초안 → 대기 항목이 낡음) 화면을 볼 때 헷갈린다.
 앱이 꺼져 있을 때의 정기 실행(D2)은 여기서 다루지 않는다.
@@ -10,7 +11,7 @@
 import datetime as dt
 import threading
 
-SLOTS = {"revisit": (0, 9, 0), "detect": (1, 10, 0)}  # (요일 월=0, 시, 분)
+SLOTS = {"revisit": (0, 9, 0), "detect": (1, 18, 0)}  # (요일 월=0, 시, 분)
 DAY = "월화수목금토일"
 CHECK_SECONDS = 300
 

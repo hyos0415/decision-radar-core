@@ -78,6 +78,23 @@ python pipeline/tests/test_importance.py      # 오프라인 테스트 + 변이 
 - 파일: `policy`(결정표) · `tiers`(등급 저장·검증) · `signals`(repo 신호) · `gate`(레인 A 연결) · `agents_backend` · `prompts` · `evaluate` · `cli`
 - 위의 「관문은 코드에 없다」는 `--gate` 없이 돌릴 때의 모습이다 (`gate: null`, `not-implemented`)
 
+## 관문 → detect 입력 (HYO-84: `detect_feed.py`)
+
+관문이 남기고 주당 상한(5/N) 안에 든 항목만 `radar.py snapshot` 폴더 모양(`feed.json` · `index.json` · `items/`)으로 바꾼다. 제품 detect는 이 폴더를 `RADAR_SNAPSHOT_DIR`로 읽는다.
+
+```bash
+python -m pipeline.profile_filter run --snapshot ../radar-snapshots/2026-W41 --gate gpt-6.1-sol --tiers tiers.json --real-api --out pipeline/out/w41
+python -m pipeline.detect_feed --run pipeline/out/w41 --out pipeline/out/w41/detect-snapshot     # [--all-kept] 상한에 잘린 것까지
+.venv/Scripts/python product/radar/run_detect.py --snapshot pipeline/out/w41/detect-snapshot --adr ../adr --out pipeline/out/w41/detect [--model anthropic --real-api]
+
+python pipeline/tests/test_detect_feed.py      # 오프라인 — radar.py feed·fetch 왕복 + 변이 3개
+```
+
+- `funnel.json` = 건수(수집 → 레인 A → 관문 남김 → detect 입력). 실행 요약의 첫 줄이 된다 (`run_detect` · 데스크톱 `_summarize_detect`)
+- `gate.json` = url → 왜 남았나(`kept_by`). **detect 입력(feed)에는 넣지 않는다** — 모델 판단을 흔들지 않게. 화면의 「왜 왔나」 칸(HYO-85)이 읽는다
+- 버린 이유(결정표의 행)는 옮기지 않는다 — `lane_a.json`·`gate-calls.jsonl`에 있다 (깔때기 화면은 만들지 않는다, 10/8)
+- 등급 파일은 `classify-stack`으로 만든다. 등급 스크립트 집행(HYO-67)은 데모 뒤
+
 ## 알려진 한계
 
 - 한국어 `not`·`excludes`(「이미지 생성」「이미지·영상 생성 도구」)는 영어 항목에 걸리지 않는다 — 감점이 거의 안 일어난다. 번역·질의 변환 전략의 몫
