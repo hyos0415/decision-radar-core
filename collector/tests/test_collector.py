@@ -207,7 +207,9 @@ def test_collect_only_targets_are_separate_from_my_stack():
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
-    assert json.loads(run.COLLECT_ONLY.read_text(encoding="utf-8"))["targets"] == []          # 저장소의 목록은 아직 비어 있다
+    shipped = json.loads(run.COLLECT_ONLY.read_text(encoding="utf-8"))["targets"]           # 저장소의 목록: 형식만 본다 (항목은 사람이 늘린다)
+    assert all(t.get("repo") and t.get("path") for t in shipped)
+    assert len({t["repo"] for t in shipped}) == len(shipped)
 
 
 def test_collect_only_refresh_pulls_ff_and_reports_failures():
