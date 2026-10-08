@@ -174,6 +174,42 @@ def _write_pkg(d, obj):
     (d / "package.json").write_text(json.dumps(obj), encoding="utf-8")
 
 
+def test_collect_only_targets_are_separate_from_my_stack():
+    import os
+    import tempfile
+    from collector import run
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t)
+        app = t / "teammate-app"
+        _write_pkg(app, {"dependencies": {"next": "15"}})
+        (app / "CLAUDE.md").write_text("### 의존성 → component\n", encoding="utf-8")
+        f = t / "collect-only.json"
+        f.write_text(json.dumps({"targets": [{"repo": "teammate-app", "path": str(app)},          # 절대 경로도 받는다
+                                             {"repo": "not-cloned", "path": str(t / "nope")}]}), encoding="utf-8")
+        mine = t / "radar-targets.json"
+        mine.write_text(json.dumps([]), encoding="utf-8")
+        old = {k: os.environ.get(k) for k in ("RADAR_COLLECT_ONLY", "RADAR_TARGETS")}
+        os.environ["RADAR_COLLECT_ONLY"], os.environ["RADAR_TARGETS"] = str(f), str(mine)
+        try:
+            texts, roots, info = run.collect_only_targets()
+            assert set(roots) == {"teammate-app"} and set(texts) == {"teammate-app"}
+            assert info["repos"] == ["teammate-app"] and [m["repo"] for m in info["missing"]] == ["not-cloned"]   # 조용히 빼지 않는다
+            assert run.targets()[0] == {} and run.target_roots() == {}           # 내 스택(pipeline·스킬이 읽는 쪽)에는 섞이지 않는다
+            assert github.dependencies_from_package_json(roots["teammate-app"]) == ["next"]
+            try:
+                run.merge_targets({"teammate-app": "x"}, roots, "repo 루트")
+                raise AssertionError("이름이 겹치는데 합쳤다")
+            except SystemExit:
+                pass
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+    assert json.loads(run.COLLECT_ONLY.read_text(encoding="utf-8"))["targets"] == []          # 저장소의 목록은 아직 비어 있다
+
+
 def test_github_dependencies_from_package_json():
     import tempfile
     with tempfile.TemporaryDirectory() as t:

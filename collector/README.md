@@ -54,6 +54,13 @@ python collector/tests/test_snapshot.py                # 오프라인 테스트
 | HF | `sources/huggingface.py` | trending 100 + 태스크 7개 × 20 + Daily Papers 7일 |
 | 벤더 | `sources/vendor.py` | 규칙(대상 repo 「외부 모델·서비스」 ∪ 살아 있는 ADR의 technology) → `vendors.yaml` 경로. 매핑이 없으면 `run.json`의 `no_route`에 남는다 |
 
+**대상 repo는 두 목록이다** (2026-10-08, 나안 — 수집은 같이, 결정 기록은 각자의 ADR repo):
+
+| 목록 | 누가 읽나 | 무엇 |
+|---|---|---|
+| `adr/radar-targets.json` | 스킬 · 제품 · 데스크톱 · `pipeline/`(레인 A) · 수집기 | **내 스택** |
+| `collector/targets-collect-only.json` (env `RADAR_COLLECT_ONLY`) | **수집기만** | 다른 사람의 repo — 의존성 릴리스·벤더 규칙에만 합쳐진다. `path` = 이 레포와 같은 부모 아래의 형제 폴더 이름(절대 경로도 됨). 수집 노트북에 클론돼 있어야 하고, 없으면 `run.json`의 `collect_only.missing`에 남는다. 두 목록에 같은 이름이 있으면 수집을 거부한다 |
+
 ## 첫 실행에서 고친 것 (2026-10-02)
 
 - PyPI `project_urls`의 첫 GitHub 링크가 **후원 페이지**(`github.com/sponsors/…`)인 패키지가 있었다(pydantic·uvicorn) → 키 우선순위(Source·Repository 먼저) + 소유자 `sponsors` 제외

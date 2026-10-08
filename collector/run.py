@@ -56,6 +56,42 @@ def target_roots():
     return roots
 
 
+COLLECT_ONLY = HERE / "targets-collect-only.json"
+
+
+def collect_only_targets():
+    """수집만 하는 대상 repo (다른 사람의 repo — 사용자 결정 2026-10-08 나안: 수집은 같이, 결정 기록은 각자의 ADR repo).
+
+    `adr/radar-targets.json`은 스킬·제품·데스크톱·파이프라인이 「내 스택」으로 읽는다 — 거기에 넣으면 내 detect가 남의 스택까지 본다.
+    그래서 수집기만 읽는 별도 파일에 둔다. 형식: {"targets": [{"repo": 이름, "path": 형제 폴더 이름(이 레포의 부모 기준), ...}]}.
+    → ({repo: CLAUDE.md 본문}, {repo: 루트}, {"file", "repos", "missing"}). 폴더가 없으면 조용히 빼지 않고 missing에 남긴다.
+    """
+    path = Path(os.environ.get("RADAR_COLLECT_ONLY") or COLLECT_ONLY)
+    info = {"file": str(path), "repos": [], "missing": []}
+    if not path.exists():
+        return {}, {}, info
+    texts, roots = {}, {}
+    for t in json.loads(path.read_text(encoding="utf-8")).get("targets", []):
+        root = (REPO.parent / t["path"]).resolve()
+        if not root.is_dir():
+            info["missing"].append({"repo": t["repo"], "path": str(root)})
+            continue
+        roots[t["repo"]] = root
+        info["repos"].append(t["repo"])
+        md = root / "CLAUDE.md"
+        if md.exists():
+            texts[t["repo"]] = md.read_text(encoding="utf-8")
+    return texts, roots, info
+
+
+def merge_targets(mine, extra, what):
+    """내 대상 + 수집 전용 대상. 같은 이름이 양쪽에 있으면 거부한다 (어느 쪽 스택인지 모호해진다)."""
+    clash = set(mine) & set(extra)
+    if clash:
+        raise SystemExit(f"{what}: 대상 이름이 radar-targets.json과 수집 전용 목록에 둘 다 있다 — {sorted(clash)}")
+    return {**mine, **extra}
+
+
 def adr_technologies():
     adr_dir = os.environ.get("RADAR_ADR_DIR") or str(REPO.parent / "adr" / "docs" / "adr")
     radar = REPO / ".claude" / "skills" / "jhs-decisions" / "scripts" / "radar.py"
@@ -84,8 +120,11 @@ def main(argv=None):
     fetcher = Fetcher()
     claude_md, targets_path = targets()
     roots = target_roots()
+    extra_md, extra_roots, collect_only = collect_only_targets()
+    claude_md = merge_targets(claude_md, extra_md, "CLAUDE.md")     # 수집에만 합친다 — targets()를 쓰는 pipeline은 여전히 내 스택만 본다
+    roots = merge_targets(roots, extra_roots, "repo 루트")
     run = {"started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), "pool_version": pool["version"],
-           "vendors_version": vendors_cfg["version"], "targets": targets_path, "sources": {}}
+           "vendors_version": vendors_cfg["version"], "targets": targets_path, "collect_only": collect_only, "sources": {}}
     all_items = []
     for name in wanted:
         t0 = time.time()
