@@ -61,7 +61,7 @@ python collector/tests/test_snapshot.py                # 오프라인 테스트
 | `adr/radar-targets.json` | 스킬 · 제품 · 데스크톱 · `pipeline/`(레인 A) · 수집기 | **내 스택** |
 | `collector/targets-collect-only.json` (env `RADAR_COLLECT_ONLY`) | **수집기만** | 다른 사람의 repo — 의존성 릴리스·벤더 규칙에만 합쳐진다. `path` = 이 레포와 같은 부모 아래의 형제 폴더 이름(절대 경로도 됨). 수집 노트북에 클론돼 있어야 하고, 없으면 `run.json`의 `collect_only.missing`에 남는다. **수집 직전에 `git pull --ff-only`로 당긴다**(아무도 그 노트북에서 작업하지 않아 그대로 두면 옛 스택을 읽는다 — 결과는 `collect_only.refresh`). 두 목록에 같은 이름이 있으면 수집을 거부한다 |
 
-내 스택 repo는 당기지 않는다(그 노트북에서 작업하는 사본이다). 목록에 있는데 폴더가 없으면 `collect_only.my_targets_missing`에 남는다 — 조용히 빠지면 그 주 수집이 영구히 빈다
+내 스택 repo는 당기지 않는다(그 노트북에서 작업하는 사본이다). 단 `radar-targets.json`에 `"mirror": true`가 붙은 항목은 **레이더 전용 읽기 사본**이라 수집 직전에 당긴다(`collect_only.my_mirrors_refresh`) — 예: medical-mate-ai는 작업 사본이 다른 브랜치에 있어 `../medical-mate-ai-radar`(main 클론)를 대상으로 둔다 (2026-10-08). 목록에 있는데 폴더가 없으면 `collect_only.my_targets_missing`에 남는다 — 조용히 빠지면 그 주 수집이 영구히 빈다
 
 ## 첫 실행에서 고친 것 (2026-10-02)
 

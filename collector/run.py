@@ -100,6 +100,16 @@ def refresh_collect_only(roots):
     return rep
 
 
+def my_mirror_roots():
+    """내 스택 중 `"mirror": true`인 대상 — 이 노트북에서 작업하지 않는 레이더 전용 읽기 사본(예: 작업 사본이 다른 브랜치에 있는 repo).
+    수집 전용 대상처럼 수집 직전에 당긴다. 표시가 없는 내 repo는 그대로 둔다 (작업 중인 사본이다)."""
+    path = Path(os.environ.get("RADAR_TARGETS") or (REPO.parent / "adr" / "radar-targets.json"))
+    if not path.exists():
+        return {}
+    return {t["repo"]: (path.parent / t["path"]).resolve() for t in json.loads(path.read_text(encoding="utf-8"))
+            if t.get("mirror") and (path.parent / t["path"]).resolve().is_dir()}
+
+
 def my_targets_missing():
     """내 스택 목록(radar-targets.json)에 있는데 폴더가 없는 repo — 조용히 빠지면 그 주 수집이 영구히 비므로 run.json에 남긴다."""
     path = Path(os.environ.get("RADAR_TARGETS") or (REPO.parent / "adr" / "radar-targets.json"))
@@ -143,12 +153,14 @@ def main(argv=None):
     wanted = [s for s in a.sources.split(",") if s]
     now = time.time()
     fetcher = Fetcher()
+    mirror_pull = refresh_collect_only(my_mirror_roots())          # 내 스택의 읽기 전용 사본 — 읽기 전에 당긴다
     claude_md, targets_path = targets()
     roots = target_roots()
     _, pre_roots, _ = collect_only_targets()
     pull = refresh_collect_only(pre_roots)                         # 당긴 뒤에 다시 읽는다 (CLAUDE.md·package.json이 바뀌었을 수 있다)
     extra_md, extra_roots, collect_only = collect_only_targets()
     collect_only["refresh"] = pull
+    collect_only["my_mirrors_refresh"] = mirror_pull
     collect_only["my_targets_missing"] = my_targets_missing()
     claude_md = merge_targets(claude_md, extra_md, "CLAUDE.md")     # 수집에만 합친다 — targets()를 쓰는 pipeline은 여전히 내 스택만 본다
     roots = merge_targets(roots, extra_roots, "repo 루트")

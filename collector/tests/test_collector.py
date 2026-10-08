@@ -236,11 +236,13 @@ def test_collect_only_refresh_pulls_ff_and_reports_failures():
         assert rep["pulled"] == ["mirror"] and [f["repo"] for f in rep["failed"]] == ["plain"]
         assert github.dependencies_from_package_json(t / "mirror") == ["react", "vite"]        # 당긴 뒤의 스택을 읽는다
         mine = t / "radar-targets.json"
-        mine.write_text(json.dumps([{"repo": "gone", "path": "gone"}, {"repo": "here", "path": "mirror"}]), encoding="utf-8")
+        mine.write_text(json.dumps([{"repo": "gone", "path": "gone", "mirror": True}, {"repo": "here", "path": "mirror", "mirror": True},
+                                    {"repo": "working", "path": "plain"}]), encoding="utf-8")
         old = os.environ.get("RADAR_TARGETS")
         os.environ["RADAR_TARGETS"] = str(mine)
         try:
             assert [m["repo"] for m in run.my_targets_missing()] == ["gone"]                   # 내 스택도 조용히 빠지지 않는다
+            assert list(run.my_mirror_roots()) == ["here"]                                    # mirror 표시가 있고 폴더가 있는 것만 당긴다 (작업 사본 제외)
         finally:
             if old is None:
                 os.environ.pop("RADAR_TARGETS", None)
