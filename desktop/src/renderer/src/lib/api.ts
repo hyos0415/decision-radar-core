@@ -2,7 +2,8 @@
 //   백엔드 desktop/backend/schemas.py → python desktop/backend/export_openapi.py → desktop/openapi.json
 //   → npm run gen:api → ./api.gen.ts (openapi-typescript). CI가 다시 뽑아 차이가 있으면 실패한다.
 // 여기서는 화면 코드가 쓰던 이름으로 별칭만 준다.
-import type { components } from './api.gen'
+import createClient from 'openapi-fetch'
+import type { components, paths } from './api.gen'
 
 type S = components['schemas']
 
@@ -49,58 +50,74 @@ export type JobState = Job['state']
 
 export type EventName = 'item_opened' | 'app_opened' | 'decision_opened' | 'capture_opened'
 
-let baseUrl = ''
+// 호출은 openapi-fetch — 경로 문자열이 요청 본문·경로 인자·응답 타입을 정한다. 없는 경로·틀린 본문은 컴파일 오류다 (HYO-91).
+// 화면은 아래 `api.*`만 쓴다 (이름·인자는 손으로 쓰던 때와 같다).
+let client = createClient<paths>({ baseUrl: '' })
 
 export function setBaseUrl(url: string): void {
-  baseUrl = url
+  client = createClient<paths>({ baseUrl: url })
 }
 
-async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
-  const res = await fetch(baseUrl + path, {
-    method,
-    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body)
-  })
-  if (!res.ok) {
-    let detail = `요청 실패 (${res.status})`
-    try {
-      const j = await res.json()
-      if (j && typeof j.detail === 'string') detail = j.detail
-    } catch {
-      // keep default
-    }
-    throw new Error(detail)
+/** 오류면 백엔드의 `detail` 한 줄로 던진다 (422 입력 오류는 detail이 목록 — 첫 메시지). 성공이면 응답 본문 */
+async function unwrap<T>(
+  p: Promise<{ data?: T; error?: unknown; response: Response }>
+): Promise<T> {
+  const { data, error, response } = await p
+  if (error !== undefined || data === undefined) {
+    const d = (error as { detail?: unknown } | undefined)?.detail
+    const msg =
+      typeof d === 'string'
+        ? d
+        : Array.isArray(d) && typeof d[0]?.msg === 'string'
+          ? d[0].msg
+          : `요청 실패 (${response.status})`
+    throw new Error(msg)
   }
-  return (await res.json()) as T
+  return data
 }
-
-const enc = encodeURIComponent
 
 export const api = {
-  health: () => request<Health>('GET', '/health'),
-  inbox: () => request<{ items: InboxItem[] }>('GET', '/inbox').then((r) => r.items),
-  detail: (id: string) => request<InboxDetail>('GET', `/inbox/${enc(id)}`),
+  health: () => unwrap(client.GET('/health')),
+  inbox: () => unwrap(client.GET('/inbox')).then((r) => r.items),
+  detail: (id: string) =>
+    unwrap(client.GET('/inbox/{item_id}', { params: { path: { item_id: id } } })),
   approve: (id: string, stale_answer: StaleAnswer | null = null) =>
-    request<ActionResult>('POST', `/inbox/${enc(id)}/approve`, { stale_answer }),
+    unwrap(
+      client.POST('/inbox/{item_id}/approve', {
+        params: { path: { item_id: id } },
+        body: { stale_answer }
+      })
+    ),
   edit: (id: string, draft: AdrDraft, stale_answer: StaleAnswer | null = null) =>
-    request<ActionResult>('POST', `/inbox/${enc(id)}/edit`, { draft, stale_answer }),
-  reject: (id: string) => request<ActionResult>('POST', `/inbox/${enc(id)}/reject`, {}),
+    unwrap(
+      client.POST('/inbox/{item_id}/edit', {
+        params: { path: { item_id: id } },
+        body: { draft, stale_answer }
+      })
+    ),
+  reject: (id: string) =>
+    unwrap(client.POST('/inbox/{item_id}/reject', { params: { path: { item_id: id } } })),
   /** 「확인함」 — 접수된 capture(끝난 것)·revisit 충족 알림을 Inbox에서 치운다. ADR은 안 바꾼다 (R8) */
-  ack: (id: string) => request<ActionResult>('POST', `/inbox/${enc(id)}/ack`, {}),
+  ack: (id: string) =>
+    unwrap(client.POST('/inbox/{item_id}/ack', { params: { path: { item_id: id } } })),
   event: (event: EventName, item?: string): void => {
-    request('POST', '/events', { event, item: item ?? null, detail: {} }).catch(() => {})
+    unwrap(client.POST('/events', { body: { event, item: item ?? null, detail: {} } })).catch(
+      () => {}
+    )
   },
-  capture: (conversation: string) => request<CaptureResult>('POST', '/capture', { conversation }),
-  decisions: () => request<{ items: Decision[] }>('GET', '/decisions').then((r) => r.items),
-  decision: (id: string) => request<DecisionDetail>('GET', `/decisions/${enc(id)}`),
-  runs: () => request<{ items: RunResult[] }>('GET', '/runs').then((r) => r.items),
-  run: (flow: Flow) => request<RunResult>('POST', `/runs/${flow}`, {}),
+  capture: (conversation: string) => unwrap(client.POST('/capture', { body: { conversation } })),
+  decisions: () => unwrap(client.GET('/decisions')).then((r) => r.items),
+  decision: (id: string) =>
+    unwrap(client.GET('/decisions/{adr_id}', { params: { path: { adr_id: id } } })),
+  runs: () => unwrap(client.GET('/runs')).then((r) => r.items),
+  run: (flow: Flow) => unwrap(client.POST('/runs/{flow}', { params: { path: { flow } } })),
   submitJob: (kind: JobKind, conversation?: string) =>
-    request<{ job: Job }>(
-      'POST',
-      `/jobs/${kind}`,
-      conversation === undefined ? {} : { conversation }
+    unwrap(
+      client.POST('/jobs/{kind}', {
+        params: { path: { kind } },
+        body: conversation === undefined ? {} : { conversation }
+      })
     ).then((r) => r.job),
-  jobs: () => request<{ items: Job[] }>('GET', '/jobs').then((r) => r.items),
-  job: (id: string) => request<Job>('GET', `/jobs/${enc(id)}`)
+  jobs: () => unwrap(client.GET('/jobs')).then((r) => r.items),
+  job: (id: string) => unwrap(client.GET('/jobs/{job_id}', { params: { path: { job_id: id } } }))
 }
