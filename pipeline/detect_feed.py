@@ -1,0 +1,145 @@
+"""관문 결과 → detect 입력 (HYO-84, 데모 ②). 수집 스냅숏에서 관문이 남긴 항목만 `radar.py snapshot` 폴더 모양으로 바꾼다.
+
+  python -m pipeline.profile_filter run --snapshot ../radar-snapshots/2026-W41 --gate gpt-6.1-sol --tiers tiers.json --real-api --out pipeline/out/w41
+  python -m pipeline.detect_feed --run pipeline/out/w41 --out pipeline/out/w41/detect-snapshot
+  .venv/Scripts/python product/radar/run_detect.py --snapshot pipeline/out/w41/detect-snapshot --adr ../adr --out pipeline/out/w41/detect
+
+출력 폴더 (RADAR_SNAPSHOT_DIR로 쓴다 — radar.py `snapshot feed|fetch|search`가 읽는 모양):
+  feed.json    소식 목록 (id · title · kind · package · version · summary · url · source_type)
+  index.json   url(scheme·끝 / 뺀 것) → {source_type, file} — snapshot_fetch가 전문을 준다
+  items/F01.md 항목 전문 (릴리스 노트 · 벤더 소식 본문 · 페이지 변경의 더해진/빠진 줄)
+  search.json  빈 목록 (snapshot search는 질의를 무시한다 — 알려진 병목)
+  funnel.json  건수 (수집 → 레인 A → 관문 남김 → 표시). 실행 요약 한 줄의 재료
+  gate.json    url → 왜 남았나(관문 kept_by). detect 입력에는 넣지 않는다 — 모델 판단을 흔들지 않게 화면(HYO-85)만 읽는다
+
+무엇을 넣나: 관문이 남기고(keep) 주당 상한(5/N) 안에 든 것(shown)만. `--all-kept`면 상한에 잘린 것까지.
+버린 이유(결정표의 행)는 여기 옮기지 않는다 — `lane_a.json`·`gate-calls.jsonl`에 이미 있다 (깔때기 화면은 만들지 않는다, 10/8).
+"""
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+from .profile_filter import read_items, write_json
+
+SUMMARY_CHARS = 1500    # triage 프롬프트에 그대로 들어간다. 전문은 snapshot_fetch로
+
+
+def url_key(url):
+    """radar.py cmd_snapshot의 fetch와 같은 정규화 — 다르면 모델이 연 url이 404가 된다."""
+    return re.sub(r"^https?://", "", url or "").rstrip("/")
+
+
+def _lines(v):
+    if not v:
+        return []
+    return v.splitlines() if isinstance(v, str) else [str(x) for x in v]
+
+
+def body_of(item, snapshot_dir=None):
+    """항목 전문. 페이지 변경은 더해진 줄(text)과 빠진 줄(meta.removed)을 나눠 적는다."""
+    meta = item.get("meta") or {}
+    if meta.get("kind") == "page-diff":
+        added, removed = _lines(item.get("text")), _lines(meta.get("removed"))
+        return "\n".join([f"# {item.get('title', '')}", "", "## 더해진 줄", *(added or ["(없음)"]), "", "## 빠진 줄", *(removed or ["(없음)"])])
+    text = item.get("text") or ""
+    if not text and meta.get("text_file") and snapshot_dir:
+        p = Path(snapshot_dir) / meta["text_file"]
+        text = p.read_text(encoding="utf-8") if p.exists() else ""
+    return f"# {item.get('title', '')}\n\n{text}".rstrip() + "\n"
+
+
+def feed_entry(item):
+    meta = item.get("meta") or {}
+    if meta.get("kind") == "page-diff":
+        kind, source_type, text = "page_change", "official_doc", "더해진 줄: " + " / ".join(_lines(item.get("text")))
+    elif meta.get("dependency"):
+        kind, source_type, text = "dependency_release", "release_note", item.get("text") or ""
+    elif meta.get("tag"):
+        kind, source_type, text = "vendor_release", "release_note", item.get("text") or ""
+    else:
+        kind, source_type, text = "vendor_news", "official_doc", item.get("text") or ""
+    summary = text if len(text) <= SUMMARY_CHARS else text[:SUMMARY_CHARS].rstrip() + " …(전문은 snapshot_fetch)"
+    e = {"id": item["id"], "title": item.get("title", ""), "kind": kind}
+    if meta.get("dependency"):
+        e["package"] = meta["dependency"]
+    if meta.get("tag"):
+        e["version"] = meta["tag"]
+    e.update({"summary": summary, "url": item["url"], "source_type": source_type})
+    return e
+
+
+def select(lane_a, all_kept=False):
+    """관문이 남긴 것 중 detect에 넣을 것 — 기본은 상한 안(shown)."""
+    return [e for e in lane_a if (e.get("gate") or {}).get("keep") and (all_kept or e.get("shown"))]
+
+
+def funnel(manifest, lane_a, chosen):
+    c = manifest.get("counts") or {}
+    g = manifest.get("lane_a_gate") or {}
+    statuses = {}
+    for e in lane_a:
+        s = (e.get("gate") or {}).get("status") or "none"
+        statuses[s] = statuses.get(s, 0) + 1
+    return {"snapshot": manifest.get("snapshot"), "gate_model": g.get("model"), "items": c.get("items"), "lane_a": c.get("lane_a"),
+            "gate_status": statuses, "kept": g.get("total_kept"), "cap": g.get("label"), "to_detect": len(chosen)}
+
+
+def funnel_line(f):
+    """실행 요약 한 줄 — 데스크톱 `_summarize_detect`와 run_detect가 같이 쓴다."""
+    cap = f" ({f['cap']})" if f.get("cap") else ""
+    return f"수집 {f.get('items')} → 레인 A {f.get('lane_a')} → 관문 남김 {f.get('kept')} → detect 입력 {f.get('to_detect')}{cap}"
+
+
+def build(run_dir, out_dir, snapshot=None, all_kept=False):
+    run_dir, out = Path(run_dir), Path(out_dir)
+    manifest = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    if not isinstance(manifest.get("lane_a_gate"), dict):
+        raise SystemExit(f"{run_dir}는 관문 없이 돌린 결과다 — profile_filter run에 --gate·--tiers를 준다")
+    lane_a = json.loads((run_dir / "lane_a.json").read_text(encoding="utf-8"))
+    snap = Path(snapshot or manifest["snapshot"])
+    by_id = {it["id"]: it for it in read_items(snap)}
+    chosen = select(lane_a, all_kept)
+    missing = [e["id"] for e in chosen if e["id"] not in by_id]
+    if missing:
+        raise SystemExit(f"스냅숏 {snap}에 없는 항목 {len(missing)}개 (다른 주의 run인가?): {missing[:3]}")
+    snap_dir = snap if snap.is_dir() else snap.parent
+    (out / "items").mkdir(parents=True, exist_ok=True)
+    feed, index, why = [], {}, {}
+    for i, e in enumerate(chosen, 1):
+        item = by_id[e["id"]]
+        entry = feed_entry(item)
+        name = f"items/F{i:02d}.md"
+        (out / name).write_text(body_of(item, snap_dir), encoding="utf-8", newline="\n")
+        feed.append(entry)
+        index[url_key(item["url"])] = {"source_type": entry["source_type"], "file": name}
+        g = e["gate"]
+        why[item["url"]] = {"id": e["id"], "reason": g.get("reason"), "kept_by": g.get("kept_by") or [], "shown": e.get("shown")}
+    f = funnel(manifest, lane_a, chosen)
+    write_json(out / "feed.json", feed)
+    write_json(out / "index.json", index)
+    write_json(out / "search.json", [])
+    write_json(out / "funnel.json", f)
+    write_json(out / "gate.json", why)
+    return f
+
+
+def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+    ap = argparse.ArgumentParser(prog="pipeline.detect_feed", description=__doc__.split("\n")[0])
+    ap.add_argument("--run", required=True, help="profile_filter run --gate의 결과 폴더 (run.json · lane_a.json)")
+    ap.add_argument("--out", required=True, help="detect가 읽을 스냅숏 폴더 (RADAR_SNAPSHOT_DIR)")
+    ap.add_argument("--snapshot", help="주차 폴더 (기본: run.json에 적힌 것)")
+    ap.add_argument("--all-kept", action="store_true", help="주당 상한에 잘린 것까지 넣는다")
+    a = ap.parse_args(argv)
+    f = build(a.run, a.out, a.snapshot, a.all_kept)
+    print(funnel_line(f))
+    print(f"-> {a.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

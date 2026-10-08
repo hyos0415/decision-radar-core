@@ -38,6 +38,7 @@ detect    load ─▶ triage ─▶ screen ─Send─▶ draft ─▶ write ─�
 .venv/Scripts/python product/radar/test_export.py                           # 지문 A′·B′ · git 내보내기 (임시 repo + 로컬 bare remote, 네트워크 없음) · 변이 12개
 .venv/Scripts/python product/radar/review.py --list --radar <radar.py>      # 검토 대기 항목 (--item ID --decision approve|reject [--stale-answer …]로 답)
 .venv/Scripts/python product/radar/usage.py eval/runs/<실행>                 # 호출 단위 사용량 요약
+.venv/Scripts/python product/radar/run_detect.py --snapshot <폴더> --adr ../adr --out <새 폴더>   # 실제 수집 주차로 detect 1회 (HYO-84) — ADR 사본에만 쓰고 dry-run 강제. 입력은 python -m pipeline.detect_feed
 ```
 
 산출물: `eval/runs/<시각>-product-<모델>/<case>-<i>/` (transcript*.jsonl · grade.json · 작업 디렉터리 사본) + 실행 루트의 `llm_calls.jsonl`.

@@ -236,9 +236,9 @@ def scenario_m2(data):
     import datetime as dt
     import scheduling
     kst = dt.timezone(dt.timedelta(hours=9))
-    tue = dt.datetime(2026, 10, 6, 9, 0, tzinfo=kst)  # 화 09:00 — revisit 칸(월 09:00)은 지났고 detect 칸(화 10:00)은 아직
+    tue = dt.datetime(2026, 10, 6, 9, 0, tzinfo=kst)  # 화 09:00 — revisit 칸(월 09:00)은 지났고 detect 칸(화 18:00)은 아직
     check("칸: revisit 지난 칸 = 월 09:00", scheduling.last_slot("revisit", tue) == dt.datetime(2026, 10, 5, 9, 0, tzinfo=kst))
-    check("칸: detect 지난 칸 = 지난주 화", scheduling.last_slot("detect", tue) == dt.datetime(2026, 9, 29, 10, 0, tzinfo=kst))
+    check("칸: detect 지난 칸 = 지난주 화", scheduling.last_slot("detect", tue) == dt.datetime(2026, 9, 29, 18, 0, tzinfo=kst))
     check("칸 경계: 정각은 그 칸", scheduling.last_slot("revisit", dt.datetime(2026, 10, 5, 9, 0, tzinfo=kst)).day == 5)
     old = [{"flow": "revisit", "at": "2026-10-04T12:00:00+09:00"}, {"flow": "detect", "at": "2026-09-30T08:00:00+09:00"}]
     check("차례: 칸 뒤 실행 없으면 due", scheduling.due("revisit", tue, old) and not scheduling.due("detect", tue, old))
@@ -251,6 +251,16 @@ def scenario_m2(data):
     check("tick: 실행 기록에 trigger=schedule", all(r["trigger"] == "schedule" for r in s3.runs()))
     info = TestClient(server.create_app(s3)).get("/schedule").json()
     check("GET /schedule: 기본 꺼짐 + 두 흐름", info["enabled"] is False and {f["flow"] for f in info["flows"]} == {"revisit", "detect"}, info)
+    check("detect 칸은 수집(화 16:00) 뒤", scheduling.last_slot("detect", dt.datetime(2026, 10, 6, 17, 0, tzinfo=kst)).day == 29
+          and scheduling.last_slot("detect", dt.datetime(2026, 10, 6, 18, 0, tzinfo=kst)).day == 6)
+
+    # 수집 스냅숏에서 만든 입력(pipeline.detect_feed)이면 실행 요약 첫 줄이 깔때기 건수다 (HYO-84)
+    funnel = {"items": 2290, "lane_a": 222, "kept": 8, "cap": "5/8", "to_detect": 5}
+    with open(os.path.join(s3.snapshot_dir, "funnel.json"), "w", encoding="utf-8") as f:
+        json.dump(funnel, f)
+    r = s3.run("detect")
+    check("detect 요약: 깔때기 건수 한 줄이 먼저", r["ok"] and r["summary"][0] == "수집 2290 → 레인 A 222 → 관문 남김 8 → detect 입력 5 (5/8)"
+          and r["summary"][1].startswith("소식 "), r["summary"])
 
 
 def scenario_profile(data):
