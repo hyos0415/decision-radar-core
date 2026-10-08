@@ -84,6 +84,31 @@ def collect_only_targets():
     return texts, roots, info
 
 
+def refresh_collect_only(roots):
+    """수집 전용 대상은 아무도 그 노트북에서 작업하지 않는다 — 그대로 두면 점점 옛 스택을 읽는다. 수집 직전에 fast-forward만 당긴다.
+    내 repo는 당기지 않는다 (작업 중인 사본이다). 실패해도 수집은 계속하고 기록만 남긴다."""
+    rep = {"pulled": [], "failed": []}
+    for name, root in roots.items():
+        if not (Path(root) / ".git").exists():
+            rep["failed"].append({"repo": name, "why": "git 사본이 아니다"})
+            continue
+        p = subprocess.run(["git", "-C", str(root), "pull", "--ff-only", "--quiet"], capture_output=True, text=True, encoding="utf-8")
+        if p.returncode == 0:
+            rep["pulled"].append(name)
+        else:
+            rep["failed"].append({"repo": name, "why": (p.stderr or p.stdout).strip()[:200]})
+    return rep
+
+
+def my_targets_missing():
+    """내 스택 목록(radar-targets.json)에 있는데 폴더가 없는 repo — 조용히 빠지면 그 주 수집이 영구히 비므로 run.json에 남긴다."""
+    path = Path(os.environ.get("RADAR_TARGETS") or (REPO.parent / "adr" / "radar-targets.json"))
+    if not path.exists():
+        return []
+    return [{"repo": t["repo"], "path": str((path.parent / t["path"]).resolve())}
+            for t in json.loads(path.read_text(encoding="utf-8")) if not (path.parent / t["path"]).resolve().is_dir()]
+
+
 def merge_targets(mine, extra, what):
     """내 대상 + 수집 전용 대상. 같은 이름이 양쪽에 있으면 거부한다 (어느 쪽 스택인지 모호해진다)."""
     clash = set(mine) & set(extra)
@@ -120,7 +145,11 @@ def main(argv=None):
     fetcher = Fetcher()
     claude_md, targets_path = targets()
     roots = target_roots()
+    _, pre_roots, _ = collect_only_targets()
+    pull = refresh_collect_only(pre_roots)                         # 당긴 뒤에 다시 읽는다 (CLAUDE.md·package.json이 바뀌었을 수 있다)
     extra_md, extra_roots, collect_only = collect_only_targets()
+    collect_only["refresh"] = pull
+    collect_only["my_targets_missing"] = my_targets_missing()
     claude_md = merge_targets(claude_md, extra_md, "CLAUDE.md")     # 수집에만 합친다 — targets()를 쓰는 pipeline은 여전히 내 스택만 본다
     roots = merge_targets(roots, extra_roots, "repo 루트")
     run = {"started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), "pool_version": pool["version"],

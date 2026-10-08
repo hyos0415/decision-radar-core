@@ -210,6 +210,44 @@ def test_collect_only_targets_are_separate_from_my_stack():
     assert json.loads(run.COLLECT_ONLY.read_text(encoding="utf-8"))["targets"] == []          # 저장소의 목록은 아직 비어 있다
 
 
+def test_collect_only_refresh_pulls_ff_and_reports_failures():
+    import os
+    import subprocess
+    import tempfile
+    from collector import run
+
+    def git(cwd, *a):
+        subprocess.run(["git", "-C", str(cwd), *a], check=True, capture_output=True)
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t)
+        up = t / "upstream"
+        up.mkdir()
+        git(up, "init", "-q", "-b", "main")
+        git(up, "config", "user.email", "t@example.invalid")
+        git(up, "config", "user.name", "t")
+        _write_pkg(up, {"dependencies": {"react": "19"}})
+        git(up, "add", ".")
+        git(up, "commit", "-q", "-m", "1")
+        subprocess.run(["git", "clone", "-q", str(up), str(t / "mirror")], check=True, capture_output=True)
+        _write_pkg(up, {"dependencies": {"react": "19", "vite": "7"}})                           # 상류가 바뀐다
+        git(up, "commit", "-q", "-am", "2")
+        (t / "plain").mkdir()
+        rep = run.refresh_collect_only({"mirror": t / "mirror", "plain": t / "plain"})
+        assert rep["pulled"] == ["mirror"] and [f["repo"] for f in rep["failed"]] == ["plain"]
+        assert github.dependencies_from_package_json(t / "mirror") == ["react", "vite"]        # 당긴 뒤의 스택을 읽는다
+        mine = t / "radar-targets.json"
+        mine.write_text(json.dumps([{"repo": "gone", "path": "gone"}, {"repo": "here", "path": "mirror"}]), encoding="utf-8")
+        old = os.environ.get("RADAR_TARGETS")
+        os.environ["RADAR_TARGETS"] = str(mine)
+        try:
+            assert [m["repo"] for m in run.my_targets_missing()] == ["gone"]                   # 내 스택도 조용히 빠지지 않는다
+        finally:
+            if old is None:
+                os.environ.pop("RADAR_TARGETS", None)
+            else:
+                os.environ["RADAR_TARGETS"] = old
+
+
 def test_github_dependencies_from_package_json():
     import tempfile
     with tempfile.TemporaryDirectory() as t:
