@@ -202,6 +202,8 @@ excludes:
 | ② 천천히 뜬 것 | `created:30일 전..7일 전 stars:>=500` | 246 (첫 실행만 몰아 받고 이후 repo ID 중복 제거) | 3 |
 | 의존성 릴리스 | 스택 의존성의 `releases.atom` (조회 — 검색이 아니다) | — | 의존성 수 |
 
+변경 (2026-10-08, 데스크톱 앱(Electron·React)이 생겨 CLAUDE.md 표의 npm 이름을 PyPI로 찾으면 엉뚱한 repo가 잡힘): 의존성 이름을 대상 repo의 `package.json`에서 직접 읽고 npm registry의 `repository`로 GitHub repo를 찾는다. CLAUDE.md 표의 `(npm, …)` 행은 건너뛴다. 수집 기준 `pool.yaml` version 1 → 2.
+
 - 통로 ②가 필요한 이유: 7일 창만 보면 첫 주 30★ → 둘째 주 300★인 repo는 한 번도 잡히지 않는다. HYO-47(스타 증가 속도)이 생기면 대체 후보
 - topic 필터 없음(상위 100 중 58개가 topic 없음) · 언어 필터 없음(`jevgrep`은 TypeScript) · 키워드 사전 컷 없음
 - 한도: 검색 분당 30회, REST 시간당 5,000회 (확인)

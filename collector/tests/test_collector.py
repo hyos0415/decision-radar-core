@@ -159,6 +159,136 @@ def test_github_releases_paginate_until_window():
     assert items[0].links == ["https://example.com/x"]
 
 
+DESKTOP_STACK = """### 의존성 → component
+
+| 의존성 | component |
+|---|---|
+| PyYAML | skill |
+| Electron 39 · electron-vite 5 · React 19 · Geist 글꼴 (npm, `desktop/package.json`) | desktop |
+| litellm (별도 venv) | product |
+"""
+
+
+def _write_pkg(d, obj):
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "package.json").write_text(json.dumps(obj), encoding="utf-8")
+
+
+def test_github_dependencies_from_package_json():
+    import tempfile
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        _write_pkg(root / "desktop", {"dependencies": {"react": "^19", "@radix-ui/react-dialog": "^1"},
+                                      "devDependencies": {"electron": "^39", "react": "^19"}})
+        _write_pkg(root / "desktop" / "node_modules" / "left-pad", {"dependencies": {"left-pad": "1"}})
+        _write_pkg(root / "web" / "dist", {"dependencies": {"built": "1"}})
+        _write_pkg(root / "tools", {"dependencies": {"zod": "3"}})
+        names = github.dependencies_from_package_json(root)
+        assert sorted(names) == ["@radix-ui/react-dialog", "electron", "react", "zod"], names
+        assert names == github.dependencies_from_package_json(root)          # 순서가 안정적
+        assert github.dependencies_from_package_json(root / "none") == []
+
+
+def test_github_claude_md_skips_npm_rows():
+    skipped = []
+    names = github.dependencies_from_claude_md(DESKTOP_STACK, skipped)
+    assert names == ["PyYAML", "litellm"], names
+    assert len(skipped) == 1 and "Electron" in skipped[0], skipped
+    assert github.dependencies_from_claude_md(DESKTOP_STACK) == ["PyYAML", "litellm"]   # skipped 없이도 동작
+
+
+def test_github_repo_from_npm_repository_forms():
+    f = github.repo_from_npm_repository
+    for u in ["git+https://github.com/o/r.git", "https://github.com/o/r", "git://github.com/o/r.git",
+              "git+ssh://git@github.com/o/r.git", "git@github.com:o/r.git", "github:o/r", "o/r",
+              {"type": "git", "url": "git+https://github.com/o/r.git", "directory": "packages/x"},
+              "https://github.com/o/r/tree/main/packages/x"]:
+        assert f(u) == "o/r", u
+    for u in [None, "", "https://gitlab.com/o/r.git", "git+https://bitbucket.org/o/r.git", {"type": "git"},
+              "https://github.com/sponsors/o", 42]:
+        assert f(u) is None, u
+
+
+def test_github_npm_url_encoding_and_cache_key():
+    assert github.npm_latest_url("react") == "https://registry.npmjs.org/react/latest"
+    assert github.npm_latest_url("@radix-ui/react-dialog") == "https://registry.npmjs.org/@radix-ui%2Freact-dialog/latest"
+
+    class F:
+        def __init__(self):
+            self.urls = []
+        def get(self, url):
+            self.urls.append(url)
+            if "npmjs" in url:
+                return 200, json.dumps({"repository": "facebook/react"}).encode()
+            return 200, json.dumps({"info": {"project_urls": {"Source": "https://github.com/markfinger/python-react"}}}).encode()
+    f, cache = F(), {}
+    assert github.resolve_repo("react", {}, f, cache, "npm") == "facebook/react"
+    assert github.resolve_repo("react", {}, f, cache) == "markfinger/python-react"      # npm:react != pypi:react
+    assert github.resolve_repo("react", {}, f, cache, "npm") == "facebook/react"        # 캐시
+    assert len(f.urls) == 2 and set(cache) == {"npm:react", "pypi:react"}, (f.urls, cache)
+
+
+def test_github_resolve_override_before_npm():
+    class NoNet:
+        def get(self, url):
+            raise AssertionError("override가 있으면 registry를 부르지 않는다")
+    assert github.resolve_repo("Electron", {"electron": "electron/electron"}, NoNet(), {}, "npm") == "electron/electron"
+
+
+def test_github_releases_mixes_pypi_and_npm_with_dedupe():
+    import tempfile
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        _write_pkg(root, {"dependencies": {"@radix-ui/react-dialog": "1", "@radix-ui/react-label": "2",
+                                           "react": "19", "no-repo-pkg": "1"}})
+        npm = {"@radix-ui%2Freact-dialog": "git+https://github.com/radix-ui/primitives.git",
+               "@radix-ui%2Freact-label": {"url": "https://github.com/radix-ui/primitives", "directory": "x"},
+               "react": "git+https://github.com/facebook/react.git"}
+
+        class F:
+            def __init__(self):
+                self.rel = []
+            def get(self, url):
+                if "registry.npmjs.org/" in url:
+                    key = url.split("registry.npmjs.org/")[1].removesuffix("/latest")
+                    if key in npm:
+                        return 200, json.dumps({"repository": npm[key]}).encode()
+                    return 200, b"{}"
+                return 200, json.dumps({"info": {"project_urls": {"Source": "https://github.com/pydantic/pydantic"}}}).encode()
+            def get_json(self, url, headers=None):
+                self.rel.append(url)
+                return [_rel("v1", "2026-10-07T00:00:00Z")]
+        f = F()
+        rep = {"requests": 0, "failed": []}
+        since = time.mktime((2026, 10, 1, 0, 0, 0, 0, 0, 0)) - time.timezone
+        items = github.releases({"dependency_repos": {}}, f, {"me/app": DESKTOP_STACK.replace("litellm", "pydantic")},
+                                rep, since, {}, {"me/app": root})
+        repos = sorted(u.split("/repos/")[1].split("/releases")[0] for u in f.rel)
+        assert repos == ["facebook/react", "pydantic/pydantic", "radix-ui/primitives"], repos   # 모노레포는 1번
+        d = rep["dependencies"]
+        assert d["by_ecosystem"] == {"pypi": 2, "npm": 4} and d["total"] == 6, d
+        assert d["repos"] == 3 and d["skipped_npm_rows"] == 1, d
+        assert {"target": "me/app", "dependency": "no-repo-pkg", "ecosystem": "npm"} in d["unresolved"], d
+        assert {i.meta["ecosystem"] for i in items} == {"pypi", "npm"}
+        assert all("dependency" in i.meta for i in items)
+
+
+def test_github_releases_package_json_without_claude_md():
+    import tempfile
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        _write_pkg(root, {"dependencies": {"react": "19"}})
+
+        class F:
+            def get(self, url):
+                return 200, json.dumps({"repository": "github:facebook/react"}).encode()
+            def get_json(self, url, headers=None):
+                return []
+        rep = {"requests": 0, "failed": []}
+        github.releases({}, F(), {}, rep, 0, {}, {"mate/front": root})
+        assert rep["dependencies"]["repos"] == 1 and rep["dependencies"]["by_ecosystem"] == {"npm": 1}, rep
+
+
 def test_hf_parsers():
     ms = huggingface.parse_models([{"id": "fastino/GLiNER2.5-Decide", "trendingScore": 207, "likes": 10,
                                     "pipeline_tag": "token-classification", "createdAt": "2026-09-24T00:00:00Z"}],

@@ -43,6 +43,19 @@ def targets():
     return texts, str(path)
 
 
+def target_roots():
+    """{repo: 대상 repo 루트 폴더} — package.json을 CLAUDE.md 없이도 읽으려고 따로 둔다 (targets()는 pipeline도 쓴다)."""
+    path = Path(os.environ.get("RADAR_TARGETS") or (REPO.parent / "adr" / "radar-targets.json"))
+    if not path.exists():
+        return {}
+    roots = {}
+    for t in json.loads(path.read_text(encoding="utf-8")):
+        root = (path.parent / t["path"]).resolve()
+        if root.is_dir():
+            roots[t["repo"]] = root
+    return roots
+
+
 def adr_technologies():
     adr_dir = os.environ.get("RADAR_ADR_DIR") or str(REPO.parent / "adr" / "docs" / "adr")
     radar = REPO / ".claude" / "skills" / "jhs-decisions" / "scripts" / "radar.py"
@@ -70,6 +83,7 @@ def main(argv=None):
     now = time.time()
     fetcher = Fetcher()
     claude_md, targets_path = targets()
+    roots = target_roots()
     run = {"started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), "pool_version": pool["version"],
            "vendors_version": vendors_cfg["version"], "targets": targets_path, "sources": {}}
     all_items = []
@@ -81,7 +95,7 @@ def main(argv=None):
             elif name == "hn":
                 items, rep = hn.collect(pool["hn"], fetcher, now)
             elif name == "github":
-                items, rep = github.collect(pool["github"], fetcher, now, claude_md)
+                items, rep = github.collect(pool["github"], fetcher, now, claude_md, roots)
             elif name == "huggingface":
                 items, rep = huggingface.collect(pool["huggingface"], fetcher, now)
             elif name == "vendor":
