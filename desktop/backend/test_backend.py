@@ -69,6 +69,8 @@ def main():
             except ServiceError:
                 check(name, True)
 
+        import export_openapi  # 계약(HYO-91) — 커밋된 openapi.json이 지금 모델과 같아야 화면 타입이 맞는다
+        check("계약: openapi.json 최신 (export_openapi.py로 다시 뽑는다)", export_openapi.spec_text() == open(export_openapi.OUT, encoding="utf-8").read())
         h = c.get("/health").json()
         check("health", h["ok"] and h["mode"] == "stub", h)
         check("health: 프로필 default", h["profile"] == "default" and not os.path.exists(os.path.join(data, devprofiles.MARKER)), h)

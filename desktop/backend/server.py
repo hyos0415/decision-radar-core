@@ -17,7 +17,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from fastapi import Body, FastAPI, HTTPException  # noqa: E402
+from fastapi import Body, FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 
@@ -26,14 +26,20 @@ import devprofiles  # noqa: E402
 import scheduling  # noqa: E402
 from jobs import Jobs  # noqa: E402
 from service import REPO, RadarService, ServiceError  # noqa: E402
+import schemas as S  # noqa: E402  — service가 코어 경로를 올린 뒤에
 
 DEFAULT_DATA = devprofiles.data_dir_for(devprofiles.DEFAULT)
 DEMO_DATA = os.path.join(os.path.dirname(HERE), ".dev-data-demo")
+API_VERSION = "1.0.0"  # 계약 버전 — 화면이 깨질 변경이면 올린다
+ERR = {"model": S.ErrorBody, "description": "서비스 오류 — detail 한 줄"}
 
 
-def create_app(svc: RadarService, scheduler_on: bool = False, jobs: Jobs = None) -> FastAPI:
-    app = FastAPI(title="Decision Radar backend", docs_url=None, redoc_url=None)
-    jobs = jobs or Jobs(svc)
+def create_app(svc: RadarService = None, scheduler_on: bool = False, jobs: Jobs = None) -> FastAPI:
+    """svc=None이면 계약(OpenAPI)만 뽑는 앱이다 — export_openapi.py가 쓴다. 엔드포인트는 부를 때만 svc를 본다."""
+    app = FastAPI(title="Decision Radar backend", version=API_VERSION, docs_url=None, redoc_url=None,
+                  description="데스크톱 앱 백엔드 (localhost). 계약: desktop/backend/schemas.py → desktop/openapi.json → api.gen.ts",
+                  responses={400: ERR, 404: ERR, 409: ERR, 413: ERR, 500: ERR})
+    jobs = jobs or (Jobs(svc) if svc is not None else None)
     app.state.jobs = jobs
     # 화면(개발 서버 localhost:5173 등)과 포트가 달라 교차 출처다. localhost 출처만 허용한다 — 아무 웹 페이지나 승인 API를 부르지 못하게
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"^http://(localhost|127\.0\.0\.1)(:\d+)?$",
@@ -43,73 +49,71 @@ def create_app(svc: RadarService, scheduler_on: bool = False, jobs: Jobs = None)
     def _service_error(_req, e: ServiceError):
         return JSONResponse(status_code=e.status, content={"detail": e.message})
 
-    @app.get("/health")
+    @app.get("/health", response_model=S.Health, operation_id="health")
     def health():
         return svc.health()
 
-    @app.get("/inbox")
+    @app.get("/inbox", response_model=S.InboxList, operation_id="inbox")
     def inbox():
         return {"items": svc.inbox()}
 
-    @app.get("/inbox/{item_id}")
+    @app.get("/inbox/{item_id}", response_model=S.InboxDetail, operation_id="inboxDetail")
     def detail(item_id: str):
         return svc.detail(item_id)
 
-    @app.post("/inbox/{item_id}/approve")
-    def approve(item_id: str, body: dict = Body(default={})):
-        return svc.answer(item_id, "approve", stale_answer=body.get("stale_answer"))
+    @app.post("/inbox/{item_id}/approve", response_model=S.ActionResult, operation_id="approve")
+    def approve(item_id: str, body: S.AnswerRequest = Body(default_factory=S.AnswerRequest)):
+        return svc.answer(item_id, "approve", stale_answer=body.stale_answer)
 
-    @app.post("/inbox/{item_id}/edit")
-    def edit(item_id: str, body: dict = Body(...)):
-        return svc.answer(item_id, "edit", stale_answer=body.get("stale_answer"), draft=body.get("draft"))
+    @app.post("/inbox/{item_id}/edit", response_model=S.ActionResult, operation_id="edit")
+    def edit(item_id: str, body: S.EditRequest):
+        return svc.answer(item_id, "edit", stale_answer=body.stale_answer, draft=body.draft)
 
-    @app.post("/inbox/{item_id}/reject")
-    def reject(item_id: str, body: dict = Body(default={})):
+    @app.post("/inbox/{item_id}/reject", response_model=S.ActionResult, operation_id="reject")
+    def reject(item_id: str):
         return svc.answer(item_id, "reject")
 
-    @app.post("/capture")
-    def capture(body: dict = Body(...)):
-        return svc.submit_capture(body.get("conversation"))
+    @app.post("/capture", response_model=S.CaptureResult, operation_id="capture")
+    def capture(body: S.CaptureRequest):
+        return svc.submit_capture(body.conversation)
 
-    @app.get("/decisions")
+    @app.get("/decisions", response_model=S.DecisionList, operation_id="decisions")
     def decisions():
         return {"items": svc.decisions()}
 
-    @app.get("/decisions/{adr_id}")
+    @app.get("/decisions/{adr_id}", response_model=S.DecisionDetail, operation_id="decision")
     def decision(adr_id: str):
         return svc.decision(adr_id)
 
-    @app.post("/runs/{flow}")
-    def run(flow: str, body: dict = Body(default={})):
+    @app.post("/runs/{flow}", response_model=S.RunResult, operation_id="run")
+    def run(flow: str):
         return svc.run(flow)
 
-    @app.get("/runs")
+    @app.get("/runs", response_model=S.RunList, operation_id="runs")
     def runs():
         return {"items": svc.runs()}
 
     # 작업 + 폴링 (HYO-85) — 접수만 하고 바로 돌려준다. 상태는 GET으로 (jobs.py 머리말)
-    @app.post("/jobs/{kind}", status_code=202)
-    def submit_job(kind: str, body: dict = Body(default={})):
-        return {"job": jobs.submit(kind, body)}
+    @app.post("/jobs/{kind}", status_code=202, response_model=S.JobEnvelope, operation_id="submitJob")
+    def submit_job(kind: str, body: S.JobRequest = Body(default_factory=S.JobRequest)):
+        return {"job": jobs.submit(kind, body.model_dump(exclude_none=True))}
 
-    @app.get("/jobs")
+    @app.get("/jobs", response_model=S.JobList, operation_id="jobs")
     def list_jobs():
         return {"items": jobs.list()}
 
-    @app.get("/jobs/{job_id}")
+    @app.get("/jobs/{job_id}", response_model=S.Job, operation_id="job")
     def get_job(job_id: str):
         return jobs.get(job_id)
 
-    @app.get("/schedule")
+    @app.get("/schedule", response_model=S.Schedule, operation_id="schedule")
     def schedule_info():
         import datetime as dt
         return scheduling.describe(dt.datetime.now().astimezone(), svc.runs(), scheduler_on, svc.flows)
 
-    @app.post("/events")
-    def events(body: dict = Body(...)):
-        if not isinstance(body.get("event"), str):
-            raise HTTPException(400, "event가 필요하다")
-        svc.ui_event(body["event"], body.get("item"), body.get("detail") if isinstance(body.get("detail"), dict) else None)
+    @app.post("/events", response_model=S.Ok, operation_id="event")
+    def events(body: S.EventRequest):
+        svc.ui_event(body.event, body.item, body.detail)
         return {"ok": True}
 
     return app
