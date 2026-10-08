@@ -35,7 +35,7 @@ from common import ops
 from common.core import radar
 from common.schemas import AdrDraft
 
-from .export import Exporter, GitExporter
+from .export import Exporter, GitExporter, LocalExporter
 
 ITEM_KINDS = ("capture", "detect", "experiment")
 ITEM_ID = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
@@ -560,6 +560,8 @@ DEFAULT_EXPORTER = Exporter()
 def exporter_for(ctx):
     """기본은 no-op. `RADAR_EXPORT=git`이고 dry-run이 아닐 때만 GitExporter — 실수로 켜지는 것을 막으려 둘 다 요구한다 (eval 러너는 RADAR_DRY_RUN=1).
     RADAR_EXPORT_REMOTE·RADAR_EXPORT_BRANCH(기본 origin·main) · RADAR_GIT_NAME·RADAR_GIT_EMAIL(없으면 git 설정을 따른다)."""
+    if ctx.env.get("RADAR_EXPORT") == "local":  # 데스크톱 앱의 ADR 사본 — git 없이 승인 기록만 (HYO-85). 밖으로 나가지 않아 dry-run과 같이 켜진다
+        return LocalExporter(repo_root(ctx))
     if ctx.env.get("RADAR_EXPORT") == "git" and not ctx.dry_run:  # MUT:exporter_for
         return GitExporter(repo_root(ctx), dry_run=ctx.dry_run, remote=ctx.env.get("RADAR_EXPORT_REMOTE") or "origin",
                            branch=ctx.env.get("RADAR_EXPORT_BRANCH") or "main",

@@ -611,6 +611,46 @@ def e_detect_review_needs_exporter(h, X, w):
     return r["export"]["state"] == "review" and raised and "0006-kopii-small.md" in w.adrs() and w.item("d-1")["export"]["state"] == "review", r
 
 
+@scen
+def e_local_export_review(h, X, w):
+    """로컬 내보내기(RADAR_EXPORT=local, HYO-85) — dry-run이어도 켜지고 git은 한 번도 안 부른다. detect 초안 검토 대기 → approve는 승인 기록(파일 남음), reject는 초안을 지우고 닫는다"""
+    saved = X.subprocess
+    X.subprocess = cp = CountingProc()
+    try:
+        w.dry = True
+        w.extra_env["RADAR_EXPORT"] = "local"
+        picked = h.exporter_for(w.ctx())
+        ex = X.LocalExporter(w.root)
+        r1 = approve(w, h, ex, item="d-1", hold=True, kind="detect")
+        r2 = approve(w, h, ex, draft=draft2(), item="d-2", hold=True, kind="detect")
+        q = [x["item"] for x in h.review_queue(w.ctx())]
+        ra = h.review_item(w.ctx(), "d-1", "approve", exporter=X.LocalExporter(w.root))
+        rr = h.review_item(w.ctx(), "d-2", "reject", exporter=X.LocalExporter(w.root))
+        i1, i2 = w.item("d-1"), w.item("d-2")
+        ok = (picked.active and type(picked).__name__ == "LocalExporter" and r1["export"]["state"] == "review" and r2["export"]["state"] == "review"
+              and q == ["d-1", "d-2"] and ra["state"] == "exported" and ra.get("local") and i1["export"] == {"state": "done"} and i1["lifecycle"] == "DONE"
+              and "0006-kopii-small.md" in w.adrs() and rr["outcome"] == "reject" and i2["lifecycle"] == "CLOSED" and len(w.adrs()) == 6
+              and h.review_queue(w.ctx()) == [] and cp.git_calls == [] and w.count() == 0 and w.lhead() == w.base)
+        return ok, (type(picked).__name__, r1.get("export"), ra, rr, cp.git_calls)
+    finally:
+        X.subprocess = saved
+
+
+@scen
+def e_local_export_stale(h, X, w):
+    """로컬 내보내기도 재개 검사를 돈다 — 검토 대기 중 사본의 0003 status가 바뀌면 승인하지 않고 stale + 차이, 「계속」이면 승인"""
+    w.dry = True
+    ex = X.LocalExporter(w.root)
+    approve(w, h, ex, item="d-1", hold=True, kind="detect")
+    _status_change(w.root)
+    r = h.review_item(w.ctx(), "d-1", "approve", exporter=X.LocalExporter(w.root))
+    st = w.item("d-1")["export"]["state"]
+    done = h.review_item(w.ctx(), "d-1", "approve", stale_answer="continue", exporter=X.LocalExporter(w.root))
+    ok = (r["state"] == "stale" and any("0003" in l for l in r["changes"]) and st == "stale"
+          and done["state"] == "exported" and w.item("d-1")["export"] == {"state": "done"})
+    return ok, (r, done)
+
+
 # 같은 실행에서 제품이 직접 내보낸 변화는 지문 비교에서 넘긴다 (설계 §5-2 「구현에서 정한 것」 ①) ──────────
 
 def draft3():
@@ -941,6 +981,8 @@ MUTANTS = [
     ("같은 실행 넘기기 전체 끔 (회귀 — 기능 없음)", "hitl", [("own = sorted(_own_exports(ctx, item, old, new))", "own = []")], ["e_same_run_chain_no_stale"]),
     ("넘길 때 바깥 변화까지 같이 삼킴 (own이 있으면 늘 같다고 함)", "hitl", [("if old is not None and fp.same(old, cmp_new):  # MUT:recheck_same", "if old is not None and (fp.same(old, cmp_new) or own):  # MUT:recheck_same")],
      ["e_same_run_plus_outside_change"]),
+    ("로컬 내보내기가 재검사 생략 (사본이 바뀌어도 승인)", "export", [("if check is not None:  # MUT:local_recheck", "if False:  # MUT:local_recheck")], ["e_local_export_stale"]),
+    ("RADAR_EXPORT=local을 무시 (detect 검토를 화면에서 못 받음)", "hitl", [('if ctx.env.get("RADAR_EXPORT") == "local":', 'if False:')], ["e_local_export_review"]),
     ("같은 번호가 들어와도 커밋", "hitl", [("if taken:  # 그 사이 같은 번호의 다른 ADR이", "if False:  # 그 사이 같은 번호의 다른 ADR이")], ["e_sync_blocks"]),
 ]
 

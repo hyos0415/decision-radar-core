@@ -10,9 +10,13 @@
   실행       `detect`·`revisit` 그래프를 그대로 한 번 돌리고 보고서를 요약한다 (`<data>/runs.jsonl`)
 
 안전 (작업 지시서 §5):
-  - 모델은 스텁이 기본이다. 실제 모델은 `RADAR_APP_MODEL=anthropic`일 때만이고, 지금은 그것도 거부한다(과금 전 사용자 승인)
-  - `RADAR_EXPORT`는 자식 환경에서 지우고 `RADAR_DRY_RUN=1`을 강제한다 — 내보내기(git push)가 켜질 길이 둘 다 막힌다 (`hitl.exporter_for`)
+  - 모델은 스텁이 기본이다. 실제 모델은 **데모 모드**(`RADAR_APP_MODEL=anthropic` + `RADAR_APP_DEMO=1`, HYO-85)에서만 — 하나만 있으면 거부한다
+  - 데모 모드는 ADR repo **사본**(`<data>/adr`, 원본 `RADAR_DEMO_ADR` 기본 `../adr`)에만 쓰고, detect는 `RADAR_DEMO_SNAPSHOT`(pipeline.detect_feed 출력)을 읽는다
+  - 내보내기는 늘 로컬(`RADAR_EXPORT=local` — git을 부르지 않고 승인 기록만, `export.LocalExporter`). 물려받은 `RADAR_EXPORT`는 지우고
+    `RADAR_DRY_RUN=1`을 강제한다 — git push가 켜질 길이 없다 (`hitl.exporter_for`)
   - 키(.env)는 이 프로세스만 읽는다 (스텁 모드에서는 읽지도 않는다)
+
+읽기(Inbox·상세·Decisions)는 쓰기 잠금을 기다리지 않는다 — 실제 모델 실행(분 단위) 동안에도 화면이 멈추지 않게. 쓰기는 lock 하나로 줄 세운다.
 """
 
 import asyncio
@@ -30,6 +34,7 @@ sys.path.insert(1, REPO)  # pipeline.detect_feed — 실행 요약의 건수 한
 
 import devprofiles  # noqa: E402
 from radar import hitl  # noqa: E402  — radar/__init__이 spike/common을 경로에 올린다
+from radar.adr_copy import copy_adr  # noqa: E402
 from radar import script as stub_scripts  # noqa: E402
 from radar.capture import capture_agent, capture_turn1, capture_turn2, thread_config  # noqa: E402
 from radar.detect import detect  # noqa: E402
@@ -38,7 +43,8 @@ from radar.stub_model import StubChat  # noqa: E402
 from common import ops  # noqa: E402
 from pipeline.detect_feed import funnel_line  # noqa: E402
 from common.core import SKILL_RADAR, Ctx, RadarError, radar  # noqa: E402
-from common.schemas import AdrDraft  # noqa: E402
+from common.env import MODEL as REAL_MODEL  # noqa: E402
+from common.schemas import AdrDraft, RevisitCondition  # noqa: E402
 from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: E402
 import yaml  # noqa: E402
 
@@ -52,6 +58,7 @@ FLOWS = ("detect", "revisit")
 MAX_CONVERSATION = 200_000
 OK_OUTCOMES = ("written", "rejected", "discarded", "rejudge", "recovered")
 NUMBER_NOTE = "번호는 저장할 때 정해짐"
+DEMO_ADR_DEFAULT = os.path.join(os.path.dirname(REPO), "adr")
 
 
 class ServiceError(Exception):
@@ -89,7 +96,8 @@ _TITLE = re.compile(r"^#\s+(.+)$", re.M)
 class RadarService:
     """한 프로세스에 하나. 쓰는 일은 전부 lock 하나로 줄 세운다 (Inbox 답 · capture · 시드)."""
 
-    def __init__(self, data_dir, *, adr_dir=None, targets=None, model=None, radar_py=SKILL_RADAR, profile=None):
+    def __init__(self, data_dir, *, adr_dir=None, targets=None, model=None, radar_py=SKILL_RADAR, profile=None,
+                 demo=None, demo_adr=None, demo_snapshot=None, chat_factory=None):
         self.data_dir = os.path.abspath(data_dir)
         # 개발 데이터 프로필 — 폴더를 만든 프로필이 이긴다. 다른 프로필을 달라고 하면 섞이지 않게 거부한다 (devprofiles.py)
         made = devprofiles.read_marker(self.data_dir)
@@ -108,12 +116,69 @@ class RadarService:
         self.snapshot_dir = os.path.join(self.data_dir, "snapshots")
         self.tmp = os.path.join(self.data_dir, "tmp")
         self.radar_py = radar_py
-        self.mode = model or os.environ.get("RADAR_APP_MODEL") or "stub"
-        if self.mode != "stub":
-            # 실제 모델은 과금이다 — 호출 수·비용을 사용자에게 말하고 승인받는 경로가 생기기 전에는 켜지 않는다 (작업 지시서 §5)
-            raise ServiceError(500, f"모델 {self.mode!r}: 마일스톤 1은 스텁만 지원한다 (RADAR_APP_MODEL을 비우거나 stub)")
+        want_model = model or os.environ.get("RADAR_APP_MODEL") or "stub"
+        demo = (os.environ.get("RADAR_APP_DEMO") == "1") if demo is None else demo
+        # 실제 모델은 과금이다 — 데모 플래그와 모델 이름을 둘 다 명시해야 연다. 하나만 있으면 실수로 보고 거부한다 (HYO-85)
+        if (want_model != "stub" or demo) and not (want_model == "anthropic" and demo):
+            raise ServiceError(500, f"모델 {want_model!r} · 데모 {demo}: 실제 모델은 데모 모드에서만 — RADAR_APP_MODEL=anthropic과 RADAR_APP_DEMO=1을 "
+                                    "같이 준다 (아니면 둘 다 비워 스텁)")
+        self.mode = "demo" if demo else "stub"
+        self.model_name = REAL_MODEL if demo else "stub"
+        self.flows = ("detect",) if demo else FLOWS  # 데모는 detect만 실제 모델로 — revisit은 데모 입력에 출처가 없어 의미가 없다
+        self.chat_factory = chat_factory  # 테스트가 실제 모델 자리에 대역을 꽂는다 (API 호출 없이 데모 모드 배관 검사)
+        self.demo_info = None
+        if demo:
+            self._setup_demo(demo_adr or os.environ.get("RADAR_DEMO_ADR") or DEMO_ADR_DEFAULT,
+                             demo_snapshot or os.environ.get("RADAR_DEMO_SNAPSHOT"))
         os.makedirs(self.tmp, exist_ok=True)
         self.lock = threading.RLock()
+
+    def _setup_demo(self, adr_src, snapshot):
+        """데모 모드 — ADR 사본(처음 한 번 복사, 있으면 이어 쓴다)과 detect 입력 폴더. 원본 ADR repo는 읽기만 한다."""
+        adr_src = os.path.abspath(adr_src)
+        if not snapshot or not os.path.exists(os.path.join(snapshot, "feed.json")):
+            raise ServiceError(500, f"데모 모드: RADAR_DEMO_SNAPSHOT에 feed.json이 없다 ({snapshot!r}) — python -m pipeline.detect_feed로 만든다")
+        if os.path.commonpath([adr_src, self.data_dir]) in (adr_src, self.data_dir):
+            raise ServiceError(500, f"데모 모드: 데이터 폴더 {self.data_dir}와 원본 ADR repo {adr_src}가 겹친다 — 사본이 원본을 덮을 수 있다")
+        copy_root = os.path.join(self.data_dir, "adr")
+        if not os.path.isdir(os.path.join(copy_root, "docs", "adr")):
+            if not os.path.isdir(os.path.join(adr_src, "docs", "adr")):
+                raise ServiceError(500, f"데모 모드: 원본 ADR repo에 docs/adr가 없다 ({adr_src})")
+            os.makedirs(self.data_dir, exist_ok=True)
+            copy_adr(adr_src, copy_root)
+        self.adr_dir = os.path.join(copy_root, "docs", "adr")
+        self.targets = os.path.join(copy_root, "radar-targets.json")
+        self.snapshot_dir = os.path.abspath(snapshot)
+        self.demo_info = {"adr_source": adr_src, "adr_copy": copy_root, "snapshot": self.snapshot_dir}
+
+    def chat(self, flow, script=None):
+        """흐름 하나의 모델. 스텁이면 대본, 데모면 실제 Claude (테스트는 chat_factory로 대역)."""
+        if self.mode == "stub":
+            return StubChat(script=script, flow=flow)
+        if self.chat_factory is not None:
+            return self.chat_factory(flow)
+        from radar import models
+        return models.make_anthropic()
+
+    def health(self):
+        h = {"ok": True, "mode": self.mode, "profile": self.profile, "data_dir": self.data_dir, "adr_dir": self.adr_dir,
+             "model": self.model_name, "flows": list(self.flows)}
+        if self.demo_info:
+            h["demo"] = {**self.demo_info, "funnel": self._funnel_line()}
+        return h
+
+    def _funnel_line(self):
+        try:
+            return funnel_line(json.load(open(os.path.join(self.snapshot_dir, "funnel.json"), encoding="utf-8")))
+        except (OSError, ValueError):
+            return None
+
+    def _gate_why(self):
+        """detect 입력을 만든 관문의 「왜 남았나」 (pipeline.detect_feed의 gate.json: url → reason·kept_by). 없으면 {}."""
+        try:
+            return json.load(open(os.path.join(self.snapshot_dir, "gate.json"), encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
 
     # ── 환경 ─────────────────────────────────────────────────────
 
@@ -121,7 +186,8 @@ class RadarService:
         env = {k: v for k, v in os.environ.items() if k != "RADAR_EXPORT"}  # 내보내기 스위치는 물려받지 않는다
         env.update({
             "RADAR_ADR_DIR": self.adr_dir, "RADAR_TARGETS": self.targets,
-            "RADAR_DRY_RUN": "1",  # exporter_for가 dry-run이면 no-op — RADAR_EXPORT가 어디서 들어와도 git을 안 부른다
+            "RADAR_EXPORT": "local",  # 승인 기록만 — git을 부르지 않는다. detect 초안을 Inbox에서 답할 수 있게 (HYO-85)
+            "RADAR_DRY_RUN": "1",  # git 내보내기는 dry-run이면 no-op — RADAR_EXPORT=git이 어디서 들어와도 git을 안 부른다
             "RADAR_SNAPSHOT_DIR": self.snapshot_dir,  # detect·revisit는 스냅숏 모드만 (check_scope) — 웹에 나가지 않는다
             "RADAR_SERVED_LOG": os.path.join(self.data_dir, "served.log"),
             "LANGSMITH_TRACING": "false", "LANGCHAIN_TRACING_V2": "false",
@@ -136,7 +202,7 @@ class RadarService:
 
     def model(self, item_id=None):
         sid = (self._meta().get("items", {}).get(item_id) or {}).get("stub") if item_id else None
-        return StubChat(script=self.capture_script(sid or self.default_stub), flow="capture")
+        return self.chat("capture", self.capture_script(sid or self.default_stub))
 
     def capture_script(self, sid):
         """capture 스텁 대본 — 프로필 것이 있으면 그것, 없으면 코어 대본 (product/radar/stub_script.json)."""
@@ -185,7 +251,7 @@ class RadarService:
             return []
         store, meta, out = hitl.StateStore(self.state_path), self._meta().get("items", {}), []
         with SqliteSaver.from_conn_string(self.state_path) as cp:
-            agent = capture_agent(self.model(), cp)
+            agent = capture_agent(StubChat(script=self.capture_script(self.default_stub), flow="capture"), cp)  # 상태 읽기만 — 모델을 부르지 않는다
             for tid in store.threads():
                 snap = agent.get_state(thread_config(tid))
                 draft = _pending_draft(snap.interrupts)
@@ -209,11 +275,12 @@ class RadarService:
         changes = self._changes(ctx, c["fp"], c["scope"])
         row = {"id": c["id"], "kind": "capture", "title": d.get("title"), "technology": d.get("technology"),
                "affected": d.get("affected") or [], "since": c["since"], "waiting_days": _days(c["since"]),
-               "state": "stale" if changes else "awaiting_approval", "actions": ["approve", "edit", "reject"]}
+               "state": "stale" if changes else "awaiting_approval", "actions": ["approve", "edit", "reject"], "why": None}
         return row, changes
 
     def _review_row(self, ctx, q):
-        """검토 대기 별도 파일(detect 초안 · 내보내기 보류). 내보내기를 켜야 답할 수 있어 마일스톤 1에서는 보기만."""
+        """검토 대기 별도 파일(detect 초안 · 내보내기 보류). 로컬 내보내기라 승인·수정·거부를 받는다 (HYO-85).
+        why = 이 소식이 왜 왔나 — detect 입력을 만든 관문의 판정(gate.json, 예 `anthropic L5 × deprecation`). 근거 url로 잇는다."""
         item = hitl.read_item(ctx, q["item"]) or {}
         wi = item.get("write_intent") or {}
         path = os.path.join(hitl.repo_root(ctx), wi["path"]) if wi.get("path") else None
@@ -223,29 +290,40 @@ class RadarService:
         since = q["export"].get("since") or q["created"]
         row = {"id": q["item"], "kind": q["kind"], "title": m.group(1).strip() if m else q["item"],
                "technology": scope.get("technology"), "affected": scope.get("affected") or [], "since": since,
-               "waiting_days": _days(since), "state": q["export"].get("state"), "actions": []}
+               "waiting_days": _days(since), "state": q["export"].get("state"),
+               "actions": ["approve", "edit", "reject"] if hitl.exporter_for(ctx).active else [], "why": self._why(text)}
         return row, text
 
+    def _why(self, text):
+        gate = self._gate_why()
+        reasons = []
+        for e in _front_matter(text).get("evidence") or []:
+            g = gate.get(e.get("url")) if isinstance(e, dict) else None
+            if g and g.get("reason") and g["reason"] not in reasons:
+                reasons.append(g["reason"])
+        return "; ".join(reasons) or None
+
     def inbox(self):
-        with self.lock:
-            ctx = self.ctx()
-            rows = [self._capture_row(ctx, c)[0] for c in self._captures(ctx)]
-            rows += [self._review_row(ctx, q)[0] for q in hitl.review_queue(ctx)]
+        ctx = self.ctx()  # 읽기 — 쓰기 잠금을 기다리지 않는다 (머리말)
+        rows = [self._capture_row(ctx, c)[0] for c in self._captures(ctx)]
+        rows += [self._review_row(ctx, q)[0] for q in hitl.review_queue(ctx)]
         return sorted(rows, key=lambda r: str(r["since"]))
 
     def detail(self, item_id):
-        with self.lock:
-            ctx = self.ctx()
-            for c in self._captures(ctx):
-                if c["id"] == item_id:
-                    row, changes = self._capture_row(ctx, c)
-                    md = ops.render(AdrDraft.model_validate(c["draft"]), ctx.now)
-                    return {**row, "draft": c["draft"], "markdown": md, "changes": changes, "number_note": NUMBER_NOTE}
-            for q in hitl.review_queue(ctx):
-                if q["item"] == item_id:
-                    row, text = self._review_row(ctx, q)
-                    return {**row, "draft": None, "markdown": text, "changes": (q["export"].get("changes") or []),
-                            "number_note": f"ADR {q.get('adr')} (로컬 초안)", "note": "detect 검토는 아직 화면에서 답할 수 없다 — 내보내기 설정이 필요하다"}
+        ctx = self.ctx()  # 읽기 — 쓰기 잠금을 기다리지 않는다
+        for c in self._captures(ctx):
+            if c["id"] == item_id:
+                row, changes = self._capture_row(ctx, c)
+                md = ops.render(AdrDraft.model_validate(c["draft"]), ctx.now)
+                return {**row, "draft": c["draft"], "markdown": md, "changes": changes, "number_note": NUMBER_NOTE}
+        for q in hitl.review_queue(ctx):
+            if q["item"] == item_id:
+                row, text = self._review_row(ctx, q)
+                out = {**row, "draft": _parse_adr(text), "markdown": text, "changes": (q["export"].get("changes") or []),
+                       "number_note": f"ADR {q.get('adr')} (로컬 초안)"}
+                if not row["actions"]:
+                    out["note"] = "내보내기가 꺼져 있어 답할 수 없다"
+                return out
         raise ServiceError(404, f"{item_id}: 대기 항목이 아니다")
 
     # ── 답 ───────────────────────────────────────────────────────
@@ -259,11 +337,12 @@ class RadarService:
             ctx = self.ctx()
             ids = {c["id"] for c in self._captures(ctx)}
             if item_id not in ids:
-                if any(q["item"] == item_id for q in hitl.review_queue(ctx)):
-                    raise ServiceError(409, "detect 검토는 아직 화면에서 답할 수 없다 — 내보내기(RADAR_EXPORT)가 필요하다 (결정 필요)")
-                raise ServiceError(404, f"{item_id}: 대기 항목이 아니다")
+                q = next((q for q in hitl.review_queue(ctx) if q["item"] == item_id), None)
+                if q is None:
+                    raise ServiceError(404, f"{item_id}: 대기 항목이 아니다")
+                return self._done(item_id, decision, stale_answer, self._review_answer(ctx, q, decision, stale_answer, draft))
             try:
-                rep, _ = capture_turn2(ctx, self.model(item_id), self.state_path, decision, ctx.now, self.mode,
+                rep, _ = capture_turn2(ctx, self.model(item_id), self.state_path, decision, ctx.now, self.model_name,
                                        item_id=item_id, edited=draft, stale_answer=stale_answer)
             except hitl.HitlError as e:
                 return self._done(item_id, decision, stale_answer, {"outcome": "error", "message": str(e)})
@@ -271,6 +350,39 @@ class RadarService:
             if res["outcome"] == "rejudge":
                 res = self._rejudge(item_id, res)
             return self._done(item_id, decision, stale_answer, res)
+
+    def _review_answer(self, ctx, q, decision, stale_answer, draft):
+        """detect 초안(검토 대기)에 답한다 — 코어 `hitl.review_item` 그대로. 로컬 내보내기라 승인은 사본에 남고 git은 안 부른다.
+        edit = 쓰기 전 검사(`check_edit`) → 같은 번호로 다시 쓰기(`rewrite_adr`, 사람이 고친 파일이면 덮지 않음) → 승인."""
+        item_id, adr = q["item"], q.get("adr")
+        try:
+            if decision == "edit":
+                d, errs = hitl.check_edit(ctx, draft)
+                if errs:
+                    return {"outcome": "edit_errors", "message": "고친 초안이 검사를 통과하지 못했다 — 아무것도 쓰지 않았다", "errors": errs}
+                werrs = hitl.rewrite_adr(ctx, item_id, adr, d)
+                if werrs and str(werrs[0]).startswith("blocked"):
+                    return {"outcome": "blocked", "message": werrs[0]}
+                decision = "approve"
+            r = hitl.review_item(ctx, item_id, decision, stale_answer=stale_answer)
+        except hitl.HitlError as e:
+            return {"outcome": "error", "message": str(e)}
+        st, oc = r.get("state"), r.get("outcome")
+        if oc == "reject":
+            return {"outcome": "rejected", "message": f"거부했다 — ADR {adr} 초안을 지웠다", "adr": adr}
+        if oc == "discard":
+            return {"outcome": "discarded", "message": f"버렸다 — ADR {adr} 초안을 지웠다", "adr": adr}
+        if oc == "rejudge":
+            return {"outcome": "rejudge", "message": f"ADR {adr} 초안을 지웠다 — 다시 판정하려면 detect를 다시 돌린다", "adr": adr}
+        if st == "stale":
+            return {"outcome": "stale", "message": "검토 대기 중 ADR repo가 바뀌었다 — 계속·다시 판정·버림 중에 고른다",
+                    "changes": r.get("changes") or [], "answers": list(hitl.STALE_ANSWERS)}
+        if st == "exported":
+            wi = (hitl.read_item(ctx, item_id) or {}).get("write_intent") or {}
+            errs = wi.get("validate_errors") or []
+            return {"outcome": "written", "message": f"ADR {adr} 승인됨 (proposed로 사본에 남았다)" + (f" — validate 오류 {len(errs)}개" if errs else ""),
+                    "adr": adr, "path": wi.get("path"), "validate_errors": errs}
+        return {"outcome": "blocked", "message": f"막혔다: {r.get('reason') or st}", "blocked": r}
 
     def _done(self, item_id, decision, stale_answer, res):
         detail = {"outcome": res["outcome"]}
@@ -319,21 +431,25 @@ class RadarService:
         """대화 → capture 1턴 → 승인 대기에서 멈춘다 (R9: ADR repo 쓰기 0). (item_id 또는 None, 보고서)."""
         with self.lock:
             ctx = self.ctx()
-            model = StubChat(script=self.capture_script(stub or self.default_stub), flow="capture")
-            rep, _ = asyncio.run(capture_turn1(ctx, model, conversation, ctx.now, self.state_path, self.mode))
+            model = self.chat("capture", self.capture_script(stub or self.default_stub))
+            rep, _ = asyncio.run(capture_turn1(ctx, model, conversation, ctx.now, self.state_path, self.model_name))
             item_id = rep.get("item_id") if rep.get("awaiting_approval") else None
             if item_id:
                 self._put_meta(item_id, since=since or ctx.now, conversation=conversation, stub=stub or self.default_stub)
                 self.log("item_created", item_id, kind="capture")
             return item_id, rep
 
-    def submit_capture(self, conversation):
-        """화면의 빠른 capture 창 — 대화 → 1턴. 스텁 대본은 대화에 나온 기술로 고른다 (`pick_stub`)."""
+    @staticmethod
+    def check_conversation(conversation):
         if not isinstance(conversation, str) or not conversation.strip():
             raise ServiceError(400, "대화가 비었다")
         if len(conversation) > MAX_CONVERSATION:
             raise ServiceError(413, f"대화가 너무 길다 ({len(conversation)}자 > {MAX_CONVERSATION})")
-        stub, matched = pick_stub(conversation, self._stubs(), self.default_stub)
+
+    def submit_capture(self, conversation):
+        """화면의 빠른 capture 창 — 대화 → 1턴. 스텁 대본은 대화에 나온 기술로 고른다 (`pick_stub`). 데모면 실제 모델이 대화를 읽는다."""
+        self.check_conversation(conversation)
+        stub, matched = pick_stub(conversation, self._stubs(), self.default_stub) if self.mode == "stub" else (None, True)
         item_id, rep = self.capture(conversation, stub=stub)
         tech = self.capture_script(self.default_stub)["match"]["technology"]
         note = "" if matched else f" — 스텁: 대화와 맞는 대본이 없어 기본 대본({tech})으로 만들었다 (내용은 대화와 무관)"
@@ -351,12 +467,11 @@ class RadarService:
     # ── Decisions (읽기만 — R8) ──────────────────────────────────
 
     def decisions(self):
-        with self.lock:
-            ctx = self.ctx()
-            try:
-                rows = radar(ctx, "list", self.adr_dir)
-            except RadarError as e:
-                raise ServiceError(500, f"radar.py list 실패: {e}")
+        ctx = self.ctx()  # 읽기 — 쓰기 잠금을 기다리지 않는다
+        try:
+            rows = radar(ctx, "list", self.adr_dir)
+        except RadarError as e:
+            raise ServiceError(500, f"radar.py list 실패: {e}")
         return [self._decision_row(r) for r in rows]
 
     def decision(self, adr_id):
@@ -386,10 +501,15 @@ class RadarService:
 
     # ── 실행 (detect · revisit) ──────────────────────────────────
 
-    def run(self, flow, trigger="manual"):
-        """흐름 하나를 스텁 모델로 한 번 돌린다. 코어 그래프를 그대로 부르고 보고서만 요약한다. 스냅숏 모드 + dry-run (check_scope)."""
+    def check_flow(self, flow):
         if flow not in FLOWS:
             raise ServiceError(404, f"모르는 흐름 {flow!r} — {list(FLOWS)}")
+        if flow not in self.flows:
+            raise ServiceError(409, f"{self.mode} 모드에서는 {flow}를 돌리지 않는다 — {list(self.flows)}만")
+
+    def run(self, flow, trigger="manual"):
+        """흐름 하나를 한 번 돌린다 (스텁 대본, 데모면 실제 모델). 코어 그래프를 그대로 부르고 보고서만 요약한다. 스냅숏 모드 + dry-run (check_scope)."""
+        self.check_flow(flow)
         with self.lock:
             ctx = self.ctx()
             if self.pscript is not None:  # 프로필 대본 — 판단표는 프로필 스냅숏(`<data>/snapshots`)의 소식·출처를 읽고 적은 것
@@ -404,8 +524,10 @@ class RadarService:
             res = {"id": f"{ctx.now}-{flow}", "flow": flow, "at": ctx.now, "mode": self.mode, "trigger": trigger, "ok": True, "error": None,
                    "summary": [], "drafts": [], "alerts": []}
             try:
-                rep, diag = asyncio.run(fn(ctx, StubChat(script=script, flow=flow), ctx.now, self.mode))
+                rep, diag = asyncio.run(fn(ctx, self.chat(flow, script), ctx.now, self.model_name))
                 res.update(self._summarize_detect(rep) if flow == "detect" else self._summarize_revisit(rep))
+                if self.mode != "stub":
+                    res["usage"] = {k: diag.get(k) for k in ("model_calls", "input_tokens", "output_tokens")}
                 if diag.get("p3_errors"):
                     res["summary"].append(f"오류 {len(diag['p3_errors'])}건: " + "; ".join(e.get("kind", "?") for e in diag["p3_errors"]))
             except Exception as e:  # 실행이 죽어도 앱은 산다 — 기록에 남기고 보인다
@@ -437,11 +559,7 @@ class RadarService:
             drafts.append({"adr": c["adr"], "title": m.group(1).strip() if m else c["technology"], "technology": c["technology"],
                            "validate_errors": c.get("validate_errors") or []})
         head = f"소식 {n_feed}건 → " if n_feed is not None else ""
-        summary = []
-        try:  # 수집 스냅숏에서 만든 입력이면(pipeline.detect_feed) 깔때기 건수 한 줄 — 버린 이유는 기록(lane_a.json)에만 (HYO-84)
-            summary.append(funnel_line(json.load(open(os.path.join(self.snapshot_dir, "funnel.json"), encoding="utf-8"))))
-        except (OSError, ValueError):
-            pass
+        summary = [x for x in [self._funnel_line()] if x]  # 수집 스냅숏에서 만든 입력이면(pipeline.detect_feed) 깔때기 건수 한 줄 (HYO-84)
         summary += [f"{head}후보 {len(cands)}건 · 이미 있는 결정이라 건너뜀 {len(skipped)}건 · 제외 {len(rep.get('excluded') or [])}건"]
         if drafts:
             bad = sum(1 for d in drafts if d["validate_errors"])
@@ -462,6 +580,33 @@ class RadarService:
         summary = [f"ADR {len(rep.get('adrs_checked') or [])}개 · 조건 {len(results)}개 확인",
                    f"조건 충족 {met}건 · 지난번과 달라짐 {changed}건 · 알림 {len(alerts)}건"]
         return {"summary": summary, "alerts": alerts}
+
+
+_SECTION = re.compile(r"^## (.+)$", re.M)
+
+
+def _parse_adr(text):
+    """detect 초안 파일 → 편집용 초안(AdrDraft 모양). `ops.render`의 거꾸로 — 못 읽으면 None (화면은 마크다운만 보인다)."""
+    fm = _front_matter(text)
+    body = re.sub(r"\A---\s*\n.*?\n---\s*\n", "", text, count=1, flags=re.S)
+    m = _TITLE.search(body)
+    parts = _SECTION.split(body)
+    sec = {parts[i].strip(): parts[i + 1].strip("\n") for i in range(1, len(parts) - 1, 2)}
+    decision, related = [], []
+    for line in (sec.get("Decision Outcome") or "").splitlines():
+        if line.startswith("관련 결정: "):
+            related = [x.strip() for x in line[len("관련 결정: "):].split(",") if x.strip()]
+        else:
+            decision.append(line)
+    notes = [line[2:] for line in (sec.get("Research Note") or "").splitlines() if line.startswith("- ")]
+    rw = [{**{k: None for k in RevisitCondition.model_fields}, **c} if isinstance(c, dict) else c for c in fm.get("revisit_when") or []]  # render가 뺀 null 칸
+    d = {"title": m.group(1).strip() if m else "", "technology": fm.get("technology"), "use": fm.get("use"),
+         "affected": fm.get("affected") or [], "evidence": fm.get("evidence") or [], "context": (sec.get("Context and Problem Statement") or "").strip(),
+         "decision": "\n".join(decision).strip(), "related": related, "research_note": notes, "revisit_when": rw}
+    try:
+        return AdrDraft.model_validate(d).model_dump(mode="json")
+    except Exception:  # noqa: BLE001 — 사람이 손으로 고친 파일 등
+        return None
 
 
 def _front_matter(text):
