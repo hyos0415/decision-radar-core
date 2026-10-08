@@ -65,7 +65,7 @@ function Panel({ id, onClose }: { id: string; onClose: () => void }): React.JSX.
         <div className="flex-1 overflow-y-auto px-5 py-4">
           <h2 className="text-base leading-snug font-semibold">{d.title}</h2>
           <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-muted-foreground">
-            <Badge variant="secondary">{statusLabel(d.status)}</Badge>
+            <Badge variant="secondary">{statusLabel(d.status ?? '')}</Badge>
             <span className="font-mono">{d.technology}</span>
             <span>·</span>
             <span>{d.use}</span>
@@ -215,7 +215,7 @@ export function DecisionsView({
                   {d.technology}
                 </span>
                 <span>
-                  <Badge variant="outline">{statusLabel(d.status)}</Badge>
+                  <Badge variant="outline">{statusLabel(d.status ?? '')}</Badge>
                 </span>
                 <Revisit d={d} />
                 <span className="text-xs text-muted-foreground">{dateOnly(d.last_checked)}</span>

@@ -27,6 +27,8 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build          # 타입 검사 포함
+      - name: API 타입이 계약(openapi.json)과 같은가 (HYO-91)
+        run: npm run gen:api && git diff --exit-code src/renderer/src/lib/api.gen.ts
 
   backend:
     runs-on: ubuntu-latest
@@ -41,3 +43,5 @@ jobs:
             product/requirements.txt
       - run: pip install -r requirements.txt -r product/requirements.txt
       - run: python desktop/backend/test_backend.py   # 스텁 · 임시 폴더 · 네트워크 없음
+      - name: 계약(openapi.json)이 백엔드 모델과 같은가 (HYO-91)
+        run: python desktop/backend/export_openapi.py --check

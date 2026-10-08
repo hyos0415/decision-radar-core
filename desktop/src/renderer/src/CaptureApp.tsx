@@ -56,7 +56,7 @@ export function CaptureApp(): React.JSX.Element {
       setResult(res)
       if (res.outcome === 'awaiting') {
         setText('')
-        window.radar.notifyChanged(res.item)
+        window.radar.notifyChanged(res.item ?? undefined)
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -99,7 +99,9 @@ export function CaptureApp(): React.JSX.Element {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => window.radar.navigate({ view: 'inbox', id: result.item })}
+                onClick={() =>
+                  window.radar.navigate({ view: 'inbox', id: result.item ?? undefined })
+                }
               >
                 Inbox에서 보기
               </Button>

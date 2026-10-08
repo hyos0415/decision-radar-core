@@ -1,80 +1,25 @@
-export type Kind = 'capture' | 'detect'
-export type ItemState = 'awaiting_approval' | 'review' | 'stale' | 'blocked' | 'pending'
-export type Action = 'approve' | 'edit' | 'reject'
-export type StaleAnswer = 'continue' | 'rejudge' | 'discard'
+// 타입은 백엔드 계약에서 생성한다 (HYO-91) — 손으로 고치지 않는다.
+//   백엔드 desktop/backend/schemas.py → python desktop/backend/export_openapi.py → desktop/openapi.json
+//   → npm run gen:api → ./api.gen.ts (openapi-typescript). CI가 다시 뽑아 차이가 있으면 실패한다.
+// 여기서는 화면 코드가 쓰던 이름으로 별칭만 준다.
+import type { components } from './api.gen'
 
-export type Affected = { repo: string; component: string }
-export type Evidence = {
-  url: string
-  source_type: 'official_doc' | 'release_note' | 'repo' | 'paper' | 'issue_pr' | 'community'
-}
-export type RevisitWhen = {
-  id: string
-  check_type: 'web' | 'repo' | 'numeric' | 'human'
-  condition: string
-  source_hint: string | null
-  threshold?: { metric: string; op: '<' | '<=' | '>' | '>=' | '=='; value: number }
-  basis?: string
-}
+type S = components['schemas']
 
-export type AdrDraft = {
-  title: string
-  technology: string
-  use: string
-  affected: Affected[]
-  evidence: Evidence[]
-  context: string
-  decision: string
-  related: string[]
-  research_note: string[]
-  revisit_when: RevisitWhen[]
-}
+export type Affected = S['Affected']
+export type Evidence = S['Evidence']
+export type RevisitWhen = S['RevisitCondition']
+export type AdrDraft = S['AdrDraft']
 
-export type InboxItem = {
-  id: string
-  kind: Kind
-  title: string
-  technology: string
-  affected: Affected[]
-  since: string
-  waiting_days: number
-  state: ItemState
-  actions: Action[]
-  /** detect만: 이 소식이 왜 왔나 — 관문 판정 (예 `anthropic L5 × deprecation`). 관문 없이 만든 입력이면 null */
-  why: string | null
-}
+export type InboxItem = S['InboxItem']
+export type InboxDetail = S['InboxDetail']
+export type Kind = InboxItem['kind']
+export type ItemState = InboxItem['state']
+export type Action = InboxItem['actions'][number]
+export type StaleAnswer = NonNullable<S['AnswerRequest']['stale_answer']>
 
-export type InboxDetail = InboxItem & {
-  draft: AdrDraft | null
-  markdown: string
-  changes: string[]
-  number_note: string
-  /** 답할 수 없을 때만 (actions가 빈 목록) */
-  note?: string
-}
-
-export type Outcome =
-  | 'written'
-  | 'rejected'
-  | 'stale'
-  | 'edit_errors'
-  | 'discarded'
-  | 'rejudge'
-  | 'blocked'
-  | 'recovered'
-  | 'error'
-
-export type ActionResult = {
-  outcome: Outcome
-  message?: string
-  adr?: string
-  path?: string
-  changes?: string[]
-  answers?: StaleAnswer[]
-  errors?: string[]
-  validate_errors?: string[]
-}
-
+export type ActionResult = S['ActionResult']
+export type Outcome = ActionResult['outcome']
 export const SUCCESS_OUTCOMES: Outcome[] = [
   'written',
   'rejected',
@@ -83,89 +28,23 @@ export const SUCCESS_OUTCOMES: Outcome[] = [
   'recovered'
 ]
 
-export type CaptureResult = {
-  outcome: 'awaiting' | 'linked' | 'no_draft'
-  item?: string
-  message?: string
-  link_candidates?: string[]
-}
+export type CaptureResult = S['CaptureResult']
 
-export type RevisitResultKind = 'met' | 'not_met' | 'undetermined' | string
-export type DecisionRevisit = {
-  id: string
-  check_type: string
-  condition: string
-  last: { result: RevisitResultKind; checked_at: string; reason: string | null } | null
-}
-export type RevisitSummary = {
-  met: number
-  not_met: number
-  undetermined: number
-  unchecked: number
-}
-export type Decision = {
-  id: string
-  title: string
-  file: string
-  status: string
-  technology: string
-  use: string
-  date: string
-  affected: Affected[]
-  revisit: DecisionRevisit[]
-  revisit_summary: RevisitSummary
-  last_checked: string | null
-}
-export type DecisionDetail = Decision & { markdown: string }
+export type DecisionRevisit = S['DecisionRevisit']
+export type RevisitSummary = S['RevisitSummary']
+export type Decision = S['Decision']
+export type DecisionDetail = S['DecisionDetail']
 
-export type Flow = 'detect' | 'revisit'
-export type RunResult = {
-  id: string
-  flow: Flow
-  at: string
-  mode: string
-  ok: boolean
-  error: string | null
-  summary: string[]
-  drafts: { adr: string; title: string; technology?: string }[]
-  alerts: { adr: string; condition: string; result: string; message: string }[]
-  /** 데모 모드(실제 모델)만 */
-  usage?: { model_calls: number; input_tokens: number; output_tokens: number }
-}
+export type RunResult = S['RunResult']
+export type Flow = RunResult['flow']
 
-export type Mode = 'stub' | 'demo'
-export type Health = {
-  ok: boolean
-  mode: Mode
-  profile: string
-  model: string
-  /** 이 모드에서 돌릴 수 있는 흐름 — 데모는 ['detect'] */
-  flows: Flow[]
-  data_dir: string
-  adr_dir: string
-  /** 데모 모드만: ADR 사본 · detect 입력 · 깔때기 건수 한 줄 */
-  demo?: { adr_source: string; adr_copy: string; snapshot: string; funnel: string | null }
-}
+export type Health = S['Health']
+export type Mode = Health['mode']
 
 /** 작업 + 폴링 (HYO-85) — 접수하면 바로 돌아온다. 끝나면 Inbox를 다시 읽고 알림을 띄운다 */
-export type JobKind = 'capture' | 'detect' | 'revisit'
-export type JobState = 'queued' | 'running' | 'done' | 'error'
-export type Job = {
-  id: string
-  kind: JobKind
-  state: JobState
-  created: string
-  started: string | null
-  finished: string | null
-  /** 한 줄 — 상태 창에 그대로 */
-  message: string
-  /** capture → CaptureResult, detect·revisit → RunResult (끝났을 때만) */
-  result: CaptureResult | RunResult | null
-  error: string | null
-  /** capture가 만든 Inbox 항목 (알림을 누르면 여기로) */
-  item: string | null
-  mode: Mode
-}
+export type Job = S['Job']
+export type JobKind = Job['kind']
+export type JobState = Job['state']
 
 export type EventName = 'item_opened' | 'app_opened' | 'decision_opened' | 'capture_opened'
 

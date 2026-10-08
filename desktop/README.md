@@ -47,6 +47,12 @@ npm run dev          # Electron 창 + 트레이 + 백엔드 자동 기동. 처�
 
 ## 백엔드 API (D1)
 
+**계약은 OpenAPI다 (HYO-91).** 요청·응답은 `backend/schemas.py`의 pydantic 모델이고(코어 `AdrDraft` 재사용), FastAPI가 응답을 그 모델로 검사한다 — 어긋나면 500이라 `test_backend.py`에서 드러난다.
+`<python> backend/export_openapi.py` → `openapi.json`(커밋) → `npm run gen:api` → `src/renderer/src/lib/api.gen.ts`(openapi-typescript, 커밋). `api.ts`는 생성 타입에 화면이 쓰던 이름으로 별칭만 준다.
+CI는 둘 다 다시 뽑아 커밋된 것과 다르면 실패한다. 아래 표는 사람이 읽는 요약이고, 칸의 정확한 모양은 `openapi.json`이 이긴다.
+edit의 `draft`만 모양 검사 없이(dict) 받는다 — 모델로 받으면 `status` 같은 모르는 칸이 조용히 버려져 「status 칸 거부」(R8)가 무력해진다.
+입력 칸이 빠졌거나 타입이 틀리면 422(`detail`이 목록), 서비스가 거부하면 400·404·409·413·500(`detail` 한 줄).
+
 | | 무엇 | 감싸는 코어 |
 |---|---|---|
 | `GET /health` | `{ok, mode(stub · demo), profile, model, flows, data_dir, adr_dir, demo?}` — `profile`은 개발 데이터 프로필(`default` · `andbread`), `flows`는 이 모드에서 돌릴 수 있는 흐름(데모는 `detect`만), `demo`는 `{adr_source, adr_copy, snapshot, funnel}` | — |
