@@ -50,7 +50,7 @@ python collector/tests/test_snapshot.py                # 오프라인 테스트
 |---|---|---|
 | Reddit | `sources/reddit.py` | RSS, **요청 간격 61초**, top 100 + 기술 flair, 글 ID로 합침. 점수는 없고 통로별 순위만 |
 | HN | `sources/hn.py` | Algolia, 25점 이상, **2~9일 전** 글을 하루씩 잘라 받음 (질의당 1,000건 상한) |
-| GitHub | `sources/github.py` | 통로 ① 7일 안 ★100 · 통로 ② 8~30일 ★500 · 대상 repo CLAUDE.md 의존성 → PyPI `project_urls`로 repo 찾기 → `releases.atom` (최근 7일) |
+| GitHub | `sources/github.py` | 통로 ① 7일 안 ★100 · 통로 ② 8~30일 ★500 · 의존성 릴리스: ① 대상 repo CLAUDE.md 표(npm 표시 행 제외) → PyPI `project_urls`로 repo 찾기 ② 대상 repo의 모든 `package.json`(dependencies+devDependencies) → npm registry `repository`로 repo 찾기 (`pool.yaml` `dependency_repos`가 먼저) → 릴리스 API (최근 8일) |
 | HF | `sources/huggingface.py` | trending 100 + 태스크 7개 × 20 + Daily Papers 7일 |
 | 벤더 | `sources/vendor.py` | 규칙(대상 repo 「외부 모델·서비스」 ∪ 살아 있는 ADR의 technology) → `vendors.yaml` 경로. 매핑이 없으면 `run.json`의 `no_route`에 남는다 |
 

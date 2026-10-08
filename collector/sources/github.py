@@ -9,6 +9,7 @@ import re
 import subprocess
 import time
 import urllib.parse
+from pathlib import Path
 
 from .. import feeds
 from ..item import Item, extract_links
@@ -76,8 +77,15 @@ def search(cfg, fetcher, q, channel, report, headers):
 _DEP_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$")
 
 
-def dependencies_from_claude_md(text):
-    """대상 repo CLAUDE.md의 「의존성 → component」 표에서 의존성 이름을 뽑는다."""
+_NPM_NOTE = re.compile(r"\(\s*npm\b", re.I)
+
+
+def dependencies_from_claude_md(text, skipped=None):
+    """대상 repo CLAUDE.md의 「의존성 → component」 표에서 의존성 이름을 뽑는다.
+
+    첫 칸에 `(npm, ...)` 괄호 설명이 있는 행은 건너뛴다 — 그 의존성은 package.json에서 직접 읽는다.
+    건너뛴 행은 skipped 리스트(주어지면)에 쌓는다.
+    """
     names, in_table = [], False
     for line in text.splitlines():
         if line.startswith("### "):
@@ -88,12 +96,39 @@ def dependencies_from_claude_md(text):
         m = _DEP_ROW.match(line.strip())
         if not m or set(m.group(1)) <= set("-: ") or m.group(1).startswith("의존성"):
             continue
+        if _NPM_NOTE.search(m.group(1)):                  # 괄호를 지우기 전에 판정
+            if skipped is not None:
+                skipped.append(m.group(1))
+            continue
         cell = re.sub(r"\(.*?\)", "", m.group(1))      # 괄호 설명 제거
         cell = re.sub(r"`[^`]*`", "", cell)
         for part in re.split(r"[·,]", cell):
             name = part.strip().split(" ")[0].strip()
             if name and name not in names:
                 names.append(name)
+    return names
+
+
+_SKIP_DIRS = {"node_modules", ".git", "out", "dist", ".venv"}
+
+
+def dependencies_from_package_json(root):
+    """root 아래 모든 package.json의 dependencies + devDependencies 이름 (수집은 넓게 — 거르는 건 뒷 단계)."""
+    names = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
+        if "package.json" not in filenames:
+            continue
+        try:
+            pkg = json.loads(Path(dirpath, "package.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(pkg, dict):
+            continue
+        for sect in ("dependencies", "devDependencies"):
+            for n in (pkg.get(sect) or {}):
+                if n not in names:
+                    names.append(n)
     return names
 
 
@@ -113,18 +148,47 @@ def repo_from_pypi_info(info):
     return None
 
 
-def resolve_repo(name, overrides, fetcher, cache):
-    key = name.lower()
+_NPM_GH = re.compile(r"^(?:(?:git\+)?(?:https?|ssh|git)://(?:[^@/]+@)?github\.com[/:]|git@github\.com:|github:)"
+                    r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?(?:[/#?].*)?$")
+_NPM_SHORT = re.compile(r"^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?$")
+
+
+def repo_from_npm_repository(repository):
+    """package.json repository(문자열 또는 {url, directory}) -> 'owner/repo'. GitHub이 아니면 None."""
+    url = repository.get("url") if isinstance(repository, dict) else repository
+    if not isinstance(url, str):
+        return None
+    url = url.strip()
+    m = _NPM_GH.match(url) or _NPM_SHORT.match(url)
+    if not m or m.group(1).lower() in _NOT_OWNER:
+        return None
+    return f"{m.group(1)}/{m.group(2)}"
+
+
+def npm_latest_url(name):
+    return f"https://registry.npmjs.org/{urllib.parse.quote(name, safe='@')}/latest"   # 스코프 이름의 /는 %2F
+
+
+def resolve_repo(name, overrides, fetcher, cache, ecosystem="pypi"):
+    key = f"{ecosystem}:{name.lower()}"
     if key in cache:
         return cache[key]
     for k, v in overrides.items():
-        if k.lower() == key:
+        if k.lower() == name.lower():
             cache[key] = v
             return v
     repo = None
-    st, body = fetcher.get(f"https://pypi.org/pypi/{urllib.parse.quote(name)}/json")
-    if st == 200:
-        repo = repo_from_pypi_info(json.loads(body).get("info", {}))
+    if ecosystem == "npm":
+        st, body = fetcher.get(npm_latest_url(name))
+        if st == 200:
+            try:
+                repo = repo_from_npm_repository(json.loads(body).get("repository"))
+            except ValueError:
+                repo = None
+    else:
+        st, body = fetcher.get(f"https://pypi.org/pypi/{urllib.parse.quote(name)}/json")
+        if st == 200:
+            repo = repo_from_pypi_info(json.loads(body).get("info", {}))
     cache[key] = repo
     return repo
 
@@ -141,23 +205,31 @@ def parse_releases(body, repo, dep):
     return out
 
 
-def releases(cfg, fetcher, claude_md_texts, report, since_ts, headers):
-    deps = []
-    for repo_name, text in claude_md_texts.items():
-        for d in dependencies_from_claude_md(text):
-            deps.append((repo_name, d))
+def releases(cfg, fetcher, claude_md_texts, report, since_ts, headers, target_roots=None):
+    deps, skipped = [], []
+    for repo_name, text in (claude_md_texts or {}).items():
+        for d in dependencies_from_claude_md(text, skipped):
+            deps.append((repo_name, d, "pypi"))
+    for repo_name, root in (target_roots or {}).items():
+        for d in dependencies_from_package_json(root):
+            deps.append((repo_name, d, "npm"))
     cache, items, unresolved = {}, [], []
     seen = set()
-    for target, dep in deps:
-        repo = resolve_repo(dep, cfg.get("dependency_repos") or {}, fetcher, cache)
+    for target, dep, eco in deps:
+        repo = resolve_repo(dep, cfg.get("dependency_repos") or {}, fetcher, cache, eco)
         if not repo:
-            unresolved.append({"target": target, "dependency": dep})
+            unresolved.append({"target": target, "dependency": dep, "ecosystem": eco})
             continue
-        if repo in seen:
+        if repo.lower() in seen:     # 모노레포(radix-ui/primitives 등)는 한 번만 받는다
             continue
-        seen.add(repo)
-        items += fetch_releases(repo, fetcher, headers, since_ts, report, "dependency-releases", {"dependency": dep})
-    report["dependencies"] = {"total": len(deps), "repos": len(seen), "unresolved": unresolved}
+        seen.add(repo.lower())
+        items += fetch_releases(repo, fetcher, headers, since_ts, report, "dependency-releases",
+                                {"dependency": dep, "ecosystem": eco})
+    by_eco = {}
+    for _, _, eco in deps:
+        by_eco[eco] = by_eco.get(eco, 0) + 1
+    report["dependencies"] = {"total": len(deps), "by_ecosystem": by_eco, "repos": len(seen),
+                              "unresolved": unresolved, "skipped_npm_rows": len(skipped)}
     return items
 
 
@@ -207,15 +279,16 @@ def _ts(iso):
         return 0
 
 
-def collect(cfg, fetcher, now=None, claude_md_texts=None):
+def collect(cfg, fetcher, now=None, claude_md_texts=None, target_roots=None):
     now = now or time.time()
     fetcher.min_interval.setdefault("api.github.com", cfg.get("min_interval_s", 2.1))
+    fetcher.min_interval.setdefault("registry.npmjs.org", cfg.get("npm_min_interval_s", 0.5))
     headers, authed = api_headers()
     items, report = [], {"requests": 0, "failed": [], "authenticated": authed}
     for channel, q in queries(cfg, now):
         items += search(cfg, fetcher, q, channel, report, headers)
-    if claude_md_texts:
+    if claude_md_texts or target_roots:
         # 하루 겹치게 받는다 — 같은 릴리스는 id가 같아 스냅숏 단계에서 합쳐진다
         window = cfg.get("release_window_days", 8)
-        items += releases(cfg, fetcher, claude_md_texts, report, now - window * 86400, headers)
+        items += releases(cfg, fetcher, claude_md_texts, report, now - window * 86400, headers, target_roots)
     return items, report

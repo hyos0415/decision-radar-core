@@ -1,6 +1,6 @@
 # 출처 풀 — 수집 기준 (docs/design/doc-pipeline.md §4, 2026-10-02 사용자 결정)
 # 기준을 바꾸면 이 파일을 고치고 version을 올린다. 결과를 본 뒤 바꾸면 doc-pipeline에 `변경`으로 남긴다.
-version: 1
+version: 2                  # 2026-10-08: 의존성 릴리스에 npm 경로(package.json 직접 읽기) 추가 - 수집 기준이 바뀜
 
 reddit:
   min_interval_s: 61          # 8초면 429, 60초면 통과 (probe 2026-10-02)
