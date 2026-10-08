@@ -1,0 +1,43 @@
+# 데스크톱 앱 검사 — PR마다 · main push마다 (desktop/를 건드렸을 때)
+# 브랜치 보호가 없는 요금제라 merge를 막지는 못한다. 초록불을 보고 merge하는 것은 약속이다 (ONBOARDING.md §7)
+name: desktop
+
+on:
+  pull_request:
+    paths: ["desktop/**", "product/**", "requirements.txt", ".github/workflows/desktop.yml"]
+  push:
+    branches: [main]
+    paths: ["desktop/**", "product/**", "requirements.txt", ".github/workflows/desktop.yml"]
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"   # 빌드·lint에는 Electron 실행 파일이 필요 없다
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build          # 타입 검사 포함
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            product/requirements.txt
+      - run: pip install -r requirements.txt -r product/requirements.txt
+      - run: python desktop/backend/test_backend.py   # 스텁 · 임시 폴더 · 네트워크 없음
