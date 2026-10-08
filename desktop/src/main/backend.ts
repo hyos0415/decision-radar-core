@@ -56,6 +56,13 @@ function freePort(): Promise<number> {
   })
 }
 
+// 개발 데이터 프로필 — RADAR_DEVDATA=<이름> (비우면 default). 프로필마다 데이터 폴더가 따로다 (desktop/backend/devprofiles.py)
+export function devProfile(): string {
+  const name = (process.env.RADAR_DEVDATA ?? '').trim().toLowerCase() || 'default'
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(name)) throw new Error(`RADAR_DEVDATA가 올바르지 않다: ${name}`)
+  return name
+}
+
 function venvPython(root: string): string {
   return process.platform === 'win32'
     ? join(root, '.venv', 'Scripts', 'python.exe')
@@ -116,7 +123,10 @@ export async function startBackend(): Promise<void> {
       const root = repoRoot()
       const python = resolvePython(root)
       const port = await freePort()
-      const dataDir = process.env.RADAR_APP_DATA || join(root, 'desktop', '.dev-data')
+      const profile = devProfile()
+      const dataDir =
+        process.env.RADAR_APP_DATA ||
+        join(root, 'desktop', profile === 'default' ? '.dev-data' : `.dev-data-${profile}`)
       const env: NodeJS.ProcessEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' }
       for (const k of Object.keys(env)) {
         if (/^(ANTHROPIC_API_KEY|OPENAI_API_KEY|RADAR_EXPORT)$/i.test(k)) delete env[k]
@@ -124,7 +134,15 @@ export async function startBackend(): Promise<void> {
       pushLog(`spawn ${python} desktop/backend/server.py --port ${port}`)
       child = spawn(
         python,
-        [join('desktop', 'backend', 'server.py'), '--port', String(port), '--data-dir', dataDir],
+        [
+          join('desktop', 'backend', 'server.py'),
+          '--port',
+          String(port),
+          '--data-dir',
+          dataDir,
+          '--profile',
+          profile
+        ],
         { cwd: root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
       )
       child.stdout?.on('data', (d) => pushLog(String(d)))

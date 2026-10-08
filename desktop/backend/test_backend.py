@@ -3,7 +3,8 @@
   <레포 .venv python> desktop/backend/test_backend.py
 
 보는 것: Inbox 목록·상세 · R9(승인 전 쓰기 0) · 승인이 코어 경로로 ADR을 쓴다 · 대기 중 세상이 바뀌면 「바뀐 점」과 stale 답 ·
-edit(검사 실패는 쓰지 않음, status 칸 거부) · 거부 · 버림 · 행동 로그 · 내보내기 스위치가 새지 않는다 · 실제 모델 거부.
+edit(검사 실패는 쓰지 않음, status 칸 거부) · 거부 · 버림 · 행동 로그 · 내보내기 스위치가 새지 않는다 · 실제 모델 거부 ·
+개발 데이터 프로필(andbread — 선택·폴더 분리·시드·실행, default는 그대로).
 """
 
 import glob
@@ -19,6 +20,7 @@ sys.path.insert(0, HERE)
 from fastapi.testclient import TestClient  # noqa: E402
 
 import devdata  # noqa: E402
+import devprofiles  # noqa: E402
 import server  # noqa: E402
 import service  # noqa: E402
 from service import RadarService, ServiceError, hitl  # noqa: E402
@@ -65,6 +67,7 @@ def main():
 
         h = c.get("/health").json()
         check("health", h["ok"] and h["mode"] == "stub", h)
+        check("health: 프로필 default", h["profile"] == "default" and not os.path.exists(os.path.join(data, devprofiles.MARKER)), h)
         pre = {"Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type"}
         ok = c.options("/inbox/x/approve", headers={"Origin": "http://localhost:5173", **pre})
         check("CORS: 개발 화면 출처 허용", ok.headers.get("access-control-allow-origin") == "http://localhost:5173", dict(ok.headers))
@@ -159,6 +162,7 @@ def main():
         check("로그: 화면 이벤트는 source=app", all(x["source"] == "app" for x in ev if x["event"] == "item_opened"))
 
         scenario_m2(os.path.join(tmp, "data2"))
+        scenario_profile(os.path.join(tmp, "data-andbread"))
     finally:
         os.environ.pop("RADAR_EXPORT", None)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -247,6 +251,112 @@ def scenario_m2(data):
     check("tick: 실행 기록에 trigger=schedule", all(r["trigger"] == "schedule" for r in s3.runs()))
     info = TestClient(server.create_app(s3)).get("/schedule").json()
     check("GET /schedule: 기본 꺼짐 + 두 흐름", info["enabled"] is False and {f["flow"] for f in info["flows"]} == {"revisit", "detect"}, info)
+
+
+def scenario_profile(data):
+    """개발 데이터 프로필 — 선택 · 폴더 분리 · andbread 시드(ADR 0001~0004 · 대기 3건) · detect·revisit 실행 · default는 그대로."""
+    print("\n— 개발 데이터 프로필 —")
+    # 선택 규칙
+    check("프로필: 비면 default", devprofiles.resolve(None) == "default" and devprofiles.resolve("  ") == "default" and devprofiles.resolve("Default") == "default")
+    check("프로필: andbread 선택", devprofiles.resolve("andbread") == "andbread" and "andbread" in devprofiles.available())
+    for bad in ("nope", "../andbread", "andbread/..", "a b"):
+        try:
+            devprofiles.resolve(bad)
+            check(f"프로필: {bad!r} 거부", False)
+        except ValueError:
+            check(f"프로필: {bad!r} 거부", True)
+    d_default, d_ab = devprofiles.data_dir_for("default"), devprofiles.data_dir_for("andbread")
+    check("프로필: 데이터 폴더가 따로", d_default != d_ab and os.path.basename(d_default) == ".dev-data" and os.path.basename(d_ab) == ".dev-data-andbread", (d_default, d_ab))
+
+    # 시드
+    seeded = devdata.seed(data, "andbread")
+    check("andbread 시드: 대기 3건", [s["awaiting"] for s in seeded] == [True] * 3, seeded)
+    check("andbread 시드: 프로필 표시", devprofiles.read_marker(data) == "andbread")
+    svc = RadarService(data)
+    c = TestClient(server.create_app(svc))
+    check("andbread: health 프로필", c.get("/health").json()["profile"] == "andbread", c.get("/health").json())
+    try:
+        RadarService(data, profile="default")
+        check("프로필 섞임 거부 (andbread 폴더에 default)", False)
+    except ServiceError:
+        check("프로필 섞임 거부 (andbread 폴더에 default)", True)
+    check("andbread: ADR 0001~0004", sorted(os.path.basename(p)[:4] for p in glob.glob(os.path.join(svc.adr_dir, "*.md"))) == ["0001", "0002", "0003", "0004"], adrs(svc))
+    ds = c.get("/decisions").json()["items"]
+    check("andbread: Decisions 제목이 (예시)", len(ds) == 4 and all(d["title"].startswith("(예시)") for d in ds), [d["title"] for d in ds])
+    check("andbread: ADR이 대상 repo를 가리킴", all(a["repo"] == "Andbread_Frontend" for d in ds for a in d["affected"]))
+    check("andbread: 0003 보류 + 재검토 2조건", next(d for d in ds if d["id"] == "0003")["status"] == "hold" and
+          sum(next(d for d in ds if d["id"] == "0003")["revisit_summary"].values()) == 2)
+    check("andbread: 대상 repo 사본(CLAUDE.md·package.json)", all(os.path.isfile(os.path.join(data, "Andbread_Frontend", f)) for f in ("CLAUDE.md", "package.json")))
+    check("andbread: 대상 repo 사본은 두 파일뿐", sorted(os.listdir(os.path.join(data, "Andbread_Frontend"))) == ["CLAUDE.md", "package.json"])
+    check("andbread: CLAUDE.md 머리에 예시 표시", open(os.path.join(data, "Andbread_Frontend", "CLAUDE.md"), encoding="utf-8").read().startswith("> 예시"))
+    import subprocess
+    v = subprocess.run([sys.executable, service.SKILL_RADAR, "validate", svc.adr_dir], capture_output=True, text=True, encoding="utf-8")
+    check("andbread: radar.py validate 통과", v.returncode == 0, v.stdout[-300:])
+
+    items = c.get("/inbox").json()["items"]
+    check("andbread: Inbox 3건, 오래된 순 6·3·0일", [i["waiting_days"] for i in items] == [6, 3, 0], items)
+    check("andbread: 대기 초안이 andbread 대상", all(i["affected"] and i["affected"][0]["repo"] == "Andbread_Frontend" for i in items), items)
+    check("andbread: 대기 초안 제목", [i["technology"] for i in items] == ["Supabase Realtime", "Next.js", "zod"], [i["technology"] for i in items])
+    det = c.get(f"/inbox/{items[0]['id']}").json()
+    check("andbread: 상세 미리보기 proposed + 재검토 조건", det["markdown"].startswith("---\nstatus: proposed") and "revisit_when" in det["markdown"], det["markdown"][:120])
+
+    # 빠른 capture — 프로필 대본으로 고른다
+    convs = devprofiles.load_json("andbread", "conversations.json")
+    check("andbread 대본 고르기", [service.pick_stub(convs[k], svc._stubs(), svc.default_stub)[0] for k in ("realtime", "nextjs-cache", "zod-form", "link-zustand")]
+          == ["AND-RT", "AND-CACHE", "AND-ZOD", "AND-ZUSTAND"])
+    r = c.post("/capture", json={"conversation": convs["link-zustand"]}).json()
+    check("andbread capture: zustand → linked 0001", r["outcome"] == "linked" and r["link_candidates"] == ["0001"], r)
+    r = c.post("/capture", json={"conversation": "회의 메모: 점심 뭐 먹지"}).json()
+    check("andbread capture: 대본 없음 → 기본 대본 + 표시", r["outcome"] == "awaiting" and "Supabase Realtime" in r["message"], r)
+
+    # 승인 — 코어 경로로 andbread ADR이 쓰인다
+    r = c.post(f"/inbox/{items[0]['id']}/approve", json={}).json()
+    check("andbread: 승인 → written 0005", r["outcome"] == "written" and r["adr"] == "0005" and not r["validate_errors"], r)
+
+    # 실행 — detect: 후보 2 · 건너뜀 1(Tailwind, 0003과 겹침) · 제외 3
+    r = c.post("/runs/detect", json={}).json()
+    check("andbread detect: ok", r["ok"], r)
+    check("andbread detect: 소식 6 → 후보 2·건너뜀 1·제외 3", r["summary"][0] == "소식 6건 → 후보 2건 · 이미 있는 결정이라 건너뜀 1건 · 제외 3건", r["summary"])
+    check("andbread detect: 초안 2건 validate 통과", len(r["drafts"]) == 2 and not any(d["validate_errors"] for d in r["drafts"]), r["drafts"])
+    ds2 = {d["id"]: d for d in c.get("/decisions").json()["items"]}
+    check("andbread detect: 초안은 proposed, 기존 ADR 불변", all(ds2[d["adr"]]["status"] == "proposed" for d in r["drafts"]) and
+          all(ds2[k["id"]]["status"] == k["status"] for k in ds if k["id"] in ds2))
+    # 실행 — revisit: 0003 c1 충족 알림
+    r = c.post("/runs/revisit", json={}).json()
+    check("andbread revisit: ok", r["ok"], r)
+    check("andbread revisit: 0003 c1 충족 알림", [(a["adr"], a["condition"], a["result"]) for a in r["alerts"]] == [("0003", "c1", "met")], r["alerts"])
+    check("andbread revisit: 알림 문구가 조건", "Tailwind v4" in r["alerts"][0]["message"], r["alerts"])
+    d3 = c.get("/decisions/0003").json()
+    check("andbread revisit: 0003 c1 최근 결과 met", next(x for x in d3["revisit"] if x["id"] == "c1")["last"]["result"] == "met")
+    check("andbread revisit: 출처를 읽음 (fetch_failed 없음)", not any(str((x["last"] or {}).get("reason", "")).startswith("fetch_failed") for d in c.get("/decisions").json()["items"] for x in d["revisit"]))
+
+    # default는 그대로 — 다른 폴더, 코어 대본, 5개 ADR, 프로필 대본이 새지 않는다
+    d2 = os.path.join(os.path.dirname(data), "data-default-after")
+    devdata.seed(d2)
+    s2 = RadarService(d2)
+    check("default: 프로필 default · 코어 대본", s2.profile == "default" and s2.pscript is None and s2.default_stub == service.DEFAULT_STUB)
+    check("default: ADR 번호 0001~0005", [d["id"] for d in s2.decisions()] == ["0001", "0002", "0003", "0004", "0005"])
+    check("default: 대기 3건·표시 파일 없음", len(s2.inbox()) == 3 and not os.path.exists(os.path.join(d2, devprofiles.MARKER)))
+    check("default: pick_stub 인자 없이 그대로", service.pick_stub("오늘 점심 뭐 먹지") == (service.DEFAULT_STUB, False))
+    try:
+        RadarService(d2, profile="andbread")
+        check("프로필 섞임 거부 (default 폴더에 andbread)", False)
+    except ServiceError:
+        check("프로필 섞임 거부 (default 폴더에 andbread)", True)
+    check("프로필 대본이 코어 SCRIPT에 섞이지 않음", not any(k.startswith("AND-") for k in service.stub_scripts.SCRIPT["capture"]))
+    # 서버 기동 경로의 선택 — 프로필은 인자 > RADAR_DEVDATA, 폴더는 RADAR_APP_DATA > --data-dir > 프로필 기본 폴더
+    t = server.resolve_target
+    check("선택: 아무것도 없으면 default·.dev-data", t(None, None, {}) == ("default", devprofiles.data_dir_for("default")))
+    check("선택: RADAR_DEVDATA=andbread → .dev-data-andbread", t(None, None, {"RADAR_DEVDATA": "andbread"}) == ("andbread", d_ab))
+    check("선택: RADAR_DEVDATA=default → default", t(None, None, {"RADAR_DEVDATA": "default"}) == ("default", d_default))
+    check("선택: --profile이 환경변수보다 먼저", t("default", None, {"RADAR_DEVDATA": "andbread"})[0] == "default")
+    check("선택: --data-dir이 프로필 폴더보다 먼저", t(None, "X", {"RADAR_DEVDATA": "andbread"}) == ("andbread", "X"))
+    check("선택: RADAR_APP_DATA가 가장 먼저", t(None, "X", {"RADAR_DEVDATA": "andbread", "RADAR_APP_DATA": "Y"}) == ("andbread", "Y"))
+    try:
+        t(None, None, {"RADAR_DEVDATA": "nope"})
+        check("선택: 모르는 프로필 거부", False)
+    except ValueError:
+        check("선택: 모르는 프로필 거부", True)
 
 
 if __name__ == "__main__":

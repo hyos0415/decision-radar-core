@@ -1,0 +1,67 @@
+[
+ {
+  "id": "A01",
+  "title": "[예시] next 15.6.0 released",
+  "kind": "dependency_release",
+  "package": "next",
+  "from_version": "15.5.18",
+  "version": "15.6.0",
+  "summary": "Caching change. BREAKING: fetch requests in Server Components are no longer cached by default when `cookies()` or `headers()` is read in the same route.",
+  "url": "example.invalid/nextjs/releases/v15.6.0",
+  "source_type": "release_note"
+ },
+ {
+  "id": "A02",
+  "title": "[예시] @sentry/nextjs 11.0.0 (major)",
+  "kind": "dependency_release",
+  "package": "@sentry/nextjs",
+  "from_version": "10.53.1",
+  "version": "11.0.0",
+  "summary": "BREAKING: configuration is now read only from `instrumentation-client.ts`; `sentry.client.config.ts` is removed. Known limitation: Turbopack production builds are not supported yet.",
+  "url": "example.invalid/sentry/releases/nextjs-11.0.0",
+  "source_type": "release_note"
+ },
+ {
+  "id": "A03",
+  "title": "[예시] tailwindcss 4.2.0",
+  "kind": "dependency_release",
+  "package": "tailwindcss",
+  "from_version": "4.1.0",
+  "version": "4.2.0",
+  "summary": "Faster incremental builds and CSS-first configuration improvements.",
+  "url": "example.invalid/tailwindcss/releases/v4.2.0",
+  "source_type": "release_note"
+ },
+ {
+  "id": "A04",
+  "title": "[예시] react-toastify 11.0.6",
+  "kind": "dependency_release",
+  "package": "react-toastify",
+  "from_version": "11.0.5",
+  "version": "11.0.6",
+  "summary": "Bugfix: fix progress bar flicker when the toast is paused on hover.",
+  "url": "example.invalid/react-toastify/releases/11.0.6",
+  "source_type": "release_note"
+ },
+ {
+  "id": "A05",
+  "title": "[예시] zustand 5.0.4",
+  "kind": "dependency_release",
+  "package": "zustand",
+  "from_version": "5.0.3",
+  "version": "5.0.4",
+  "summary": "Bugfix: fix devtools middleware typing for nested stores.",
+  "url": "example.invalid/zustand/releases/5.0.4",
+  "source_type": "release_note"
+ },
+ {
+  "id": "A06",
+  "title": "[예시] Vue 4.0 공개",
+  "kind": "new_release_non_dependency",
+  "package": "vue",
+  "version": "4.0.0",
+  "summary": "Vue 4.0 is out with a new reactivity core.",
+  "url": "example.invalid/vue/releases/v4.0.0",
+  "source_type": "release_note"
+ }
+]

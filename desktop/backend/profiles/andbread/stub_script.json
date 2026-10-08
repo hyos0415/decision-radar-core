@@ -1,0 +1,155 @@
+{
+  "_doc": "andbread 개발 데이터의 스텁 대본 — product/radar/stub_script.json과 별개다 (eval 스텁은 이 파일을 읽지 않는다). capture = match_adr 인자 + propose_adr 초안, detect = 소식 url별 판단표 + 초안(product/radar/stub_policy.py), revisit = '<ADR>/<조건>' 별 판정. 값은 레포 주인이 snapshots/ 와 conversations.json을 읽고 적은 것이다. 소식·출처는 전부 지어낸 것([예시] · example.invalid)이다",
+  "capture": {
+    "AND-RT": {
+      "match": {
+        "technology": "Supabase Realtime",
+        "repo": "Andbread_Frontend",
+        "component": "notifications",
+        "use": "알림 구독 상태 동기화"
+      },
+      "draft": {
+        "title": "Supabase Realtime으로 알림 구독 상태를 동기화할지",
+        "technology": "Supabase Realtime",
+        "use": "알림 구독 상태 동기화",
+        "affected": [{"repo": "Andbread_Frontend", "component": "notifications"}],
+        "evidence": [{"url": "docs.example.invalid/supabase/realtime-limits", "source_type": "official_doc"}],
+        "context": "친구 요청·채팅 알림 구독 상태를 여러 기기에서 맞춰야 한다. 구독 설정을 이미 Supabase 테이블에 두고 있어 Realtime 채널로 같은 데이터를 구독할 수 있다. Firebase로 옮기면 구독 상태의 원본이 두 곳이 된다. Realtime은 요금제별 동시 연결 한도가 있다.",
+        "decision": "제안 — 구독 상태 동기화는 Supabase Realtime으로 검토한다(FCM은 토큰 저장·발송에만 둔다). 채택 여부는 사람이 정한다.",
+        "related": ["0002", "0004"],
+        "research_note": [],
+        "revisit_when": [
+          {
+            "id": "c1",
+            "check_type": "web",
+            "condition": "Supabase Realtime 동시 연결 한도가 현재 요금제에서 상향된다",
+            "source_hint": "docs.example.invalid/supabase/realtime-limits",
+            "threshold": null,
+            "basis": "동시 연결 한도가 현재 요금제 기준이라는 점이 결정의 근거라서"
+          }
+        ]
+      }
+    },
+    "AND-CACHE": {
+      "match": {
+        "technology": "Next.js",
+        "repo": "Andbread_Frontend",
+        "component": "web-app",
+        "use": "App Router 데이터 캐싱 전략"
+      },
+      "draft": {
+        "title": "App Router에서 사용자별 화면은 캐시하지 않고 랜딩만 정적으로 둘지",
+        "technology": "Next.js",
+        "use": "App Router 데이터 캐싱 전략",
+        "affected": [{"repo": "Andbread_Frontend", "component": "web-app"}],
+        "evidence": [{"url": "docs.example.invalid/nextjs/caching", "source_type": "official_doc"}],
+        "context": "App Router의 서버 컴포넌트 fetch는 기본으로 캐시된다. 엔빵 화면은 로그인한 사용자별 데이터(친구 목록·엔빵 상세)가 대부분이라 공유 캐시에 올리면 안 되고, 로그인 전 랜딩 페이지만 정적 캐시 대상이다.",
+        "decision": "제안 — 랜딩은 정적, 나머지는 클라이언트에서 Supabase를 조회하는 현재 구조를 유지한다. 채택 여부는 사람이 정한다.",
+        "related": [],
+        "research_note": [
+          "재검토 조건 없음: 사용자별 화면은 구조상 캐시 대상이 아니라는 판단이라 바뀔 외부 사건이 대화에 적히지 않았다"
+        ],
+        "revisit_when": []
+      }
+    },
+    "AND-ZOD": {
+      "match": {
+        "technology": "zod",
+        "repo": "Andbread_Frontend",
+        "component": "web-app",
+        "use": "폼 입력 검증"
+      },
+      "draft": {
+        "title": "react-hook-form 검증을 zod 스키마로 모을지",
+        "technology": "zod",
+        "use": "폼 입력 검증",
+        "affected": [{"repo": "Andbread_Frontend", "component": "web-app"}],
+        "evidence": [{"url": "docs.example.invalid/zod/intro", "source_type": "official_doc"}],
+        "context": "모임 만들기 폼의 검증 규칙이 컴포넌트마다 흩어져 있다. zod는 스키마 하나에서 타입과 검증을 함께 얻고 react-hook-form에는 resolver로 연결된다. 의존성이 하나 늘고, Edge Function(Deno)에서 같은 스키마를 못 쓰면 이득이 반쪽이다.",
+        "decision": "제안 — 폼 몇 개에 먼저 적용해 보고 검증 규칙 중복이 줄었는지 본다. 채택 여부는 사람이 정한다.",
+        "related": [],
+        "research_note": [
+          "재검토 조건 없음: 대화의 판단은 시험 적용 뒤 확인이라 바뀔 외부 사건이 없다"
+        ],
+        "revisit_when": []
+      }
+    },
+    "AND-ZUSTAND": {
+      "link": true,
+      "match": {
+        "technology": "zustand",
+        "repo": "Andbread_Frontend",
+        "component": "web-app",
+        "use": "클라이언트 상태 관리"
+      },
+      "draft": null
+    }
+  },
+  "detect": {
+    "items": {
+      "example.invalid/nextjs/releases/v15.6.0": {
+        "verdict": "candidate",
+        "technology": "Next.js",
+        "dependency": true,
+        "affected": [{"repo": "Andbread_Frontend", "component": "web-app"}]
+      },
+      "example.invalid/sentry/releases/nextjs-11.0.0": {
+        "verdict": "candidate",
+        "technology": "@sentry/nextjs",
+        "dependency": true,
+        "affected": [{"repo": "Andbread_Frontend", "component": "web-app"}]
+      },
+      "example.invalid/tailwindcss/releases/v4.2.0": {
+        "verdict": "candidate",
+        "technology": "Tailwind CSS",
+        "dependency": true,
+        "affected": [{"repo": "Andbread_Frontend", "component": "web-app"}]
+      },
+      "example.invalid/react-toastify/releases/11.0.6": {
+        "verdict": "exclude",
+        "reason": "routine patch (bugfix) — A5b"
+      },
+      "example.invalid/zustand/releases/5.0.4": {
+        "verdict": "exclude",
+        "reason": "routine patch (bugfix) — A5b"
+      },
+      "example.invalid/vue/releases/v4.0.0": {
+        "verdict": "exclude",
+        "reason": "스택에 없는 기술의 릴리스"
+      }
+    },
+    "drafts": {
+      "example.invalid/nextjs/releases/v15.6.0": {
+        "title": "Next.js 15.6 fetch 캐시 기본값 변경 대응",
+        "use": "web-app Next.js 업그레이드 대응",
+        "evidence": [{"url": "example.invalid/nextjs/releases/v15.6.0", "source_type": "release_note"}],
+        "context": "Next.js 15.6에서 같은 라우트가 `cookies()`나 `headers()`를 읽으면 서버 컴포넌트 fetch가 더는 기본으로 캐시되지 않는다(BREAKING). Andbread_Frontend의 web-app이 App Router를 쓴다.",
+        "decision": "제안 — 업그레이드 전에 서버 컴포넌트 fetch 위치를 점검하고 올릴지 정한다. 채택 여부는 사람이 정한다.",
+        "research_note": ["재검토 조건 없음: 대응 작업"],
+        "revisit_when": []
+      },
+      "example.invalid/sentry/releases/nextjs-11.0.0": {
+        "title": "@sentry/nextjs 11 메이저 업그레이드(설정 파일 이동) 대응",
+        "use": "web-app 오류 모니터링 SDK 업그레이드",
+        "evidence": [{"url": "example.invalid/sentry/releases/nextjs-11.0.0", "source_type": "release_note"}],
+        "context": "@sentry/nextjs 11은 설정을 `instrumentation-client.ts`로만 받고 `sentry.client.config.ts`를 없앴다(BREAKING). 현재 web-app은 `src/sentry.*.config.ts` 파일들을 쓴다. Turbopack 프로덕션 빌드는 아직 지원하지 않는다.",
+        "decision": "제안 — 설정 파일 이동 작업량을 보고 11로 올릴 시점을 정한다. 채택 여부는 사람이 정한다.",
+        "research_note": [],
+        "revisit_when": [
+          {
+            "id": "c1",
+            "check_type": "web",
+            "condition": "Turbopack 프로덕션 빌드를 지원한다",
+            "source_hint": "example.invalid/sentry/releases/nextjs-11.0.0",
+            "threshold": null,
+            "basis": "Known limitation: Turbopack production builds are not supported yet."
+          }
+        ]
+      }
+    },
+    "repairs": {}
+  },
+  "revisit": {
+    "0003/c1": {"result": "met"}
+  }
+}

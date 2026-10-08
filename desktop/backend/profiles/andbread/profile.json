@@ -1,0 +1,7 @@
+{
+  "_doc": "andbread 개발 데이터 프로필 — 프론트엔드 담당(Andbread_Frontend)이 자기 스택으로 앱을 보게 한다. 전부 예시다(실제 팀 문서·결정·소식이 아님). seed = [스텁 대본, conversations.json의 키, 며칠 전부터 대기]",
+  "name": "andbread",
+  "default_capture": "AND-RT",
+  "seed": [["AND-RT", "realtime", 6], ["AND-CACHE", "nextjs-cache", 3], ["AND-ZOD", "zod-form", 0]],
+  "repos": ["Andbread_Frontend"]
+}
