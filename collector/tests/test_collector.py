@@ -183,6 +183,7 @@ def test_github_dependencies_from_package_json():
         _write_pkg(root / "desktop" / "node_modules" / "left-pad", {"dependencies": {"left-pad": "1"}})
         _write_pkg(root / "web" / "dist", {"dependencies": {"built": "1"}})
         _write_pkg(root / "tools", {"dependencies": {"zod": "3"}})
+        _write_pkg(root / ".claude" / "worktrees" / "agent-x" / "desktop", {"dependencies": {"other-branch-only": "1"}})  # 다른 브랜치 사본
         names = github.dependencies_from_package_json(root)
         assert sorted(names) == ["@radix-ui/react-dialog", "electron", "react", "zod"], names
         assert names == github.dependencies_from_package_json(root)          # 순서가 안정적

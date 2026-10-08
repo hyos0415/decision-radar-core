@@ -36,6 +36,9 @@ github:
     # PyPI로 찾으면 Python 클라이언트 repo가 나온다 — 우리가 띄우는 건 서버다 (infra/)
     elasticsearch: elastic/elasticsearch
     neo4j: neo4j/neo4j
+    # npm registry가 옛 이름(facebook/react)을 준다 — GitHub에서 react/react로 바뀌었고, 항목 id가 repo 문자열이라
+    # 그대로 두면 같은 릴리스가 react 쪽과 두 번 들어온다 (2026-10-08 확인: API가 둘 다 full_name react/react)
+    eslint-plugin-react-hooks: react/react
 
 huggingface:
   trending_limit: 100

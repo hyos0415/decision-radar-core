@@ -109,7 +109,8 @@ def dependencies_from_claude_md(text, skipped=None):
     return names
 
 
-_SKIP_DIRS = {"node_modules", ".git", "out", "dist", ".venv"}
+# .claude: worktrees/ 아래 다른 브랜치 사본이 있다 — main에 없는 의존성이 섞인다 · eval/runs 같은 실행 산출물도 대상이 아니다
+_SKIP_DIRS = {"node_modules", ".git", "out", "dist", ".venv", "venv", ".claude"}
 
 
 def dependencies_from_package_json(root):
