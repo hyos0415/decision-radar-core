@@ -45,6 +45,33 @@ class Exporter:
         return False
 
 
+class LocalExporter(Exporter):
+    """승인 기록만 남기고 git은 부르지 않는다 (HYO-85 — 데스크톱 앱의 ADR 사본). `RADAR_EXPORT=local`.
+
+    detect 초안을 Inbox에서 승인·거부할 수 있게 하는 자리다: 「내보냄」= 별도 파일에 승인이 적히고 파일이 사본에 남는 것.
+    밖으로 나가는 것이 없으므로 dry-run과 같이 켜진다. 재개 검사(check — 지문 비교)와 경로 허용 목록은 git 쪽과 똑같이 돈다."""
+    active = True
+
+    def __init__(self, root):
+        self.root = os.path.abspath(root)
+
+    def sync(self):
+        return {"state": "ok", "advanced": 0}
+
+    def publish(self, paths, message, *, check=None, before=None, undo=None):
+        paths = list(paths)
+        bad = [p for p in paths if not path_allowed(p)]
+        if bad:  # MUT:local_allowlist
+            return {"state": "blocked", "reason": "refused", "detail": f"허용 목록 밖의 경로: {bad}"}
+        if check is not None:  # MUT:local_recheck — 대기 중 세상이 바뀌었으면 git 쪽과 같이 멈추고 사람에게 묻는다
+            r = check()
+            if r:
+                return r
+        if before is not None:
+            before()
+        return {"state": "exported", "commit": None, "local": True, "attempts": 1, "paths": paths}
+
+
 class GitExporter(Exporter):
     """ADR repo 작업 사본(root)에서 main으로 내보낸다. 경로는 root 기준 상대 경로(/)다."""
     active = True

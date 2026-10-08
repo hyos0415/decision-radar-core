@@ -14,7 +14,6 @@ import asyncio
 import datetime as dt
 import json
 import os
-import shutil
 import sys
 
 # 스크립트 폴더(product/radar)를 경로에서 빼고 product/를 넣는다 (resume.py와 같다)
@@ -23,22 +22,11 @@ REPO = os.path.dirname(sys.path[0])
 sys.path.insert(1, REPO)
 
 from radar import runtime  # noqa: E402
+from radar.adr_copy import copy_adr  # noqa: E402
 from radar import script as stub_scripts  # noqa: E402
 from common.core import SKILL_RADAR, Ctx  # noqa: E402
 from common.eval_adapter import ANTHROPIC  # noqa: E402
 from common.guard import NetGuard  # noqa: E402
-
-
-def copy_adr(src, dst):
-    """ADR repo 사본 — docs/adr와 radar-targets.json만. 대상 repo 경로는 원본 위치 기준으로 풀어 절대 경로로 적는다."""
-    src = os.path.abspath(src)
-    shutil.copytree(os.path.join(src, "docs", "adr"), os.path.join(dst, "docs", "adr"))
-    targets = json.load(open(os.path.join(src, "radar-targets.json"), encoding="utf-8"))
-    for t in targets:
-        t["path"] = os.path.abspath(os.path.join(src, t["path"]))
-    with open(os.path.join(dst, "radar-targets.json"), "w", encoding="utf-8", newline="\n") as f:
-        json.dump(targets, f, ensure_ascii=False, indent=1)
-    return os.path.join(dst, "docs", "adr"), os.path.join(dst, "radar-targets.json")
 
 
 def summarize(rep, funnel, adr_dir):

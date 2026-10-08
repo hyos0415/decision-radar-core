@@ -38,9 +38,11 @@ def due(flow, now, runs):
     return True
 
 
-def describe(now, runs, enabled):
+def describe(now, runs, enabled, only=None):
     flows = []
     for flow, (wd, h, m) in SLOTS.items():
+        if only is not None and flow not in only:  # 데모 모드는 detect만 (service.flows)
+            continue
         ls = last_slot(flow, now)
         last = next((r["at"] for r in runs if r.get("flow") == flow), None)
         flows.append({"flow": flow, "slot": f"매주 {DAY[wd]} {h:02d}:{m:02d}", "last_slot": ls.isoformat(timespec="minutes"),
@@ -64,7 +66,7 @@ class Scheduler:
         now = now or dt.datetime.now().astimezone()
         done = []
         for flow in SLOTS:
-            if due(flow, now, self.svc.runs()):
+            if flow in getattr(self.svc, "flows", SLOTS) and due(flow, now, self.svc.runs()):
                 self.svc.run(flow, trigger="schedule")
                 done.append(flow)
         return done

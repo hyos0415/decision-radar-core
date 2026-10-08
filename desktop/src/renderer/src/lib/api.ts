@@ -40,6 +40,8 @@ export type InboxItem = {
   waiting_days: number
   state: ItemState
   actions: Action[]
+  /** detect만: 이 소식이 왜 왔나 — 관문 판정 (예 `anthropic L5 × deprecation`). 관문 없이 만든 입력이면 null */
+  why: string | null
 }
 
 export type InboxDetail = InboxItem & {
@@ -47,6 +49,8 @@ export type InboxDetail = InboxItem & {
   markdown: string
   changes: string[]
   number_note: string
+  /** 답할 수 없을 때만 (actions가 빈 목록) */
+  note?: string
 }
 
 export type Outcome =
@@ -68,6 +72,7 @@ export type ActionResult = {
   changes?: string[]
   answers?: StaleAnswer[]
   errors?: string[]
+  validate_errors?: string[]
 }
 
 export const SUCCESS_OUTCOMES: Outcome[] = [
@@ -124,6 +129,42 @@ export type RunResult = {
   summary: string[]
   drafts: { adr: string; title: string; technology?: string }[]
   alerts: { adr: string; condition: string; result: string; message: string }[]
+  /** 데모 모드(실제 모델)만 */
+  usage?: { model_calls: number; input_tokens: number; output_tokens: number }
+}
+
+export type Mode = 'stub' | 'demo'
+export type Health = {
+  ok: boolean
+  mode: Mode
+  profile: string
+  model: string
+  /** 이 모드에서 돌릴 수 있는 흐름 — 데모는 ['detect'] */
+  flows: Flow[]
+  data_dir: string
+  adr_dir: string
+  /** 데모 모드만: ADR 사본 · detect 입력 · 깔때기 건수 한 줄 */
+  demo?: { adr_source: string; adr_copy: string; snapshot: string; funnel: string | null }
+}
+
+/** 작업 + 폴링 (HYO-85) — 접수하면 바로 돌아온다. 끝나면 Inbox를 다시 읽고 알림을 띄운다 */
+export type JobKind = 'capture' | 'detect' | 'revisit'
+export type JobState = 'queued' | 'running' | 'done' | 'error'
+export type Job = {
+  id: string
+  kind: JobKind
+  state: JobState
+  created: string
+  started: string | null
+  finished: string | null
+  /** 한 줄 — 상태 창에 그대로 */
+  message: string
+  /** capture → CaptureResult, detect·revisit → RunResult (끝났을 때만) */
+  result: CaptureResult | RunResult | null
+  error: string | null
+  /** capture가 만든 Inbox 항목 (알림을 누르면 여기로) */
+  item: string | null
+  mode: Mode
 }
 
 export type EventName = 'item_opened' | 'app_opened' | 'decision_opened' | 'capture_opened'
@@ -156,7 +197,7 @@ async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown):
 const enc = encodeURIComponent
 
 export const api = {
-  health: () => request<{ ok: boolean; mode: string; profile: string }>('GET', '/health'),
+  health: () => request<Health>('GET', '/health'),
   inbox: () => request<{ items: InboxItem[] }>('GET', '/inbox').then((r) => r.items),
   detail: (id: string) => request<InboxDetail>('GET', `/inbox/${enc(id)}`),
   approve: (id: string, stale_answer: StaleAnswer | null = null) =>
@@ -171,5 +212,13 @@ export const api = {
   decisions: () => request<{ items: Decision[] }>('GET', '/decisions').then((r) => r.items),
   decision: (id: string) => request<DecisionDetail>('GET', `/decisions/${enc(id)}`),
   runs: () => request<{ items: RunResult[] }>('GET', '/runs').then((r) => r.items),
-  run: (flow: Flow) => request<RunResult>('POST', `/runs/${flow}`, {})
+  run: (flow: Flow) => request<RunResult>('POST', `/runs/${flow}`, {}),
+  submitJob: (kind: JobKind, conversation?: string) =>
+    request<{ job: Job }>(
+      'POST',
+      `/jobs/${kind}`,
+      conversation === undefined ? {} : { conversation }
+    ).then((r) => r.job),
+  jobs: () => request<{ items: Job[] }>('GET', '/jobs').then((r) => r.items),
+  job: (id: string) => request<Job>('GET', `/jobs/${enc(id)}`)
 }

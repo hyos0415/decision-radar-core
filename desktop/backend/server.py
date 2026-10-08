@@ -3,6 +3,8 @@
   <레포 .venv python> desktop/backend/server.py --port P [--data-dir D] [--profile NAME]
 
 개발 데이터 프로필은 `--profile` 또는 `RADAR_DEVDATA` (비우면 default) — 데이터 폴더는 `RADAR_APP_DATA` > `--data-dir` > 프로필의 기본 폴더 순.
+데모 모드(HYO-85): `RADAR_APP_DEMO=1` + `RADAR_APP_MODEL=anthropic` + `RADAR_DEMO_SNAPSHOT=<detect 입력 폴더>` [`RADAR_DEMO_ADR=../adr`].
+  데이터 폴더 기본은 `desktop/.dev-data-demo` — 개발 데이터(스텁 픽스처)를 만들지 않고 ADR repo 사본을 만든다. 실제 모델(과금)이다.
 
 API 모양: desktop/README.md 「백엔드 API」. 엔드포인트는 전부 동기 함수다 — 코어(capture)가 안에서 asyncio.run을 쓰고,
 FastAPI가 동기 함수를 스레드 풀에서 돌리므로 이벤트 루프가 겹치지 않는다. 쓰기는 RadarService의 lock 하나로 줄 세운다.
@@ -22,13 +24,17 @@ from fastapi.responses import JSONResponse  # noqa: E402
 import devdata  # noqa: E402
 import devprofiles  # noqa: E402
 import scheduling  # noqa: E402
+from jobs import Jobs  # noqa: E402
 from service import REPO, RadarService, ServiceError  # noqa: E402
 
 DEFAULT_DATA = devprofiles.data_dir_for(devprofiles.DEFAULT)
+DEMO_DATA = os.path.join(os.path.dirname(HERE), ".dev-data-demo")
 
 
-def create_app(svc: RadarService, scheduler_on: bool = False) -> FastAPI:
+def create_app(svc: RadarService, scheduler_on: bool = False, jobs: Jobs = None) -> FastAPI:
     app = FastAPI(title="Decision Radar backend", docs_url=None, redoc_url=None)
+    jobs = jobs or Jobs(svc)
+    app.state.jobs = jobs
     # 화면(개발 서버 localhost:5173 등)과 포트가 달라 교차 출처다. localhost 출처만 허용한다 — 아무 웹 페이지나 승인 API를 부르지 못하게
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"^http://(localhost|127\.0\.0\.1)(:\d+)?$",
                        allow_methods=["GET", "POST"], allow_headers=["content-type"])
@@ -39,7 +45,7 @@ def create_app(svc: RadarService, scheduler_on: bool = False) -> FastAPI:
 
     @app.get("/health")
     def health():
-        return {"ok": True, "mode": svc.mode, "profile": svc.profile, "data_dir": svc.data_dir, "adr_dir": svc.adr_dir}
+        return svc.health()
 
     @app.get("/inbox")
     def inbox():
@@ -81,10 +87,23 @@ def create_app(svc: RadarService, scheduler_on: bool = False) -> FastAPI:
     def runs():
         return {"items": svc.runs()}
 
+    # 작업 + 폴링 (HYO-85) — 접수만 하고 바로 돌려준다. 상태는 GET으로 (jobs.py 머리말)
+    @app.post("/jobs/{kind}", status_code=202)
+    def submit_job(kind: str, body: dict = Body(default={})):
+        return {"job": jobs.submit(kind, body)}
+
+    @app.get("/jobs")
+    def list_jobs():
+        return {"items": jobs.list()}
+
+    @app.get("/jobs/{job_id}")
+    def get_job(job_id: str):
+        return jobs.get(job_id)
+
     @app.get("/schedule")
     def schedule_info():
         import datetime as dt
-        return scheduling.describe(dt.datetime.now().astimezone(), svc.runs(), scheduler_on)
+        return scheduling.describe(dt.datetime.now().astimezone(), svc.runs(), scheduler_on, svc.flows)
 
     @app.post("/events")
     def events(body: dict = Body(...)):
@@ -110,14 +129,28 @@ def main(argv=None):
     ap.add_argument("--data-dir", default=None)
     ap.add_argument("--profile", default=None)
     a = ap.parse_args(argv)
-    try:
-        profile, a.data_dir = resolve_target(a.profile, a.data_dir)
-    except ValueError as e:
-        sys.exit(str(e))
     if a.host not in ("127.0.0.1", "localhost"):
         sys.exit("localhost에서만 띄운다")
     for s in (sys.stdout, sys.stderr):
         s.reconfigure(encoding="utf-8")
+    if os.environ.get("RADAR_APP_DEMO") == "1":  # 데모 모드 — 개발 데이터를 만들지 않는다. 사본·검사는 RadarService가 한다
+        # --data-dir은 보지 않는다 — Electron이 늘 스텁 개발 데이터 폴더를 넘긴다. 데모는 따로(RADAR_APP_DATA > .dev-data-demo)
+        data_dir = os.environ.get("RADAR_APP_DATA") or DEMO_DATA
+        if devdata.is_seeded(data_dir):
+            sys.exit(f"데모 모드: {data_dir}는 스텁 개발 데이터 폴더다 — 섞이지 않게 다른 폴더(RADAR_APP_DATA)를 쓴다")
+        try:
+            svc = RadarService(data_dir)
+        except ServiceError as e:
+            sys.exit(e.message)
+        h = svc.health()
+        print(f"데모 모드 — 실제 모델 {h['model']} (과금) · ADR 사본 {h['demo']['adr_copy']} · detect 입력 {h['demo']['snapshot']}", flush=True)
+        if h["demo"]["funnel"]:
+            print(f"  {h['demo']['funnel']}", flush=True)
+        return serve(svc, a)
+    try:
+        profile, a.data_dir = resolve_target(a.profile, a.data_dir)
+    except ValueError as e:
+        sys.exit(str(e))
     if not devdata.is_seeded(a.data_dir):
         print(f"개발 데이터를 만든다: {a.data_dir} (프로필 {profile})", flush=True)
         print(devdata.seed(a.data_dir, profile), flush=True)
@@ -127,10 +160,15 @@ def main(argv=None):
         svc = RadarService(a.data_dir, profile=profile)  # 폴더를 만든 프로필과 다르면 거부한다
     except ServiceError as e:
         sys.exit(e.message)
+    serve(svc, a)
+
+
+def serve(svc, a):
     scheduler_on = os.environ.get("RADAR_SCHEDULE") == "on"  # 기본 꺼짐 — scheduling.py 머리말
     if scheduler_on:
         scheduling.Scheduler(svc).start()
-        print("정기 실행 켜짐 (revisit 월 09:00 · detect 화 10:00, 지난 칸은 따라잡는다)", flush=True)
+        print(f"정기 실행 켜짐 ({', '.join(f['slot'] + ' ' + f['flow'] for f in scheduling.describe(scheduling.dt.datetime.now().astimezone(), [], True, svc.flows)['flows'])}"
+              ", 지난 칸은 따라잡는다)", flush=True)
     import uvicorn
     uvicorn.run(create_app(svc, scheduler_on), host=a.host, port=a.port, log_level="warning")
 

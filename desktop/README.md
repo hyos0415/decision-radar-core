@@ -39,9 +39,9 @@ npm run dev          # Electron 창 + 트레이 + 백엔드 자동 기동. 처�
 
 | 무엇 | 어떻게 |
 |---|---|
-| 실제 모델(과금) | 스텁만. `RADAR_APP_MODEL`이 stub이 아니면 백엔드가 시작을 거부한다 — 실제 경로는 호출 수·비용을 말하고 승인받은 뒤 연다 |
-| 내보내기(git push) | 백엔드가 `RADAR_EXPORT`를 물려받지 않고 `RADAR_DRY_RUN=1`을 강제한다 — `hitl.exporter_for`가 둘 중 하나만으로도 no-op. Electron main도 자식 환경에서 `RADAR_EXPORT`를 지운다 |
-| 쓰는 곳 | 개발 데이터 폴더의 ADR 사본뿐. 실제 ADR repo는 건드리지 않는다 |
+| 실제 모델(과금) | 기본은 스텁. **데모 모드**(아래)에서만 — `RADAR_APP_MODEL=anthropic`과 `RADAR_APP_DEMO=1`을 같이 줘야 하고, 하나만 있으면 시작을 거부한다 |
+| 내보내기(git push) | 없다. 백엔드가 물려받은 `RADAR_EXPORT`를 지우고 **로컬 내보내기**(`RADAR_EXPORT=local` — git을 부르지 않고 승인 기록만, `export.LocalExporter`) + `RADAR_DRY_RUN=1`로 띄운다. Electron main도 자식 환경에서 `RADAR_EXPORT`를 지운다 |
+| 쓰는 곳 | 데이터 폴더의 ADR 사본뿐(스텁: `adr-fixture`, 데모: `adr` = 실제 ADR repo의 복사본). 실제 ADR repo는 읽기만 한다 |
 | 키 | 백엔드만 `.env`를 읽는다(스텁 모드는 읽지도 않는다). main·화면에는 넘기지 않는다 |
 | status | 화면에 status 칸이 없다. edit에 status·번호 칸이 오면 코어(`hitl.check_edit`)가 거부한다 (R8) |
 
@@ -49,20 +49,38 @@ npm run dev          # Electron 창 + 트레이 + 백엔드 자동 기동. 처�
 
 | | 무엇 | 감싸는 코어 |
 |---|---|---|
-| `GET /health` | `{ok, mode, profile, data_dir, adr_dir}` — `profile`은 개발 데이터 프로필(`default` · `andbread`) | — |
-| `GET /inbox` | 대기 항목 — capture(승인 대기 thread) + 검토 대기 별도 파일. 오래된 순, `waiting_days`·`state`(awaiting_approval · stale · review …)·`actions` | `StateStore.threads` + checkpoint `get_state` · `hitl.review_queue` |
-| `GET /inbox/{id}` | + `draft` · `markdown`(저장될 ADR 미리보기) · `changes`(대기 중 바뀐 점) | `ops.render` · 지문 `compute`·`same`·`diff` (읽기만) |
-| `POST /inbox/{id}/approve` `{stale_answer?}` | → `{outcome, message, adr?, path?, changes?, answers?, errors?}` | `capture_turn2(approve)` |
-| `POST /inbox/{id}/edit` `{draft, stale_answer?}` | 고친 초안. 검사 실패면 `edit_errors` — 쓰지 않는다 | `capture_turn2(edit)` → `hitl.check_edit` |
-| `POST /inbox/{id}/reject` | | `capture_turn2(reject)` |
-| `POST /capture` `{conversation}` | 빠른 capture → `awaiting`(Inbox에 승인 대기) · `linked`(같은 결정이 이미 있음, `link_candidates`) · `no_draft` | `capture_turn1` (R9: 쓰기 0) |
+| `GET /health` | `{ok, mode(stub · demo), profile, model, flows, data_dir, adr_dir, demo?}` — `profile`은 개발 데이터 프로필(`default` · `andbread`), `flows`는 이 모드에서 돌릴 수 있는 흐름(데모는 `detect`만), `demo`는 `{adr_source, adr_copy, snapshot, funnel}` | — |
+| `GET /inbox` | 대기 항목 — capture(승인 대기 thread) + detect 초안(검토 대기 별도 파일). 오래된 순, `waiting_days`·`state`(awaiting_approval · stale · review …)·`actions`·`why`(detect만: 관문 판정 「왜 왔나」, 예 `anthropic L5 × deprecation` — 관문 없이 만든 입력이면 null) | `StateStore.threads` + checkpoint `get_state` · `hitl.review_queue` · `gate.json` |
+| `GET /inbox/{id}` | + `draft`(detect는 초안 파일을 읽어 편집용으로) · `markdown`(저장될 ADR 미리보기) · `changes`(대기 중 바뀐 점) | `ops.render` · 지문 `compute`·`same`·`diff` (읽기만) |
+| `POST /inbox/{id}/approve` `{stale_answer?}` | → `{outcome, message, adr?, path?, changes?, answers?, errors?, validate_errors?}` | capture `capture_turn2(approve)` · detect `hitl.review_item(approve)` |
+| `POST /inbox/{id}/edit` `{draft, stale_answer?}` | 고친 초안. 검사 실패면 `edit_errors` — 쓰지 않는다 | capture `capture_turn2(edit)` · detect `check_edit` → `rewrite_adr`(같은 번호) → `review_item` |
+| `POST /inbox/{id}/reject` | detect는 초안 파일을 지우고 닫는다 | capture `capture_turn2(reject)` · detect `hitl.review_item(reject)` |
+| `POST /jobs/{capture\|detect\|revisit}` `{conversation?}` | **작업 + 폴링** (HYO-85) — 202 `{job}`으로 바로 돌아온다. 입력 오류는 4xx(작업이 되지 않음). 일꾼 하나가 접수 순서대로 돈다 | `jobs.py` → `submit_capture` · `run` |
+| `GET /jobs` · `/jobs/{id}` | 상태 창 — `{id, kind, state(queued · running · done · error), created, started, finished, message(한 줄), result(아래 동기 엔드포인트와 같은 모양), error, item(capture가 만든 Inbox 항목), mode}`. 끝나면 화면이 Inbox를 다시 읽고 알림. 백엔드가 다시 뜨면 끝나지 않은 작업은 error(다시 돌리지 않음) | `<data>/jobs.json` |
+| `POST /capture` `{conversation}` | 빠른 capture(동기 — 작업 API로 옮기는 동안 남겨 둔다) → `awaiting`(Inbox에 승인 대기) · `linked`(같은 결정이 이미 있음, `link_candidates`) · `no_draft` | `capture_turn1` (R9: 쓰기 0) |
 | `GET /decisions` · `/decisions/{id}` | ADR 목록(번호·제목·status·technology·재검토 조건별 최근 결과·요약) · 상세(+원문). **읽기만** — status를 바꾸는 엔드포인트가 없다(R8) | `radar.py list` + 파일 제목 |
-| `POST /runs/detect` · `/runs/revisit` · `GET /runs` | 흐름을 한 번 돌리고 요약(`summary`·`drafts`·`alerts`) — `<data>/runs.jsonl` | `detect` · `revisit` 그래프 (스냅숏 모드 + dry-run) |
+| `POST /runs/detect` · `/runs/revisit` · `GET /runs` | 흐름을 한 번 돌리고(동기) 요약(`summary`·`drafts`·`alerts`, 데모는 `usage`) — `<data>/runs.jsonl`. detect 입력이 수집 스냅숏에서 왔으면(`funnel.json`) `summary` 첫 줄이 건수(수집 → 레인 A → 관문 남김 → detect 입력). 이 모드의 `flows` 밖이면 409 | `detect` · `revisit` 그래프 (스냅숏 모드 + dry-run) |
 | `GET /schedule` | 정기 실행 칸·지난 실행·차례 여부. 켜기: `RADAR_SCHEDULE=on`(기본 꺼짐) — revisit 월 09:00 · detect 화 18:00(수집 화 16:00 뒤), 앱이 꺼져 있던 동안 지난 칸은 켜질 때 한 번 따라잡는다 | `scheduling.py` |
 | `POST /events` `{event, item?, detail?}` | 화면 행동 로그 (`app_opened` · `item_opened` · `notification_shown` · `notification_clicked` · `capture_opened` · `decision_opened`) | — |
 
 `outcome`: `written` · `rejected` · `stale`(바뀐 점을 보이고 계속·다시 판정·버림을 `stale_answer`로 다시 보낸다) · `edit_errors` · `discarded` · `rejudge`(원래 대화로 capture 1턴을 다시 돌려 새 대기 항목) · `blocked` · `recovered` · `error`.
-detect 검토 항목은 목록·상세만 — 답하려면 내보내기가 켜져 있어야 한다(`hitl.review_item`). 내보내기가 꺼진 지금은 detect 초안이 Inbox가 아니라 Decisions에 `proposed`로 보인다.
+detect 초안은 Inbox에서 승인·수정·거부한다 (로컬 내보내기 — 승인은 사본에 `proposed`로 남고 별도 파일에 승인이 적힌다, git 없음). 검토 대기 초안은 아직 「세상」이 아니어서(지문이 보지 않는다) 다른 대기 항목을 낡게 하지 않는다 — 승인하면 낡게 한다.
+읽기(Inbox·상세·Decisions)는 쓰기 잠금을 기다리지 않는다 — 실제 모델 실행(분 단위) 중에도 화면이 멈추지 않는다.
+
+## 데모 모드 (HYO-85 — 실제 모델, 과금)
+
+```bash
+# 1) detect 입력 만들기 (HYO-84): 수집 스냅숏 → 관문(Sol) → radar.py 스냅숏 폴더
+python -m pipeline.profile_filter run --snapshot ../radar-snapshots/2026-W41 --gate gpt-6.1-sol --tiers tiers.json --real-api --out pipeline/out/w41
+python -m pipeline.detect_feed --run pipeline/out/w41 --out pipeline/out/w41/detect-snapshot
+# 2) 앱(또는 백엔드만) — 환경 변수 셋이 있어야 한다
+RADAR_APP_DEMO=1 RADAR_APP_MODEL=anthropic RADAR_DEMO_SNAPSHOT=pipeline/out/w41/detect-snapshot npm run dev
+```
+
+- 데이터 폴더 = `RADAR_APP_DATA` 또는 `desktop/.dev-data-demo` (`--data-dir`은 보지 않는다 — Electron이 스텁 폴더를 넘기므로). 스텁 픽스처가 든 폴더면 거부
+- 처음 뜰 때 실제 ADR repo(`RADAR_DEMO_ADR`, 기본 `../adr`)를 `<data>/adr`로 복사한다 — 그 뒤로는 사본에만 쓴다. 처음부터 다시 하려면 데이터 폴더를 지운다
+- detect만 실제 모델(Sonnet 5.5)로 돈다. revisit은 409. capture도 실제 모델이 대화를 읽는다
+- W41 실측(10/8): detect 작업 14초 · 호출 2회 · 입력 3.8만 토큰 — 약 $0.1
 
 **스텁 모드에서 무엇이 진짜인가.** 그래프·도구·`radar.py`·HITL(write-ahead·지문·edit 검사)은 코어 그대로 돈다. 가짜는 모델의 판단뿐이다 —
 capture는 대화에 나온 기술·repo로 미리 적은 대본(`product/radar/stub_script.json`)을 고르고(`service.pick_stub`, 맞는 게 없으면 기본 대본 + 표시),

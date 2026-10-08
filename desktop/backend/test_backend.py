@@ -4,10 +4,12 @@
 
 보는 것: Inbox 목록·상세 · R9(승인 전 쓰기 0) · 승인이 코어 경로로 ADR을 쓴다 · 대기 중 세상이 바뀌면 「바뀐 점」과 stale 답 ·
 edit(검사 실패는 쓰지 않음, status 칸 거부) · 거부 · 버림 · 행동 로그 · 내보내기 스위치가 새지 않는다 · 실제 모델 거부 ·
-개발 데이터 프로필(andbread — 선택·폴더 분리·시드·실행, default는 그대로).
+개발 데이터 프로필(andbread — 선택·폴더 분리·시드·실행, default는 그대로) ·
+HYO-85: 로컬 내보내기로 detect 초안 승인·수정·거부 · 「왜 왔나」 · 작업+폴링 · 데모 모드(대역 모델 — 사본에만 쓰기, 원본 무변경, 안전장치).
 """
 
 import glob
+import hashlib
 import json
 import os
 import shutil
@@ -56,14 +58,16 @@ def main():
 
         # 안전 — 내보내기·실제 모델
         env = svc.env()
-        check("RADAR_EXPORT를 물려받지 않음", "RADAR_EXPORT" not in env)
+        check("RADAR_EXPORT를 물려받지 않음 (git → 로컬)", env.get("RADAR_EXPORT") == "local")
         check("dry-run 강제", env.get("RADAR_DRY_RUN") == "1")
-        check("내보내기 no-op", not hitl.exporter_for(svc.ctx()).active)
-        try:
-            RadarService(data, model="anthropic")
-            check("실제 모델 거부", False)
-        except ServiceError:
-            check("실제 모델 거부", True)
+        check("내보내기는 로컬 (git 없음)", type(hitl.exporter_for(svc.ctx())).__name__ == "LocalExporter")
+        for kw, name in (({"model": "anthropic"}, "실제 모델 거부 (데모 플래그 없음)"), ({"demo": True}, "데모 플래그만 있으면 거부 (모델 이름 없음)"),
+                         ({"model": "gpt-6-luna", "demo": True}, "데모라도 다른 모델 거부")):
+            try:
+                RadarService(data, **kw)
+                check(name, False)
+            except ServiceError:
+                check(name, True)
 
         h = c.get("/health").json()
         check("health", h["ok"] and h["mode"] == "stub", h)
@@ -163,6 +167,7 @@ def main():
 
         scenario_m2(os.path.join(tmp, "data2"))
         scenario_profile(os.path.join(tmp, "data-andbread"))
+        scenario_hyo85(tmp)
     finally:
         os.environ.pop("RADAR_EXPORT", None)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -217,14 +222,19 @@ def scenario_m2(data):
     check("revisit: 출처를 다 읽음 (fetch_failed 없음)", not failed, failed)
     check("revisit 뒤 대기 항목은 안 낡음", c.get(f"/inbox/{pending}").json()["changes"] == [], c.get(f"/inbox/{pending}").json()["changes"])
 
-    # detect — 초안을 쓴다 → 대기 항목은 낡는다
+    # detect — 초안을 쓴다. 검토 대기 초안은 아직 세상이 아니다(승인 전) → 대기 항목은 안 낡는다. 승인하면 낡는다
     r = c.post("/runs/detect", json={}).json()
     check("detect 실행 ok + 초안", r["ok"] and r["drafts"], r)
     check("detect: 겹침(LEANN) 건너뜀이 요약에", "건너뜀 1건" in r["summary"][0], r["summary"])
     ds2 = {d["id"]: d for d in c.get("/decisions").json()["items"]}
     check("detect 초안은 proposed", all(ds2[x["adr"]]["status"] == "proposed" for x in r["drafts"]))
     check("기존 ADR status 그대로 (R8)", all(ds2[k]["status"] == v for k, v in statuses.items()))
-    check("detect 뒤 대기 항목은 바뀜", c.get(f"/inbox/{pending}").json()["changes"] != [])
+    check("detect 뒤(검토 대기) 대기 항목은 안 낡음", c.get(f"/inbox/{pending}").json()["changes"] == [])
+    rows = [i for i in c.get("/inbox").json()["items"] if i["kind"] == "detect"]
+    check("detect 초안이 Inbox에 (승인·수정·거부)", len(rows) == len(r["drafts"]) and all(i["actions"] == ["approve", "edit", "reject"] for i in rows), rows)
+    a = c.post(f"/inbox/{rows[0]['id']}/approve", json={}).json()
+    check("detect 승인 → written", a["outcome"] == "written", a)
+    check("detect 승인 뒤 대기 항목은 바뀜", c.get(f"/inbox/{pending}").json()["changes"] != [])
     check("실행: 모르는 흐름 404", c.post("/runs/rm", json={}).status_code == 404)
     runs = c.get("/runs").json()["items"]
     check("실행 기록: 최신 먼저", [x["flow"] for x in runs] == ["detect", "revisit"], [x["flow"] for x in runs])
@@ -367,6 +377,120 @@ def scenario_profile(data):
         check("선택: 모르는 프로필 거부", False)
     except ValueError:
         check("선택: 모르는 프로필 거부", True)
+
+
+
+def _tree_hash(root):
+    h = hashlib.sha256()
+    for p in sorted(glob.glob(os.path.join(root, "**", "*"), recursive=True)):
+        if os.path.isfile(p):
+            h.update(os.path.relpath(p, root).encode())
+            h.update(open(p, "rb").read())
+    return h.hexdigest()
+
+
+def scenario_hyo85(tmp):
+    """HYO-85 — detect 검토(로컬 내보내기: 승인·수정·거부, 편집용 초안) · 작업+폴링 · 데모 모드(대역 모델)."""
+    print("\n— HYO-85: detect 검토 · 작업 · 데모 모드 —")
+    from radar import script as stub_scripts
+    from radar.stub_model import StubChat
+    from common import ops
+    from common.schemas import AdrDraft
+
+    data = os.path.join(tmp, "data85")
+    devdata.seed(data)
+    svc = RadarService(data)
+    app = server.create_app(svc)
+    c, jobs = TestClient(app), app.state.jobs
+
+    # 작업 + 폴링 — 접수는 바로 돌아오고, 끝나면 결과가 붙는다
+    bad = [c.post("/jobs/capture", json={}).status_code, c.post("/jobs/capture", json={"conversation": "  "}).status_code,
+           c.post("/jobs/rm", json={}).status_code]
+    check("작업 접수 거부: 빈 대화 400 · 모르는 작업 404", bad == [400, 400, 404], bad)
+    convs = json.load(open(os.path.join(devdata.FIX, "conversations.json"), encoding="utf-8"))
+    j = c.post("/jobs/capture", json={"conversation": convs["V3"]})
+    check("작업 접수 202 + id", j.status_code == 202 and j.json()["job"]["state"] in ("queued", "running", "done"), j.json())
+    jd = c.post("/jobs/detect", json={}).json()["job"]
+    jobs.join()
+    j1 = c.get(f"/jobs/{j.json()['job']['id']}").json()
+    j2 = c.get(f"/jobs/{jd['id']}").json()
+    check("capture 작업 끝 → Inbox 항목", j1["state"] == "done" and j1["item"] in {i["id"] for i in c.get("/inbox").json()["items"]}, j1)
+    check("detect 작업 끝 → 요약 · 초안", j2["state"] == "done" and j2["result"]["drafts"] and j2["message"].startswith("소식 "), j2)
+    lst = c.get("/jobs").json()["items"]
+    check("작업 목록 최신 먼저", [x["id"] for x in lst[:2]] == [jd["id"], j1["id"]], [x["id"] for x in lst])
+    check("작업 없는 id 404", c.get("/jobs/job-none").status_code == 404)
+    check("로그: job_submitted·job_done", {"job_submitted", "job_done"} <= {x["event"] for x in events(svc)})
+    # 다시 뜨면 끝나지 않은 작업은 error로 닫는다 (다시 돌리지 않는다 — 과금)
+    saved = json.load(open(jobs.path, encoding="utf-8"))
+    saved.append({**saved[-1], "id": "job-stuck", "state": "running", "finished": None})
+    json.dump(saved, open(jobs.path, "w", encoding="utf-8"))
+    import jobs as jobs_mod
+    j3 = jobs_mod.Jobs(svc, start=False).get("job-stuck")
+    check("재시작: 끝나지 않은 작업은 error", j3["state"] == "error" and "다시 시작" in j3["error"], j3)
+
+    # detect 검토 — 편집용 초안 · 수정 · 거부 (로컬 내보내기, git 없음)
+    rows = [i for i in c.get("/inbox").json()["items"] if i["kind"] == "detect"]
+    check("detect 항목 2개 이상 + why 칸(관문 없으면 null)", len(rows) >= 2 and all("why" in i and i["why"] is None for i in rows), rows)
+    det = c.get(f"/inbox/{rows[0]['id']}").json()
+    d = det["draft"]
+    check("detect 상세: 편집용 초안이 파일과 같다 (render 왕복)", d is not None and ops.render(AdrDraft.model_validate(d), "2026-10-08")[4:].split("\n", 2)[2]
+          == det["markdown"].split("\n", 3)[3] if d else False, (d, det["markdown"][:200]))
+    bad_edit = c.post(f"/inbox/{rows[0]['id']}/edit", json={"draft": {**d, "status": "adopted"}}).json()
+    check("detect edit: status 칸 거부 · 안 씀", bad_edit["outcome"] == "edit_errors" and rows[0]["id"] in {i["id"] for i in c.get("/inbox").json()["items"]}, bad_edit)
+    e = c.post(f"/inbox/{rows[0]['id']}/edit", json={"draft": {**d, "title": "사람이 고친 제목"}}).json()
+    path = os.path.join(svc.adr_dir, "..", "..", e.get("path") or "x")
+    check("detect edit → 같은 번호로 고쳐 승인", e["outcome"] == "written" and e["adr"] == det["number_note"].split()[1]
+          and "# 사람이 고친 제목" in open(path, encoding="utf-8").read(), e)
+    adr2 = c.get(f"/inbox/{rows[1]['id']}").json()["number_note"].split()[1]
+    rj = c.post(f"/inbox/{rows[1]['id']}/reject", json={}).json()
+    check("detect 거부 → 초안 파일 삭제", rj["outcome"] == "rejected" and not glob.glob(os.path.join(svc.adr_dir, adr2 + "-*.md")), rj)
+    check("답한 detect 항목은 Inbox에서 빠짐", not {rows[0]["id"], rows[1]["id"]} & {i["id"] for i in c.get("/inbox").json()["items"]})
+    st = [hitl.read_item(svc.ctx(), rows[0]["id"])["export"], hitl.read_item(svc.ctx(), rows[1]["id"])["export"]]
+    check("별도 파일: 승인 done · 거부 closed", st == [{"state": "done"}, {"state": "closed", "reason": "reject"}], st)
+
+    # 데모 모드 — 실제 모델 자리에 대역(StubChat)을 꽂아 API 없이 배관만 본다
+    src = os.path.join(tmp, "data85", "adr-fixture")
+    before = _tree_hash(src)
+    snap = os.path.join(tmp, "demo-snap")
+    shutil.copytree(svc.snapshot_dir, snap)
+    feed = json.load(open(os.path.join(snap, "feed.json"), encoding="utf-8"))
+    json.dump({f["url"]: {"id": f["id"], "reason": f"{f['package'] if f.get('package') else 'x'} L5 × breaking", "kept_by": []} for f in feed},
+              open(os.path.join(snap, "gate.json"), "w", encoding="utf-8"))
+    json.dump({"items": 2290, "lane_a": 222, "kept": 4, "cap": "4/4", "to_detect": len(feed)}, open(os.path.join(snap, "funnel.json"), "w", encoding="utf-8"))
+    calls = []
+
+    def fake(flow):
+        calls.append(flow)
+        return StubChat(script=stub_scripts.detect_script(), flow=flow)
+
+    ddir = os.path.join(tmp, "demo-data")
+    for kw, name in (({"demo_snapshot": os.path.join(tmp, "none")}, "데모: detect 입력 없으면 거부"),
+                     ({"demo_snapshot": snap, "demo_adr": tmp}, "데모: 데이터 폴더가 원본 안이면 거부")):
+        try:
+            RadarService(ddir, model="anthropic", demo=True, chat_factory=fake, **{"demo_adr": src, **kw})
+            check(name, False)
+        except ServiceError:
+            check(name, True)
+    dsvc = RadarService(ddir, model="anthropic", demo=True, demo_adr=src, demo_snapshot=snap, chat_factory=fake)
+    dapp = server.create_app(dsvc)
+    dc = TestClient(dapp)
+    h = dc.get("/health").json()
+    check("데모 health: mode demo · detect만 · 사본 · 건수", h["mode"] == "demo" and h["flows"] == ["detect"] and h["demo"]["adr_copy"].startswith(ddir)
+          and h["demo"]["funnel"].startswith("수집 2290") and h["model"] != "stub", h)
+    check("데모: revisit 거부 (실행 · 작업)", dc.post("/runs/revisit", json={}).status_code == 409 and dc.post("/jobs/revisit", json={}).status_code == 409)
+    check("데모: 쓰기 경로는 사본", dsvc.adr_dir.startswith(ddir) and dsvc.env()["RADAR_ADR_DIR"].startswith(ddir) and dsvc.env()["RADAR_DRY_RUN"] == "1")
+    jd = dc.post("/jobs/detect", json={}).json()["job"]
+    dapp.state.jobs.join()
+    r = dc.get(f"/jobs/{jd['id']}").json()
+    check("데모 detect 작업 → 대역 모델로 · 요약 첫 줄 건수", r["state"] == "done" and calls and set(calls) == {"detect"}
+          and r["result"]["summary"][0].startswith("수집 2290") and r["result"]["drafts"], r)
+    drows = [i for i in dc.get("/inbox").json()["items"] if i["kind"] == "detect"]
+    check("데모 Inbox: detect 항목에 왜 왔나", drows and all(i["why"] and "× breaking" in i["why"] for i in drows), drows)
+    a = dc.post(f"/inbox/{drows[0]['id']}/approve", json={}).json()
+    check("데모 승인 → 사본에 ADR", a["outcome"] == "written" and glob.glob(os.path.join(dsvc.adr_dir, a["adr"] + "-*.md")), a)
+    check("데모: 원본 ADR repo 무변경", _tree_hash(src) == before)
+    dsvc2 = RadarService(ddir, model="anthropic", demo=True, demo_adr=src, demo_snapshot=snap, chat_factory=fake)
+    check("데모 재시작: 사본을 이어 쓴다 (다시 복사하지 않음)", glob.glob(os.path.join(dsvc2.adr_dir, a["adr"] + "-*.md")))
 
 
 if __name__ == "__main__":
