@@ -95,7 +95,8 @@ def main(argv=None):
     funnel = json.load(open(fpath, encoding="utf-8")) if os.path.exists(fpath) else None
     s = summarize(rep, funnel, adr_dir)
     s.update({"now": now, "model": rt.settings(spec), "snapshot": snap, "p3_errors": diag.get("p3_errors") or [],
-              "usage": {k: diag.get(k) for k in ("model_calls", "input_tokens", "output_tokens", "cost_usd")},
+              "usage": {**{k: diag.get(k) for k in ("model_calls", "input_tokens", "output_tokens")},  # 비용은 호출마다 llm_call 줄에 있다
+                        "cost_usd": round(sum(e.get("cost_usd") or 0 for e in ctx.events if e.get("type") == "llm_call"), 5)},
               "net_attempts": ng.attempts})
     if s["p3_errors"]:
         s["summary"].append(f"오류 {len(s['p3_errors'])}건: " + "; ".join(e.get("kind", "?") for e in s["p3_errors"]))
