@@ -186,6 +186,13 @@ class RunAlert(BaseModel):
     message: str
 
 
+class RunExcluded(BaseModel):
+    url: str
+    title: Optional[str] = Field(default=None, description="detect 입력(feed.json)의 소식 제목. 입력에 없는 url이면 null")
+    reason: str = Field(description="모델이 이 소식을 버린 이유 (detect 거르기)")
+    why: Optional[str] = Field(default=None, description="관문이 이 소식을 남긴 이유 (gate.json, 예 `anthropic L5 × deprecation`). 수집 스냅숏 입력이 아니면 null")
+
+
 class RunUsage(BaseModel):
     model_calls: Optional[int]
     input_tokens: Optional[int]
@@ -203,6 +210,7 @@ class RunResult(BaseModel):
     summary: list[str] = Field(description="요약 줄. 수집 스냅숏 입력이면 첫 줄이 건수")
     drafts: list[RunDraft]
     alerts: list[RunAlert]
+    excluded: list[RunExcluded] = Field(default=[], description="detect가 버린 소식과 이유 — 초안 0건이어도 무엇을 보고 왜 버렸는지 남는다. revisit은 빈 목록")
     usage: Optional[RunUsage] = Field(default=None, description="데모(실제 모델)만")
 
 

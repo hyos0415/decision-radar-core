@@ -613,7 +613,7 @@ class RadarService:
             else:  # JHS-001 대본 — 스냅숏 S02(Jev v0.9.0 릴리스)에서 0001 c1이 충족된다
                 fn, script = revisit, stub_scripts.revisit_script(stub_scripts.SCRIPT["cases"]["JHS-001"])
             res = {"id": f"{ctx.now}-{flow}", "flow": flow, "at": ctx.now, "mode": self.mode, "trigger": trigger, "ok": True, "error": None,
-                   "summary": [], "drafts": [], "alerts": []}
+                   "summary": [], "drafts": [], "alerts": [], "excluded": []}
             try:
                 rep, diag = asyncio.run(fn(ctx, self.chat(flow, script), ctx.now, self.model_name))
                 res.update(self._summarize_detect(rep) if flow == "detect" else self._summarize_revisit(rep))
@@ -627,7 +627,7 @@ class RadarService:
                 res.update(ok=False, error=f"{type(e).__name__}: {str(e)[:300]}")
             with open(self.runs_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(res, ensure_ascii=False) + "\n")
-            self.log("run", res["id"], flow=flow, trigger=trigger, ok=res["ok"], drafts=len(res["drafts"]), alerts=len(res["alerts"]))
+            self.log("run", res["id"], flow=flow, trigger=trigger, ok=res["ok"], drafts=len(res["drafts"]), alerts=len(res["alerts"]), excluded=len(res["excluded"]))
             return res
 
     def runs(self, limit=50):
@@ -639,9 +639,15 @@ class RadarService:
 
     def _summarize_detect(self, rep):
         try:
-            n_feed = len(json.load(open(os.path.join(self.snapshot_dir, "feed.json"), encoding="utf-8")))
+            feed = json.load(open(os.path.join(self.snapshot_dir, "feed.json"), encoding="utf-8"))
+            n_feed = len(feed)
         except (OSError, ValueError):
-            n_feed = None
+            feed, n_feed = [], None
+        titles = {f.get("url"): f.get("title") for f in feed if isinstance(f, dict)}
+        gate = self._gate_why()
+        # 버린 소식과 이유 (HYO-97) — 초안 0건이어도 무엇을 보고 왜 버렸는지 남는다. why = 관문이 남긴 이유(수집 스냅숏 입력일 때)
+        excluded = [{"url": e.get("url") or "", "title": titles.get(e.get("url")), "reason": e.get("reason") or "",
+                     "why": (gate.get(e.get("url")) or {}).get("reason")} for e in rep.get("excluded") or []]
         cands, skipped = rep.get("candidates") or [], rep.get("skipped_existing") or []
         drafts = []
         for c in cands:
@@ -653,13 +659,13 @@ class RadarService:
                            "validate_errors": c.get("validate_errors") or []})
         head = f"소식 {n_feed}건 → " if n_feed is not None else ""
         summary = [x for x in [self._funnel_line()] if x]  # 수집 스냅숏에서 만든 입력이면(pipeline.detect_feed) 깔때기 건수 한 줄 (HYO-84)
-        summary += [f"{head}후보 {len(cands)}건 · 이미 있는 결정이라 건너뜀 {len(skipped)}건 · 제외 {len(rep.get('excluded') or [])}건"]
+        summary += [f"{head}후보 {len(cands)}건 · 이미 있는 결정이라 건너뜀 {len(skipped)}건 · 제외 {len(excluded)}건"]
         if drafts:
             bad = sum(1 for d in drafts if d["validate_errors"])
             summary.append(f"초안 {len(drafts)}건 작성 (proposed)" + (f" — validate 실패 {bad}건" if bad else ""))
         else:
             summary.append("새 초안 없음")
-        return {"summary": summary, "drafts": drafts}
+        return {"summary": summary, "drafts": drafts, "excluded": excluded}
 
     def _summarize_revisit(self, rep):
         results = rep.get("results") or []
