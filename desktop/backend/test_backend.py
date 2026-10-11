@@ -229,6 +229,9 @@ def scenario_m2(data):
     r = c.post("/runs/detect", json={}).json()
     check("detect 실행 ok + 초안", r["ok"] and r["drafts"], r)
     check("detect: 겹침(LEANN) 건너뜀이 요약에", "건너뜀 1건" in r["summary"][0], r["summary"])
+    check("detect: 버린 소식마다 이유·제목, 건수는 요약과 같다 (HYO-97)", r["excluded"] and all(e["reason"] and e["title"] for e in r["excluded"])
+          and f"제외 {len(r['excluded'])}건" in r["summary"][0] and all(e["why"] is None for e in r["excluded"]), r["excluded"])
+    check("detect 실행 기록에도 버린 이유 (runs.jsonl)", c.get("/runs").json()["items"][0]["excluded"] == r["excluded"])
     ds2 = {d["id"]: d for d in c.get("/decisions").json()["items"]}
     check("detect 초안은 proposed", all(ds2[x["adr"]]["status"] == "proposed" for x in r["drafts"]))
     check("기존 ADR status 그대로 (R8)", all(ds2[k]["status"] == v for k, v in statuses.items()))
@@ -340,6 +343,7 @@ def scenario_profile(data):
     r = c.post("/runs/detect", json={}).json()
     check("andbread detect: ok", r["ok"], r)
     check("andbread detect: 소식 6 → 후보 2·건너뜀 1·제외 3", r["summary"][0] == "소식 6건 → 후보 2건 · 이미 있는 결정이라 건너뜀 1건 · 제외 3건", r["summary"])
+    check("andbread detect: 제외 3건에 이유", len(r["excluded"]) == 3 and all(e["reason"] for e in r["excluded"]), r["excluded"])
     check("andbread detect: 초안 2건 validate 통과", len(r["drafts"]) == 2 and not any(d["validate_errors"] for d in r["drafts"]), r["drafts"])
     ds2 = {d["id"]: d for d in c.get("/decisions").json()["items"]}
     check("andbread detect: 초안은 proposed, 기존 ADR 불변", all(ds2[d["adr"]]["status"] == "proposed" for d in r["drafts"]) and
@@ -487,6 +491,8 @@ def scenario_hyo85(tmp):
     r = dc.get(f"/jobs/{jd['id']}").json()
     check("데모 detect 작업 → 대역 모델로 · 요약 첫 줄 건수", r["state"] == "done" and calls and set(calls) == {"detect"}
           and r["result"]["summary"][0].startswith("수집 2290") and r["result"]["drafts"], r)
+    check("데모 detect: 버린 소식에 관문의 왜 왔나도 짝으로", r["result"]["excluded"] and all(e["reason"] and e["why"] and "× breaking" in e["why"]
+          for e in r["result"]["excluded"]), r["result"]["excluded"])
     drows = [i for i in dc.get("/inbox").json()["items"] if i["kind"] == "detect"]
     check("데모 Inbox: detect 항목에 왜 왔나", drows and all(i["why"] and "× breaking" in i["why"] for i in drows), drows)
     a = dc.post(f"/inbox/{drows[0]['id']}/approve", json={}).json()

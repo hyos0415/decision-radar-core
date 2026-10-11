@@ -66,7 +66,7 @@ edit의 `draft`만 모양 검사 없이(dict) 받는다 — 모델로 받으면 
 | `GET /jobs` · `/jobs/{id}` | 상태 창 — `{id, kind, state(queued · running · done · error), created, started, finished, message(한 줄), result(아래 동기 엔드포인트와 같은 모양), error, item(capture가 만든 Inbox 항목), mode}`. 끝나면 화면이 Inbox를 다시 읽고 알림. 백엔드가 다시 뜨면 끝나지 않은 작업은 error(다시 돌리지 않음) | `<data>/jobs.json` |
 | `POST /capture` `{conversation}` | 빠른 capture(동기 — 작업 API로 옮기는 동안 남겨 둔다) → `awaiting`(Inbox에 승인 대기) · `linked`(같은 결정이 이미 있음, `link_candidates`) · `no_draft` | `capture_turn1` (R9: 쓰기 0) |
 | `GET /decisions` · `/decisions/{id}` | ADR 목록(번호·제목·status·technology·재검토 조건별 최근 결과·요약) · 상세(+원문). **읽기만** — status를 바꾸는 엔드포인트가 없다(R8) | `radar.py list` + 파일 제목 |
-| `POST /runs/detect` · `/runs/revisit` · `GET /runs` | 흐름을 한 번 돌리고(동기) 요약(`summary`·`drafts`·`alerts`, 데모는 `usage`) — `<data>/runs.jsonl`. detect 입력이 수집 스냅숏에서 왔으면(`funnel.json`) `summary` 첫 줄이 건수(수집 → 레인 A → 관문 남김 → detect 입력). 이 모드의 `flows` 밖이면 409 | `detect` · `revisit` 그래프 (스냅숏 모드 + dry-run) |
+| `POST /runs/detect` · `/runs/revisit` · `GET /runs` | 흐름을 한 번 돌리고(동기) 요약(`summary`·`drafts`·`alerts`·`excluded`, 데모는 `usage`) — `excluded`는 detect가 버린 소식마다 `{url, title, reason, why}`(why = 관문이 남긴 이유, HYO-97) — `<data>/runs.jsonl`. detect 입력이 수집 스냅숏에서 왔으면(`funnel.json`) `summary` 첫 줄이 건수(수집 → 레인 A → 관문 남김 → detect 입력). 이 모드의 `flows` 밖이면 409 | `detect` · `revisit` 그래프 (스냅숏 모드 + dry-run) |
 | `GET /schedule` | 정기 실행 칸·지난 실행·차례 여부. 켜기: `RADAR_SCHEDULE=on`(기본 꺼짐) — revisit 월 09:00 · detect 화 18:00(수집 화 16:00 뒤), 앱이 꺼져 있던 동안 지난 칸은 켜질 때 한 번 따라잡는다 | `scheduling.py` |
 | `POST /events` `{event, item?, detail?}` | 화면 행동 로그 (`app_opened` · `item_opened` · `notification_shown` · `notification_clicked` · `capture_opened` · `decision_opened`) | — |
 

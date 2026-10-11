@@ -882,6 +882,26 @@ export interface components {
        */
       validate_errors: string[]
     }
+    /** RunExcluded */
+    RunExcluded: {
+      /** Url */
+      url: string
+      /**
+       * Title
+       * @description detect 입력(feed.json)의 소식 제목. 입력에 없는 url이면 null
+       */
+      title?: string | null
+      /**
+       * Reason
+       * @description 모델이 이 소식을 버린 이유 (detect 거르기)
+       */
+      reason: string
+      /**
+       * Why
+       * @description 관문이 이 소식을 남긴 이유 (gate.json, 예 `anthropic L5 × deprecation`). 수집 스냅숏 입력이 아니면 null
+       */
+      why?: string | null
+    }
     /** RunList */
     RunList: {
       /** Items */
@@ -921,6 +941,12 @@ export interface components {
       drafts: components['schemas']['RunDraft'][]
       /** Alerts */
       alerts: components['schemas']['RunAlert'][]
+      /**
+       * Excluded
+       * @description detect가 버린 소식과 이유 — 초안 0건이어도 무엇을 보고 왜 버렸는지 남는다. revisit은 빈 목록
+       * @default []
+       */
+      excluded: components['schemas']['RunExcluded'][]
       /** @description 데모(실제 모델)만 */
       usage?: components['schemas']['RunUsage'] | null
     }
