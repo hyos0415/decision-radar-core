@@ -80,7 +80,11 @@ def create_app(svc: RadarService = None, scheduler_on: bool = False, jobs: Jobs 
 
     @app.post("/capture", response_model=S.CaptureResult, operation_id="capture")
     def capture(body: S.CaptureRequest):
-        return svc.submit_capture(body.conversation)
+        return svc.submit_capture(body.conversation, repo=body.repo)
+
+    @app.get("/targets", response_model=S.TargetList, operation_id="targets")
+    def targets():
+        return {"items": [{"repo": r} for r in svc.target_repos()]}
 
     @app.get("/decisions", response_model=S.DecisionList, operation_id="decisions")
     def decisions():

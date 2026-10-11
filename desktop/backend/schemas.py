@@ -95,6 +95,7 @@ class InboxDetail(InboxItem):
     changes: list[str] = Field(description="대기 중 바뀐 점 (지문 비교). 비면 그대로")
     number_note: str
     note: Optional[str] = Field(default=None, description="답할 수 없을 때만")
+    affected_errors: list[str] = Field(default=[], description="affected repo가 레이더 대상이 아니면 그 이유 (R18) — 그대로 승인하면 쓰지 않는다. 고쳐서 승인한다")
     usage: Optional[Usage] = Field(default=None, description="이 항목을 만드는 데 든 모델 사용량 (capture 1턴). detect 초안은 실행(GET /runs)에 있다")
 
 
@@ -129,6 +130,15 @@ class ActionResult(BaseModel):
 
 class CaptureRequest(BaseModel):
     conversation: str = Field(description="조사 대화 원문 (20만 자까지)")
+    repo: Optional[str] = Field(default=None, description="사람이 정한 대상 repo (GET /targets 중 하나). 없으면 「자동」 — 모델이 대화에서 찾는다 (HYO-95)")
+
+
+class Target(BaseModel):
+    repo: str
+
+
+class TargetList(BaseModel):
+    items: list[Target] = Field(description="레이더 대상 repo (radar-targets.json) — 빠른 capture의 repo 드롭다운")
 
 
 class CaptureResult(BaseModel):
@@ -246,6 +256,7 @@ JobKind = Literal["capture", "detect", "revisit"]
 
 class JobRequest(BaseModel):
     conversation: Optional[str] = Field(default=None, description="capture만")
+    repo: Optional[str] = Field(default=None, description="capture만 — CaptureRequest.repo와 같다")
 
 
 class Job(BaseModel):
