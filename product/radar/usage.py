@@ -34,7 +34,7 @@ def run_calls(out_dir):
 def totals(calls):
     return {"calls": len(calls), "input_tokens": sum(c["input_tokens"] for c in calls),
             "output_tokens": sum(c["output_tokens"] for c in calls),
-            "cost_usd": round(sum(c["cost_usd"] for c in calls), 5), "errors": sum(1 for c in calls if c.get("error")),
+            "cost_usd": round(sum(c["cost_usd"] or 0 for c in calls), 5), "errors": sum(1 for c in calls if c.get("error")),
             "models": sorted({c["model"] for c in calls})}
 
 

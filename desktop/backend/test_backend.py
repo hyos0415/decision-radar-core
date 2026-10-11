@@ -95,6 +95,8 @@ def main():
         # 승인 — 코어 write-ahead 경로로 쓴다
         r = c.post(f"/inbox/{a}/approve", json={}).json()
         check("승인 → written", r["outcome"] == "written" and r["adr"] == "0006", r)
+        check("승인(capture 2턴) 사용량 + 승인 이벤트에도", r["usage"] and r["usage"]["model_calls"] >= 1 and r["usage"]["estimated"]
+              and any(e["event"] == "approve" and e["item"] == a and (e.get("detail") or {}).get("usage") == r["usage"] for e in events(svc)), r.get("usage"))
         check("ADR 파일 생김", len(adrs(svc)) == len(base) + 1 and adrs(svc)[-1].startswith("0006-"))
         item = hitl.read_item(svc.ctx(), a)
         check("별도 파일: 쓰기 완료", item and item["write_intent"]["state"] == "done" and "status" not in item)
@@ -197,6 +199,10 @@ def scenario_m2(data):
     r = c.post("/capture", json={"conversation": convs["V8"]}).json()
     check("capture → 승인 대기", r["outcome"] == "awaiting" and r["item"] in {i["id"] for i in c.get("/inbox").json()["items"]}, r)
     check("capture: R9 쓰기 0", adrs(svc) == base and len(c.get("/inbox").json()["items"]) == n_items + 1)
+    u = r["usage"]
+    check("capture: 사용량 — 스텁은 모델 stub · 추정 · 비용 0 (HYO-98)", u and u["estimated"] and u["cost_usd"] == 0 and u["model_calls"] >= 1
+          and u["input_tokens"] > 0, u)
+    check("capture: 항목 상세에 만든 사용량", c.get(f"/inbox/{r['item']}").json()["usage"] == u)
     r = c.post("/capture", json={"conversation": convs["V1"]}).json()
     check("capture: 같은 결정(Jev) → linked 0001", r["outcome"] == "linked" and r["link_candidates"] == ["0001"], r)
     r = c.post("/capture", json={"conversation": "회의 메모: 다음 주에 뭔가 정하자"}).json()
@@ -232,6 +238,7 @@ def scenario_m2(data):
     check("detect: 버린 소식마다 이유·제목, 건수는 요약과 같다 (HYO-97)", r["excluded"] and all(e["reason"] and e["title"] for e in r["excluded"])
           and f"제외 {len(r['excluded'])}건" in r["summary"][0] and all(e["why"] is None for e in r["excluded"]), r["excluded"])
     check("detect 실행 기록에도 버린 이유 (runs.jsonl)", c.get("/runs").json()["items"][0]["excluded"] == r["excluded"])
+    check("detect 실행 사용량 — 스텁 추정 · 비용 0", r["usage"] and r["usage"]["estimated"] and r["usage"]["cost_usd"] == 0, r["usage"])
     ds2 = {d["id"]: d for d in c.get("/decisions").json()["items"]}
     check("detect 초안은 proposed", all(ds2[x["adr"]]["status"] == "proposed" for x in r["drafts"]))
     check("기존 ADR status 그대로 (R8)", all(ds2[k]["status"] == v for k, v in statuses.items()))
@@ -491,6 +498,14 @@ def scenario_hyo85(tmp):
     r = dc.get(f"/jobs/{jd['id']}").json()
     check("데모 detect 작업 → 대역 모델로 · 요약 첫 줄 건수", r["state"] == "done" and calls and set(calls) == {"detect"}
           and r["result"]["summary"][0].startswith("수집 2290") and r["result"]["drafts"], r)
+    du = r["result"]["usage"]
+    check("데모 detect: 사용량 — 추정 아님 · 호출 수 · 모델", du and not du["estimated"] and du["model_calls"] >= 1 and du["model"] and du["cost_usd"] is not None, du)
+    from common.env import cost_for
+    check("단가표: 아는 모델(날짜 붙은 이름도) · 모르는 모델 None · 로컬 0", cost_for("claude-sonnet-5-5", 10**6, 10**6) == 12.0
+          and cost_for("claude-sonnet-5-5-20260930", 10**6, 0) == 2.0 and cost_for("gpt-oss-20b", 10**6, 10**6) is None
+          and cost_for("ollama/gemma4:e4b", 10**6, 10**6) == 0.0 and cost_for("claude-sonnet-5-50", 1, 1) is None)
+    check("데모 detect: 실행 이벤트에 사용량", any(e.get("event") == "run" and (e.get("detail") or {}).get("usage") == du
+          for e in map(json.loads, open(dsvc.events_path, encoding="utf-8"))), du)
     check("데모 detect: 버린 소식에 관문의 왜 왔나도 짝으로", r["result"]["excluded"] and all(e["reason"] and e["why"] and "× breaking" in e["why"]
           for e in r["result"]["excluded"]), r["result"]["excluded"])
     drows = [i for i in dc.get("/inbox").json()["items"] if i["kind"] == "detect"]

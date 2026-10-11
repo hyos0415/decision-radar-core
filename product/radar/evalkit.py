@@ -201,7 +201,7 @@ def main(argv=None):
                "traces": sum(g["spike"]["P5_traces"] for g in graded)},
         "P6": {cid: g["spike"]["P6"]["ok"] for cid, g in caps} or None,
         "usage": {"llm_calls": sum(r["calls"] for r in all_calls), "input_tokens": sum(r["input_tokens"] for r in all_calls),
-                  "output_tokens": sum(r["output_tokens"] for r in all_calls), "cost_usd": round(sum(r["cost_usd"] for r in all_calls), 5),
+                  "output_tokens": sum(r["output_tokens"] for r in all_calls), "cost_usd": round(sum(r["cost_usd"] or 0 for r in all_calls), 5),
                   "note": "스텁: 토큰은 글자 수/4 추정, 비용 0" if stub else "API 단가 환산", "per_call": os.path.join(root, "llm_calls.jsonl")},
         "controls": (f"{sum(ctrl.values())}/{len(ctrl)} 잡힘" if ctrl else None),
     }

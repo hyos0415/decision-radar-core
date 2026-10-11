@@ -5,13 +5,14 @@ transcript*.jsonl이 되므로 호출 기록이 도구 호출 기록과 같은 �
 채점기는 type이 assistant·result·system인 줄만 읽어서 이 줄은 채점에 영향이 없다.
 
 스텁 모델의 토큰은 글자 수/4 추정이다(estimated=true) — 배관 검증용이고 비용은 0으로 둔다.
+단가표(common.env.PRICES)에 없는 모델은 cost_usd가 None이다(모름 — 0으로 세지 않는다).
 """
 
 import threading
 
 from langchain_core.callbacks import BaseCallbackHandler
 
-from common.env import cost_usd
+from common.env import cost_for
 
 from . import retry
 
@@ -48,7 +49,7 @@ class CallLog(BaseCallbackHandler):
         stub = self.default_model == "stub"
         rec = {"type": "llm_call", "flow": self.flow, "agent": st.get("agent"), "model": model,
                "input_tokens": i, "output_tokens": o, "estimated": stub,
-               "cost_usd": 0.0 if stub else cost_usd(i, o)}
+               "cost_usd": 0.0 if stub else cost_for(model, i, o)}
         self._emit({**rec, **self._attempts(run_id)})
 
     def on_llm_error(self, error, *, run_id, **kw):
