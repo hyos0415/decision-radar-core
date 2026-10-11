@@ -851,10 +851,12 @@ def close_item(ctx, item_id, reason):
 
 def affected_errors(ctx, draft):
     """초안의 affected repo가 레이더 대상(radar-targets.json)인가 (R18, HYO-95) — 아니면 쓰지 않고 사람에게 묻는다.
-    「unknown」처럼 모델이 지은 repo가 조용히 ADR에 들어가지 않게 한다. 대상 목록을 모르면(파일 없음) 판단하지 않는다."""
+    「unknown」처럼 모델이 지은 repo나 빈 affected가 조용히 ADR에 들어가지 않게 한다. 대상 목록을 모르면(파일 없음) repo는 판단하지 않는다."""
+    d = draft.model_dump() if hasattr(draft, "model_dump") else (draft or {})
+    if not d.get("affected"):  # 비어 있으면 대상 목록과 무관하게 막는다 — 2026-10-11 실측: 자동 모드에서 모델이 affected를 비웠다
+        return ["affected가 비었다 — repo·component를 정해서 승인한다 (R18)"]
     if not ctx.targets:
         return []
-    d = draft.model_dump() if hasattr(draft, "model_dump") else (draft or {})
     bad = sorted({(a or {}).get("repo") or "(빈 값)" for a in d.get("affected") or [] if (a or {}).get("repo") not in ctx.targets})
     return [f"affected repo {bad}는 레이더 대상이 아니다 — 대상: {sorted(ctx.targets)} (R18). repo를 고쳐서 승인한다"] if bad else []
 

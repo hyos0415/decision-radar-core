@@ -200,10 +200,10 @@ def capture_turn2(ctx, model, state_path, decision, now, model_name, *, item_id=
         edited_draft = draft.model_dump()
         approval["draft_hash_original"] = hitl.sha(ops.render(AdrDraft.model_validate(original), ctx.now)) if original else None
 
-    if decision == "approve" and original:  # 대상 밖 repo(예: 모델이 지은 unknown)면 쓰지 않는다 — 사람이 고쳐서 승인한다 (R18)
+    if decision == "approve" and original is not None:  # 대상 밖 repo(예: 모델이 지은 unknown)·빈 affected면 쓰지 않는다 — 사람이 고쳐서 승인한다 (R18)
         errs = hitl.affected_errors(ctx, original)
         if errs:
-            return stop("affected repo가 레이더 대상이 아니다 — 쓰지 않았다. repo를 고쳐서 승인해 달라", awaiting=True, preview=preview, edit_errors=errs)
+            return stop("affected가 비었거나 레이더 대상이 아니다 — 쓰지 않았다. repo·component를 고쳐서 승인해 달라", awaiting=True, preview=preview, edit_errors=errs)
 
     if decision != "reject":
         blocked = hitl.sync_exporter(ctx)  # 내보내기를 켰으면 원격을 먼저 따라잡는다 — 사람이 그 사이 push했으면 지문 비교가 그 세상을 본다 (결정 8)

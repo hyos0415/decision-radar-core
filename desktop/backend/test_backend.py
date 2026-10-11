@@ -10,6 +10,7 @@ HYO-85: 로컬 내보내기로 detect 초안 승인·수정·거부 · 「왜 �
 
 import glob
 import hashlib
+import dataclasses
 import json
 import os
 import shutil
@@ -623,6 +624,7 @@ def scenario_hyo95(tmp):
 
     # 자동(repo 없음)은 지금과 같다
     r = c.post("/capture", json={"conversation": convs["V8"]}).json()
+    auto_id = r["item"]
     check("자동: 대본의 repo 그대로", [x["repo"] for x in c.get(f"/inbox/{r['item']}").json()["draft"]["affected"]] == ["medical-mate"])
 
     # 대상 밖 repo가 들어간 초안 (2026-10-11 실측 0012 `repo: unknown`) — API는 막으니 서비스로 직접 만든다 (규율 3: 잡혀야 할 게 잡히는가)
@@ -638,6 +640,12 @@ def scenario_hyo95(tmp):
     check("수정도 대상 밖이면 거부", e["outcome"] == "edit_errors" and any("R18" in x for x in e["errors"]) and adrs(svc) == base, e)
     e = c.post(f"/inbox/{bad_id}/edit", json={"draft": {**d, "affected": [{"repo": "finance-verifier", "component": "verifier-core"}]}}).json()
     check("repo를 고쳐 승인 → 저장", e["outcome"] == "written" and len(adrs(svc)) == len(base) + 1, e)
+    # 빈 affected (2026-10-11 실제 모델 재확인: 자동 모드에서 모델이 affected를 비웠다) — 대상 목록과 무관하게 막는다
+    check("빈 affected → affected_errors (대상 목록 없어도)", hitl.affected_errors(svc.ctx(), {"affected": []})
+          and hitl.affected_errors(dataclasses.replace(svc.ctx(), targets={}), {"affected": []}))
+    det = c.get(f"/inbox/{auto_id}").json()
+    e = c.post(f"/inbox/{auto_id}/edit", json={"draft": {**det["draft"], "affected": []}}).json()
+    check("수정으로 affected를 비우면 거부", e["outcome"] == "edit_errors" and any("비었다" in x for x in e["errors"]) and len(adrs(svc)) == len(base) + 1, e)
 
 if __name__ == "__main__":
     sys.exit(main())
