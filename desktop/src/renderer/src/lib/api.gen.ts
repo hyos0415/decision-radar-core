@@ -349,6 +349,8 @@ export interface components {
       blocked?: {
         [key: string]: unknown
       } | null
+      /** @description 이 답에서 모델을 불렀으면 그 사용량 (capture 2턴). 모델을 안 부르면 null */
+      usage?: components['schemas']['Usage'] | null
     } & {
       [key: string]: unknown
     }
@@ -423,6 +425,8 @@ export interface components {
        * @description linked면 이미 있는 같은 결정
        */
       link_candidates: string[]
+      /** @description capture 1턴(대화 읽기·초안)의 모델 사용량 */
+      usage?: components['schemas']['Usage'] | null
     }
     /** Decision */
     Decision: {
@@ -665,6 +669,8 @@ export interface components {
        * @description 답할 수 없을 때만
        */
       note?: string | null
+      /** @description 이 항목을 만드는 데 든 모델 사용량 (capture 1턴). detect 초안은 실행(GET /runs)에 있다 */
+      usage?: components['schemas']['Usage'] | null
     }
     /**
      * InboxItem
@@ -947,17 +953,8 @@ export interface components {
        * @default []
        */
       excluded: components['schemas']['RunExcluded'][]
-      /** @description 데모(실제 모델)만 */
-      usage?: components['schemas']['RunUsage'] | null
-    }
-    /** RunUsage */
-    RunUsage: {
-      /** Model Calls */
-      model_calls: number | null
-      /** Input Tokens */
-      input_tokens: number | null
-      /** Output Tokens */
-      output_tokens: number | null
+      /** @description 이 실행의 모델 사용량. 실행이 죽어도 그때까지 부른 만큼 남는다 */
+      usage?: components['schemas']['Usage'] | null
     }
     /** Schedule */
     Schedule: {
@@ -995,6 +992,33 @@ export interface components {
       op: '<' | '<=' | '>' | '>=' | '=='
       /** Value */
       value: number
+    }
+    /**
+     * Usage
+     * @description 이 작업의 모델 사용량 (HYO-98) — 호출마다 남는 llm_call 기록(product/radar/llm_log)의 합.
+     */
+    Usage: {
+      /**
+       * Model
+       * @description 이 작업에서 부른 모델 (여럿이면 쉼표로). 스텁은 stub
+       */
+      model: string
+      /** Model Calls */
+      model_calls: number
+      /** Input Tokens */
+      input_tokens: number
+      /** Output Tokens */
+      output_tokens: number
+      /**
+       * Cost Usd
+       * @description 실제 비용 (USD). 단가를 모르는 모델이 섞이면 null — 0이 아니다. 스텁·로컬 모델은 0
+       */
+      cost_usd: number | null
+      /**
+       * Estimated
+       * @description 스텁 — 토큰이 글자 수/4 추정이고 비용 0 (배관 확인용)
+       */
+      estimated: boolean
     }
     /** ValidationError */
     ValidationError: {

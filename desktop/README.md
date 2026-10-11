@@ -57,22 +57,26 @@ edit의 `draft`만 모양 검사 없이(dict) 받는다 — 모델로 받으면 
 |---|---|---|
 | `GET /health` | `{ok, mode(stub · demo), profile, model, flows, data_dir, adr_dir, demo?}` — `profile`은 개발 데이터 프로필(`default` · `andbread`), `flows`는 이 모드에서 돌릴 수 있는 흐름(데모는 `detect`만), `demo`는 `{adr_source, adr_copy, snapshot, funnel}` | — |
 | `GET /inbox` | 대기 항목 — capture(승인 대기 thread) + detect 초안(검토 대기 별도 파일) + pending(접수된 capture: queued · running · error · linked · no_draft — 화면 설계 ①) + revisit(충족 알림, `adr`·`message` — 화면 설계 ③). 오래된 순, `waiting_days`·`state`(awaiting_approval · stale · review …)·`actions`·`why`(detect만: 관문 판정 「왜 왔나」, 예 `anthropic L5 × deprecation` — 관문 없이 만든 입력이면 null) | `StateStore.threads` + checkpoint `get_state` · `hitl.review_queue` · `gate.json` |
-| `GET /inbox/{id}` | + `draft`(detect는 초안 파일을 읽어 편집용으로) · `markdown`(저장될 ADR 미리보기) · `changes`(대기 중 바뀐 점) | `ops.render` · 지문 `compute`·`same`·`diff` (읽기만) |
-| `POST /inbox/{id}/approve` `{stale_answer?}` | → `{outcome, message, adr?, path?, changes?, answers?, errors?, validate_errors?}` | capture `capture_turn2(approve)` · detect `hitl.review_item(approve)` |
+| `GET /inbox/{id}` | + `draft`(detect는 초안 파일을 읽어 편집용으로) · `markdown`(저장될 ADR 미리보기) · `changes`(대기 중 바뀐 점) · `usage`(capture 항목을 만드는 데 든 사용량) | `ops.render` · 지문 `compute`·`same`·`diff` (읽기만) |
+| `POST /inbox/{id}/approve` `{stale_answer?}` | → `{outcome, message, adr?, path?, changes?, answers?, errors?, validate_errors?, usage?}` (`usage` = capture 2턴에서 모델을 불렀을 때) | capture `capture_turn2(approve)` · detect `hitl.review_item(approve)` |
 | `POST /inbox/{id}/edit` `{draft, stale_answer?}` | 고친 초안. 검사 실패면 `edit_errors` — 쓰지 않는다 | capture `capture_turn2(edit)` · detect `check_edit` → `rewrite_adr`(같은 번호) → `review_item` |
 | `POST /inbox/{id}/reject` | detect는 초안 파일을 지우고 닫는다 | capture `capture_turn2(reject)` · detect `hitl.review_item(reject)` |
 | `POST /inbox/{id}/ack` | **확인함** (HYO-92) — `kind: pending`(끝난 접수)·`kind: revisit`(충족 알림)을 Inbox에서 치운다. ADR은 안 바꾼다(R8). 초안(capture·detect)에는 409 | `jobs.ack` · `<data>/alerts.json` |
 | `POST /jobs/{capture\|detect\|revisit}` `{conversation?}` | **작업 + 폴링** (HYO-85) — 202 `{job}`으로 바로 돌아온다. 입력 오류는 4xx(작업이 되지 않음). 일꾼 하나가 접수 순서대로 돈다 | `jobs.py` → `submit_capture` · `run` |
 | `GET /jobs` · `/jobs/{id}` | 상태 창 — `{id, kind, state(queued · running · done · error), created, started, finished, message(한 줄), result(아래 동기 엔드포인트와 같은 모양), error, item(capture가 만든 Inbox 항목), mode}`. 끝나면 화면이 Inbox를 다시 읽고 알림. 백엔드가 다시 뜨면 끝나지 않은 작업은 error(다시 돌리지 않음) | `<data>/jobs.json` |
-| `POST /capture` `{conversation}` | 빠른 capture(동기 — 작업 API로 옮기는 동안 남겨 둔다) → `awaiting`(Inbox에 승인 대기) · `linked`(같은 결정이 이미 있음, `link_candidates`) · `no_draft` | `capture_turn1` (R9: 쓰기 0) |
+| `POST /capture` `{conversation}` | 빠른 capture(동기 — 작업 API로 옮기는 동안 남겨 둔다) → `awaiting`(Inbox에 승인 대기) · `linked`(같은 결정이 이미 있음, `link_candidates`) · `no_draft`, + `usage` | `capture_turn1` (R9: 쓰기 0) |
 | `GET /decisions` · `/decisions/{id}` | ADR 목록(번호·제목·status·technology·재검토 조건별 최근 결과·요약) · 상세(+원문). **읽기만** — status를 바꾸는 엔드포인트가 없다(R8) | `radar.py list` + 파일 제목 |
-| `POST /runs/detect` · `/runs/revisit` · `GET /runs` | 흐름을 한 번 돌리고(동기) 요약(`summary`·`drafts`·`alerts`·`excluded`, 데모는 `usage`) — `excluded`는 detect가 버린 소식마다 `{url, title, reason, why}`(why = 관문이 남긴 이유, HYO-97) — `<data>/runs.jsonl`. detect 입력이 수집 스냅숏에서 왔으면(`funnel.json`) `summary` 첫 줄이 건수(수집 → 레인 A → 관문 남김 → detect 입력). 이 모드의 `flows` 밖이면 409 | `detect` · `revisit` 그래프 (스냅숏 모드 + dry-run) |
+| `POST /runs/detect` · `/runs/revisit` · `GET /runs` | 흐름을 한 번 돌리고(동기) 요약(`summary`·`drafts`·`alerts`·`excluded`·`usage`) — `excluded`는 detect가 버린 소식마다 `{url, title, reason, why}`(why = 관문이 남긴 이유, HYO-97) — `<data>/runs.jsonl`. detect 입력이 수집 스냅숏에서 왔으면(`funnel.json`) `summary` 첫 줄이 건수(수집 → 레인 A → 관문 남김 → detect 입력). 이 모드의 `flows` 밖이면 409 | `detect` · `revisit` 그래프 (스냅숏 모드 + dry-run) |
 | `GET /schedule` | 정기 실행 칸·지난 실행·차례 여부. 켜기: `RADAR_SCHEDULE=on`(기본 꺼짐) — revisit 월 09:00 · detect 화 18:00(수집 화 16:00 뒤), 앱이 꺼져 있던 동안 지난 칸은 켜질 때 한 번 따라잡는다 | `scheduling.py` |
 | `POST /events` `{event, item?, detail?}` | 화면 행동 로그 (`app_opened` · `item_opened` · `notification_shown` · `notification_clicked` · `capture_opened` · `decision_opened`) | — |
 
 `outcome`: `written` · `rejected` · `stale`(바뀐 점을 보이고 계속·다시 판정·버림을 `stale_answer`로 다시 보낸다) · `edit_errors` · `discarded` · `rejudge`(원래 대화로 capture 1턴을 다시 돌려 새 대기 항목) · `blocked` · `recovered` · `error`.
 detect 초안은 Inbox에서 승인·수정·거부한다 (로컬 내보내기 — 승인은 사본에 `proposed`로 남고 별도 파일에 승인이 적힌다, git 없음). 검토 대기 초안은 아직 「세상」이 아니어서(지문이 보지 않는다) 다른 대기 항목을 낡게 하지 않는다 — 승인하면 낡게 한다.
 읽기(Inbox·상세·Decisions)는 쓰기 잠금을 기다리지 않는다 — 실제 모델 실행(분 단위) 중에도 화면이 멈추지 않는다.
+
+**모델 사용량 (`usage`, HYO-98)** — 모델을 부르는 응답(실행 · capture 1턴 · 승인/수정/거부의 capture 2턴)과 Inbox capture 상세에 붙는다:
+`{model, model_calls, input_tokens, output_tokens, cost_usd, estimated}`. 호출마다 남는 `llm_call` 기록(`product/radar/llm_log.py`)의 합이고, 행동 로그(`run` · `capture_submitted` · `approve`/`edit`/`reject` 이벤트 detail)에도 같은 값이 남는다.
+비용은 모델별 단가표(`product/spike/common/env.py` `PRICES`)로 셈한다 — 표에 없는 모델이 섞이면 `cost_usd: null`(모름, 0이 아니다), 로컬 모델(`ollama/…`)은 0, 스텁은 `estimated: true`(글자 수/4 추정 · 비용 0). 프롬프트 캐시 토큰은 아직 따로 세지 않는다.
 
 ## 데모 모드 (HYO-85 — 실제 모델, 과금)
 

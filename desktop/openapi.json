@@ -1561,6 +1561,17 @@
               }
             ],
             "title": "Blocked"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "이 답에서 모델을 불렀으면 그 사용량 (capture 2턴). 모델을 안 부르면 null"
           }
         },
         "additionalProperties": true,
@@ -1734,6 +1745,17 @@
             "type": "array",
             "title": "Link Candidates",
             "description": "linked면 이미 있는 같은 결정"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "capture 1턴(대화 읽기·초안)의 모델 사용량"
           }
         },
         "type": "object",
@@ -2408,6 +2430,17 @@
             ],
             "title": "Note",
             "description": "답할 수 없을 때만"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "이 항목을 만드는 데 든 모델 사용량 (capture 1턴). detect 초안은 실행(GET /runs)에 있다"
           }
         },
         "type": "object",
@@ -3111,13 +3144,13 @@
           "usage": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/RunUsage"
+                "$ref": "#/components/schemas/Usage"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "데모(실제 모델)만"
+            "description": "이 실행의 모델 사용량. 실행이 죽어도 그때까지 부른 만큼 남는다"
           }
         },
         "type": "object",
@@ -3134,50 +3167,6 @@
           "alerts"
         ],
         "title": "RunResult"
-      },
-      "RunUsage": {
-        "properties": {
-          "model_calls": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model Calls"
-          },
-          "input_tokens": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Input Tokens"
-          },
-          "output_tokens": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Output Tokens"
-          }
-        },
-        "type": "object",
-        "required": [
-          "model_calls",
-          "input_tokens",
-          "output_tokens"
-        ],
-        "title": "RunUsage"
       },
       "Schedule": {
         "properties": {
@@ -3278,6 +3267,55 @@
           "value"
         ],
         "title": "Threshold"
+      },
+      "Usage": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "이 작업에서 부른 모델 (여럿이면 쉼표로). 스텁은 stub"
+          },
+          "model_calls": {
+            "type": "integer",
+            "title": "Model Calls"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "title": "Output Tokens"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd",
+            "description": "실제 비용 (USD). 단가를 모르는 모델이 섞이면 null — 0이 아니다. 스텁·로컬 모델은 0"
+          },
+          "estimated": {
+            "type": "boolean",
+            "title": "Estimated",
+            "description": "스텁 — 토큰이 글자 수/4 추정이고 비용 0 (배관 확인용)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "model_calls",
+          "input_tokens",
+          "output_tokens",
+          "cost_usd",
+          "estimated"
+        ],
+        "title": "Usage",
+        "description": "이 작업의 모델 사용량 (HYO-98) — 호출마다 남는 llm_call 기록(product/radar/llm_log)의 합."
       },
       "ValidationError": {
         "properties": {

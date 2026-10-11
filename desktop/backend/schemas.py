@@ -57,6 +57,16 @@ class Health(BaseModel):
 
 # ── Inbox ─────────────────────────────────────────────────────────
 
+class Usage(BaseModel):
+    """이 작업의 모델 사용량 (HYO-98) — 호출마다 남는 llm_call 기록(product/radar/llm_log)의 합."""
+    model: str = Field(description="이 작업에서 부른 모델 (여럿이면 쉼표로). 스텁은 stub")
+    model_calls: int
+    input_tokens: int
+    output_tokens: int
+    cost_usd: Optional[float] = Field(description="실제 비용 (USD). 단가를 모르는 모델이 섞이면 null — 0이 아니다. 스텁·로컬 모델은 0")
+    estimated: bool = Field(description="스텁 — 토큰이 글자 수/4 추정이고 비용 0 (배관 확인용)")
+
+
 class InboxItem(BaseModel):
     """Inbox 한 줄. kind: capture(승인 대기 초안) · detect(검토 대기 초안) · pending(접수된 capture — 처리 중이거나 초안 없이 끝남, 화면 설계 ①) ·
     revisit(재검토 조건 충족 알림, 화면 설계 ③). pending·revisit의 답은 「확인함」(ack)뿐 — Inbox에서 치울 뿐 ADR은 안 바꾼다 (R8)."""
@@ -85,6 +95,7 @@ class InboxDetail(InboxItem):
     changes: list[str] = Field(description="대기 중 바뀐 점 (지문 비교). 비면 그대로")
     number_note: str
     note: Optional[str] = Field(default=None, description="답할 수 없을 때만")
+    usage: Optional[Usage] = Field(default=None, description="이 항목을 만드는 데 든 모델 사용량 (capture 1턴). detect 초안은 실행(GET /runs)에 있다")
 
 
 class AnswerRequest(BaseModel):
@@ -111,6 +122,7 @@ class ActionResult(BaseModel):
     validate_errors: Optional[list[str]] = None
     new_item: Optional[str] = Field(default=None, description="rejudge로 새로 생긴 대기 항목")
     blocked: Optional[dict[str, Any]] = None
+    usage: Optional[Usage] = Field(default=None, description="이 답에서 모델을 불렀으면 그 사용량 (capture 2턴). 모델을 안 부르면 null")
 
 
 # ── capture ───────────────────────────────────────────────────────
@@ -124,6 +136,7 @@ class CaptureResult(BaseModel):
     item: Optional[str] = Field(description="awaiting이면 Inbox 항목 id")
     message: str
     link_candidates: list[str] = Field(description="linked면 이미 있는 같은 결정")
+    usage: Optional[Usage] = Field(default=None, description="capture 1턴(대화 읽기·초안)의 모델 사용량")
 
 
 # ── Decisions (읽기만 — R8) ──────────────────────────────────────
@@ -193,12 +206,6 @@ class RunExcluded(BaseModel):
     why: Optional[str] = Field(default=None, description="관문이 이 소식을 남긴 이유 (gate.json, 예 `anthropic L5 × deprecation`). 수집 스냅숏 입력이 아니면 null")
 
 
-class RunUsage(BaseModel):
-    model_calls: Optional[int]
-    input_tokens: Optional[int]
-    output_tokens: Optional[int]
-
-
 class RunResult(BaseModel):
     id: str
     flow: Flow
@@ -211,7 +218,7 @@ class RunResult(BaseModel):
     drafts: list[RunDraft]
     alerts: list[RunAlert]
     excluded: list[RunExcluded] = Field(default=[], description="detect가 버린 소식과 이유 — 초안 0건이어도 무엇을 보고 왜 버렸는지 남는다. revisit은 빈 목록")
-    usage: Optional[RunUsage] = Field(default=None, description="데모(실제 모델)만")
+    usage: Optional[Usage] = Field(default=None, description="이 실행의 모델 사용량. 실행이 죽어도 그때까지 부른 만큼 남는다")
 
 
 class RunList(BaseModel):

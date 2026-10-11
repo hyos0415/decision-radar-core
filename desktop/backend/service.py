@@ -203,6 +203,17 @@ class RadarService:
         c.now = now_iso()
         return c
 
+    def _usage(self, ctx):
+        """이 작업의 모델 사용량 (HYO-98) — ctx.events의 llm_call 줄(product/radar/llm_log)을 모은다. ctx는 작업마다 새로 만든다.
+        비용은 모델별 단가표(common.env.PRICES)로 — 모르는 모델이 섞이면 None(0이 아니다). 스텁은 추정 토큰·비용 0. 부른 적 없으면 None."""
+        calls = [e for e in ctx.events if e.get("type") == "llm_call"]
+        if not calls:
+            return None
+        costs = [c.get("cost_usd") for c in calls]
+        return {"model": ", ".join(sorted({c.get("model") or self.model_name for c in calls})), "model_calls": len(calls),
+                "input_tokens": sum(c.get("input_tokens") or 0 for c in calls), "output_tokens": sum(c.get("output_tokens") or 0 for c in calls),
+                "cost_usd": None if any(x is None for x in costs) else round(sum(costs), 5), "estimated": self.mode == "stub"}
+
     def model(self, item_id=None):
         sid = (self._meta().get("items", {}).get(item_id) or {}).get("stub") if item_id else None
         return self.chat("capture", self.capture_script(sid or self.default_stub))
@@ -280,6 +291,10 @@ class RadarService:
                "affected": d.get("affected") or [], "since": c["since"], "waiting_days": _days(c["since"]),
                "state": "stale" if changes else "awaiting_approval", "actions": ["approve", "edit", "reject"], "why": None}
         return row, changes
+
+    def _item_usage(self, item_id):
+        """capture 항목을 만드는 데 든 사용량 (1턴, 앱 메타) — 메타가 없으면 None."""
+        return (self._meta().get("items", {}).get(item_id) or {}).get("usage")
 
     def _review_row(self, ctx, q):
         """검토 대기 별도 파일(detect 초안 · 내보내기 보류). 로컬 내보내기라 승인·수정·거부를 받는다 (HYO-85).
@@ -395,7 +410,8 @@ class RadarService:
             if c["id"] == item_id:
                 row, changes = self._capture_row(ctx, c)
                 md = ops.render(AdrDraft.model_validate(c["draft"]), ctx.now)
-                return {**row, "draft": c["draft"], "markdown": md, "changes": changes, "number_note": NUMBER_NOTE}
+                return {**row, "draft": c["draft"], "markdown": md, "changes": changes, "number_note": NUMBER_NOTE,
+                        "usage": self._item_usage(item_id)}
         for q in hitl.review_queue(ctx):
             if q["item"] == item_id:
                 row, text = self._review_row(ctx, q)
@@ -437,7 +453,7 @@ class RadarService:
                                        item_id=item_id, edited=draft, stale_answer=stale_answer)
             except hitl.HitlError as e:
                 return self._done(item_id, decision, stale_answer, {"outcome": "error", "message": str(e)})
-            res = self._outcome(ctx, item_id, decision, rep)
+            res = {**self._outcome(ctx, item_id, decision, rep), "usage": self._usage(ctx)}
             if res["outcome"] == "rejudge":
                 res = self._rejudge(item_id, res)
             return self._done(item_id, decision, stale_answer, res)
@@ -479,7 +495,7 @@ class RadarService:
         detail = {"outcome": res["outcome"]}
         if stale_answer:
             detail["stale_answer"] = stale_answer
-        for k in ("adr", "errors", "changes", "new_item"):
+        for k in ("adr", "errors", "changes", "new_item", "usage"):
             if res.get(k):
                 detail[k] = res[k]
         self.log(decision, item_id, **detail)
@@ -524,11 +540,12 @@ class RadarService:
             ctx = self.ctx()
             model = self.chat("capture", self.capture_script(stub or self.default_stub))
             rep, _ = asyncio.run(capture_turn1(ctx, model, conversation, ctx.now, self.state_path, self.model_name))
+            usage = self._usage(ctx)
             item_id = rep.get("item_id") if rep.get("awaiting_approval") else None
             if item_id:
-                self._put_meta(item_id, since=since or ctx.now, conversation=conversation, stub=stub or self.default_stub)
+                self._put_meta(item_id, since=since or ctx.now, conversation=conversation, stub=stub or self.default_stub, usage=usage)
                 self.log("item_created", item_id, kind="capture")
-            return item_id, rep
+            return item_id, {**rep, "usage": usage}
 
     @staticmethod
     def check_conversation(conversation):
@@ -551,7 +568,8 @@ class RadarService:
                    "message": "이미 같은 결정이 있다: " + ", ".join(rep["link_candidates"]) + " — 새 초안을 만들지 않았다"}
         else:
             res = {"outcome": "no_draft", "item": None, "link_candidates": [], "message": rep.get("note") or "초안이 나오지 않았다"}
-        self.log("capture_submitted", res["item"], outcome=res["outcome"], chars=len(conversation), stub=stub,
+        res["usage"] = rep.get("usage")
+        self.log("capture_submitted", res["item"], outcome=res["outcome"], chars=len(conversation), stub=stub, usage=res["usage"],
                  **({"link_candidates": res["link_candidates"]} if res["link_candidates"] else {}))
         return res
 
@@ -619,15 +637,15 @@ class RadarService:
                 res.update(self._summarize_detect(rep) if flow == "detect" else self._summarize_revisit(rep))
                 if flow == "revisit":
                     self._record_alerts(res["alerts"], ctx.now)  # 충족 알림은 Inbox로 (화면 설계 ③)
-                if self.mode != "stub":
-                    res["usage"] = {k: diag.get(k) for k in ("model_calls", "input_tokens", "output_tokens")}
                 if diag.get("p3_errors"):
                     res["summary"].append(f"오류 {len(diag['p3_errors'])}건: " + "; ".join(e.get("kind", "?") for e in diag["p3_errors"]))
             except Exception as e:  # 실행이 죽어도 앱은 산다 — 기록에 남기고 보인다
                 res.update(ok=False, error=f"{type(e).__name__}: {str(e)[:300]}")
+            res["usage"] = self._usage(ctx)  # 죽은 실행도 그때까지 부른 만큼 (HYO-98)
             with open(self.runs_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(res, ensure_ascii=False) + "\n")
-            self.log("run", res["id"], flow=flow, trigger=trigger, ok=res["ok"], drafts=len(res["drafts"]), alerts=len(res["alerts"]), excluded=len(res["excluded"]))
+            self.log("run", res["id"], flow=flow, trigger=trigger, ok=res["ok"], drafts=len(res["drafts"]), alerts=len(res["alerts"]), excluded=len(res["excluded"]),
+                     usage=res["usage"])
             return res
 
     def runs(self, limit=50):
