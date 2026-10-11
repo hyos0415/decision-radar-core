@@ -42,5 +42,8 @@ CAPTURE_INSTRUCTIONS = """너는 조사 대화를 기술 결정 기록(ADR) 초�
    - basis는 1차 출처(evidence)에서 나온 문장이나 사용자의 말이어야 한다 — 어시스턴트의 링크 없는 주장과 community는 근거가 아니다. 어시스턴트가 링크를 붙여 말한 문장은 그 출처의 말로 본다"""
 
 
-def capture_prompt(conversation, now):
-    return f"지금 시각: {now}\n\n아래는 방금 나눈 조사 대화다.\n\n<conversation>\n{conversation}\n</conversation>"
+def capture_prompt(conversation, now, repo=None):
+    """repo = 사람이 정한 대상 repo(빠른 capture의 repo 칸, HYO-95). 없으면 지금과 글자 하나 다르지 않다 (eval 프롬프트 불변)."""
+    pin = (f"\n\n이 대화의 대상 repo는 사람이 `{repo}`로 정했다 — affected의 repo는 `{repo}`만 쓰고, "
+           f"component는 이 repo의 스택(CLAUDE.md 의존성 → component 매핑)에서 고른다.") if repo else ""
+    return f"지금 시각: {now}{pin}\n\n아래는 방금 나눈 조사 대화다.\n\n<conversation>\n{conversation}\n</conversation>"

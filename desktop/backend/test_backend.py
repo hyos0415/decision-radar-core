@@ -10,6 +10,7 @@ HYO-85: 로컬 내보내기로 detect 초안 승인·수정·거부 · 「왜 �
 
 import glob
 import hashlib
+import dataclasses
 import json
 import os
 import shutil
@@ -173,6 +174,7 @@ def main():
         scenario_profile(os.path.join(tmp, "data-andbread"))
         scenario_hyo85(tmp)
         scenario_hyo92(tmp)
+        scenario_hyo95(tmp)
     finally:
         os.environ.pop("RADAR_EXPORT", None)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -558,7 +560,7 @@ def scenario_hyo92(tmp):
     check("① 두 번 확인함 404", c.post(f"/inbox/{j2['id']}/ack").status_code == 404)
     # 실패한 접수
     orig = svc.submit_capture
-    svc.submit_capture = lambda conv: (_ for _ in ()).throw(RuntimeError("모델 연결 실패"))
+    svc.submit_capture = lambda conv, repo=None: (_ for _ in ()).throw(RuntimeError("모델 연결 실패"))
     j3 = c.post("/jobs/capture", json={"conversation": "아무 대화"}).json()["job"]
     step()
     svc.submit_capture = orig
@@ -589,6 +591,61 @@ def scenario_hyo92(tmp):
     kinds = [x["event"] for x in events(svc)]
     check("로그: ack · item_created(revisit)", "ack" in kinds and any(x["event"] == "item_created" and (x.get("detail") or {}).get("kind") == "revisit" for x in events(svc)))
 
+
+
+
+def scenario_hyo95(tmp):
+    """HYO-95 — 빠른 capture의 repo 칸: 대상 목록 · 정한 repo가 초안에 박힘(승인은 승인) · 대상 밖 repo는 쓰지 않고 사람에게 묻는다 (R18)."""
+    print("\n— HYO-95: capture repo 지정 · 대상 밖 repo 막기 —")
+    import jobs as jobs_mod
+    data = os.path.join(tmp, "data95")
+    devdata.seed(data)
+    svc = RadarService(data)
+    c = TestClient(server.create_app(svc, jobs=jobs_mod.Jobs(svc, start=False)))
+    convs = json.load(open(os.path.join(devdata.FIX, "conversations.json"), encoding="utf-8"))
+    t = [x["repo"] for x in c.get("/targets").json()["items"]]
+    check("대상 목록 = radar-targets.json", t == ["finance-verifier", "medical-mate"], t)
+    check("대상 밖 repo → 400 (capture · 작업)", c.post("/capture", json={"conversation": convs["V8"], "repo": "unknown"}).status_code == 400
+          and c.post("/jobs/capture", json={"conversation": convs["V8"], "repo": "nope"}).status_code == 400)
+
+    # V8 대본은 medical-mate/pii-guard 초안 — finance-verifier로 정하면 repo만 바뀌고 component는 모델(대본) 것
+    r = c.post("/capture", json={"conversation": convs["V8"], "repo": "finance-verifier"}).json()
+    det = c.get(f"/inbox/{r['item']}").json()
+    aff = det["draft"]["affected"]
+    check("정한 repo가 Inbox 초안에 처음부터 박힘 · component는 그대로", aff and all(a["repo"] == "finance-verifier" for a in aff)
+          and [a["component"] for a in aff] == ["pii-guard"] and det["affected_errors"] == [], aff)
+    check("미리보기에도 정한 repo", "repo: finance-verifier" in det["markdown"], det["markdown"][:300])
+    a = c.post(f"/inbox/{r['item']}/approve", json={}).json()
+    path = os.path.join(svc.adr_dir, "..", "..", a.get("path") or "x")
+    check("승인 → 정한 repo로 저장 · 이벤트는 approve", a["outcome"] == "written" and "repo: finance-verifier" in open(path, encoding="utf-8").read()
+          and any(e["event"] == "approve" and e["item"] == r["item"] for e in events(svc)), a)
+    check("capture_submitted 이벤트에 repo", any(e["event"] == "capture_submitted" and (e.get("detail") or {}).get("repo") == "finance-verifier"
+                                             for e in events(svc)))
+
+    # 자동(repo 없음)은 지금과 같다
+    r = c.post("/capture", json={"conversation": convs["V8"]}).json()
+    auto_id = r["item"]
+    check("자동: 대본의 repo 그대로", [x["repo"] for x in c.get(f"/inbox/{r['item']}").json()["draft"]["affected"]] == ["medical-mate"])
+
+    # 대상 밖 repo가 들어간 초안 (2026-10-11 실측 0012 `repo: unknown`) — API는 막으니 서비스로 직접 만든다 (규율 3: 잡혀야 할 게 잡히는가)
+    base = adrs(svc)
+    bad_id, _ = svc.capture(convs["V4"], stub="JHS-031", repo="unknown")
+    det = c.get(f"/inbox/{bad_id}").json()
+    check("대상 밖 repo 초안 → 상세에 affected_errors", det["affected_errors"] and "R18" in det["affected_errors"][0], det["affected_errors"])
+    a = c.post(f"/inbox/{bad_id}/approve", json={}).json()
+    check("그대로 승인 → 쓰지 않음 · 대기 유지 · 이유", a["outcome"] == "edit_errors" and a["errors"] and adrs(svc) == base
+          and bad_id in {i["id"] for i in c.get("/inbox").json()["items"]}, a)
+    d = {k: v for k, v in det["draft"].items()}
+    e = c.post(f"/inbox/{bad_id}/edit", json={"draft": {**d, "affected": [{"repo": "unknown", "component": "x"}]}}).json()
+    check("수정도 대상 밖이면 거부", e["outcome"] == "edit_errors" and any("R18" in x for x in e["errors"]) and adrs(svc) == base, e)
+    e = c.post(f"/inbox/{bad_id}/edit", json={"draft": {**d, "affected": [{"repo": "finance-verifier", "component": "verifier-core"}]}}).json()
+    check("repo를 고쳐 승인 → 저장", e["outcome"] == "written" and len(adrs(svc)) == len(base) + 1, e)
+    # 빈 affected (2026-10-11 실제 모델 재확인: 자동 모드에서 모델이 affected를 비웠다) — 대상 목록과 무관하게 막는다
+    check("빈 affected → affected_errors (대상 목록 없어도)", hitl.affected_errors(svc.ctx(), {"affected": []})
+          and hitl.affected_errors(dataclasses.replace(svc.ctx(), targets={}), {"affected": []}))
+    det = c.get(f"/inbox/{auto_id}").json()
+    e = c.post(f"/inbox/{auto_id}/edit", json={"draft": {**det["draft"], "affected": []}}).json()
+    check("수정으로 affected를 비우면 거부", e["outcome"] == "edit_errors" and any("비었다" in x for x in e["errors"]) and len(adrs(svc)) == len(base) + 1, e)
 
 if __name__ == "__main__":
     sys.exit(main())

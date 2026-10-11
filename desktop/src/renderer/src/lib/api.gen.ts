@@ -143,6 +143,23 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/targets': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** Targets */
+    get: operations['targets']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/decisions': {
     parameters: {
       query?: never
@@ -405,6 +422,11 @@ export interface components {
        * @description 조사 대화 원문 (20만 자까지)
        */
       conversation: string
+      /**
+       * Repo
+       * @description 사람이 정한 대상 repo (GET /targets 중 하나). 없으면 「자동」 — 모델이 대화에서 찾는다 (HYO-95)
+       */
+      repo?: string | null
     }
     /** CaptureResult */
     CaptureResult: {
@@ -669,6 +691,12 @@ export interface components {
        * @description 답할 수 없을 때만
        */
       note?: string | null
+      /**
+       * Affected Errors
+       * @description affected repo가 레이더 대상이 아니면 그 이유 (R18) — 그대로 승인하면 쓰지 않는다. 고쳐서 승인한다
+       * @default []
+       */
+      affected_errors: string[]
       /** @description 이 항목을 만드는 데 든 모델 사용량 (capture 1턴). detect 초안은 실행(GET /runs)에 있다 */
       usage?: components['schemas']['Usage'] | null
     }
@@ -810,6 +838,11 @@ export interface components {
        * @description capture만
        */
       conversation?: string | null
+      /**
+       * Repo
+       * @description capture만 — CaptureRequest.repo와 같다
+       */
+      repo?: string | null
     }
     /** Ok */
     Ok: {
@@ -980,6 +1013,19 @@ export interface components {
       last_run: string | null
       /** Due */
       due: boolean
+    }
+    /** Target */
+    Target: {
+      /** Repo */
+      repo: string
+    }
+    /** TargetList */
+    TargetList: {
+      /**
+       * Items
+       * @description 레이더 대상 repo (radar-targets.json) — 빠른 capture의 repo 드롭다운
+       */
+      items: components['schemas']['Target'][]
     }
     /** Threshold */
     Threshold: {
@@ -1625,6 +1671,71 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  targets: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['TargetList']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
         }
       }
       /** @description 서비스 오류 — detail 한 줄 */

@@ -695,6 +695,74 @@
         }
       }
     },
+    "/targets": {
+      "get": {
+        "summary": "Targets",
+        "operationId": "targets",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TargetList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/decisions": {
       "get": {
         "summary": "Decisions",
@@ -1703,6 +1771,18 @@
             "type": "string",
             "title": "Conversation",
             "description": "조사 대화 원문 (20만 자까지)"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo",
+            "description": "사람이 정한 대상 repo (GET /targets 중 하나). 없으면 「자동」 — 모델이 대화에서 찾는다 (HYO-95)"
           }
         },
         "type": "object",
@@ -2431,6 +2511,15 @@
             "title": "Note",
             "description": "답할 수 없을 때만"
           },
+          "affected_errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Affected Errors",
+            "description": "affected repo가 레이더 대상이 아니면 그 이유 (R18) — 그대로 승인하면 쓰지 않는다. 고쳐서 승인한다",
+            "default": []
+          },
           "usage": {
             "anyOf": [
               {
@@ -2796,6 +2885,18 @@
             ],
             "title": "Conversation",
             "description": "capture만"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo",
+            "description": "capture만 — CaptureRequest.repo와 같다"
           }
         },
         "type": "object",
@@ -3237,6 +3338,36 @@
           "due"
         ],
         "title": "ScheduleFlow"
+      },
+      "Target": {
+        "properties": {
+          "repo": {
+            "type": "string",
+            "title": "Repo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "repo"
+        ],
+        "title": "Target"
+      },
+      "TargetList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Target"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "레이더 대상 repo (radar-targets.json) — 빠른 capture의 repo 드롭다운"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "TargetList"
       },
       "Threshold": {
         "properties": {

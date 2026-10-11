@@ -411,12 +411,13 @@ class RadarService:
                 row, changes = self._capture_row(ctx, c)
                 md = ops.render(AdrDraft.model_validate(c["draft"]), ctx.now)
                 return {**row, "draft": c["draft"], "markdown": md, "changes": changes, "number_note": NUMBER_NOTE,
-                        "usage": self._item_usage(item_id)}
+                        "usage": self._item_usage(item_id), "affected_errors": hitl.affected_errors(ctx, c["draft"])}
         for q in hitl.review_queue(ctx):
             if q["item"] == item_id:
                 row, text = self._review_row(ctx, q)
-                out = {**row, "draft": _parse_adr(text), "markdown": text, "changes": (q["export"].get("changes") or []),
-                       "number_note": f"ADR {q.get('adr')} (로컬 초안)"}
+                d = _parse_adr(text)
+                out = {**row, "draft": d, "markdown": text, "changes": (q["export"].get("changes") or []),
+                       "number_note": f"ADR {q.get('adr')} (로컬 초안)", "affected_errors": hitl.affected_errors(ctx, d) if d else []}
                 if not row["actions"]:
                     out["note"] = "내보내기가 꺼져 있어 답할 수 없다"
                 return out
@@ -529,21 +530,21 @@ class RadarService:
         m = self._meta().get("items", {}).get(item_id) or {}
         if not m.get("conversation"):
             return {**res, "message": "다시 판정하려면 대화를 다시 넣어 달라 (원래 대화가 앱에 없다)"}
-        new_id, _ = self.capture(m["conversation"], stub=m.get("stub"))
+        new_id, _ = self.capture(m["conversation"], stub=m.get("stub"), repo=m.get("repo"))
         return {**res, "message": f"새 세상에서 다시 판정했다 → {new_id}", "new_item": new_id}
 
     # ── capture (1턴) ────────────────────────────────────────────
 
-    def capture(self, conversation, *, stub=None, since=None):
+    def capture(self, conversation, *, stub=None, since=None, repo=None):
         """대화 → capture 1턴 → 승인 대기에서 멈춘다 (R9: ADR repo 쓰기 0). (item_id 또는 None, 보고서)."""
         with self.lock:
             ctx = self.ctx()
             model = self.chat("capture", self.capture_script(stub or self.default_stub))
-            rep, _ = asyncio.run(capture_turn1(ctx, model, conversation, ctx.now, self.state_path, self.model_name))
+            rep, _ = asyncio.run(capture_turn1(ctx, model, conversation, ctx.now, self.state_path, self.model_name, repo=repo))
             usage = self._usage(ctx)
             item_id = rep.get("item_id") if rep.get("awaiting_approval") else None
             if item_id:
-                self._put_meta(item_id, since=since or ctx.now, conversation=conversation, stub=stub or self.default_stub, usage=usage)
+                self._put_meta(item_id, since=since or ctx.now, conversation=conversation, stub=stub or self.default_stub, usage=usage, repo=repo)
                 self.log("item_created", item_id, kind="capture")
             return item_id, {**rep, "usage": usage}
 
@@ -554,11 +555,24 @@ class RadarService:
         if len(conversation) > MAX_CONVERSATION:
             raise ServiceError(413, f"대화가 너무 길다 ({len(conversation)}자 > {MAX_CONVERSATION})")
 
-    def submit_capture(self, conversation):
+    def target_repos(self):
+        """레이더 대상 repo (radar-targets.json) — 빠른 capture의 repo 드롭다운 (HYO-95)."""
+        return sorted(self.ctx().targets)
+
+    def check_repo(self, repo):
+        """빈 값은 「자동」(None). 대상 밖이면 400 — 화면은 GET /targets에서만 고른다."""
+        if repo is None or not str(repo).strip():
+            return None
+        if repo not in self.target_repos():
+            raise ServiceError(400, f"레이더 대상이 아닌 repo {repo!r} — {self.target_repos()}")
+        return repo
+
+    def submit_capture(self, conversation, repo=None):
         """화면의 빠른 capture 창 — 대화 → 1턴. 스텁 대본은 대화에 나온 기술로 고른다 (`pick_stub`). 데모면 실제 모델이 대화를 읽는다."""
         self.check_conversation(conversation)
+        repo = self.check_repo(repo)
         stub, matched = pick_stub(conversation, self._stubs(), self.default_stub) if self.mode == "stub" else (None, True)
-        item_id, rep = self.capture(conversation, stub=stub)
+        item_id, rep = self.capture(conversation, stub=stub, repo=repo)
         tech = self.capture_script(self.default_stub)["match"]["technology"]
         note = "" if matched else f" — 스텁: 대화와 맞는 대본이 없어 기본 대본({tech})으로 만들었다 (내용은 대화와 무관)"
         if item_id:
@@ -569,7 +583,7 @@ class RadarService:
         else:
             res = {"outcome": "no_draft", "item": None, "link_candidates": [], "message": rep.get("note") or "초안이 나오지 않았다"}
         res["usage"] = rep.get("usage")
-        self.log("capture_submitted", res["item"], outcome=res["outcome"], chars=len(conversation), stub=stub, usage=res["usage"],
+        self.log("capture_submitted", res["item"], outcome=res["outcome"], chars=len(conversation), stub=stub, usage=res["usage"], repo=repo,
                  **({"link_candidates": res["link_candidates"]} if res["link_candidates"] else {}))
         return res
 

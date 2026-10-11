@@ -15,7 +15,7 @@ import dataclasses
 import hashlib
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain.agents.middleware import AgentMiddleware, HumanInTheLoopMiddleware
 from langchain.agents.structured_output import ProviderStrategy
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
@@ -37,8 +37,38 @@ def thread_config(item_id, **configurable):
     return {"configurable": {"thread_id": item_id, **configurable}}
 
 
-def capture_agent(model, checkpointer, gate=True):
+class PinRepo(AgentMiddleware):
+    """사람이 정한 repo(빠른 capture의 repo 칸, HYO-95)를 propose_adr 초안의 affected에 박는다 — component는 모델 것을 둔다.
+    after_model 훅은 미들웨어 목록의 **역순**으로 돈다 → HITL 뒤에 두면 HITL이 멈추기 전에 돈다. 그래서 Inbox에 처음 보이는 초안부터
+    정한 repo이고, 사람의 「승인」은 승인으로 남는다(edit로 바꿔 보내지 않는다). repo가 없으면 아무것도 안 한다 —
+    2턴도 같은 그래프여야 해서 항상 끼운다."""
+
+    def __init__(self, repo=None):
+        super().__init__()
+        self.repo = repo
+
+    def after_model(self, state, runtime):
+        msg = state["messages"][-1] if state.get("messages") else None
+        calls = getattr(msg, "tool_calls", None) or []
+        if not self.repo or not any(c["name"] == "propose_adr" for c in calls):
+            return None
+        out = []
+        for c in calls:
+            if c["name"] == "propose_adr" and isinstance(c["args"].get("draft"), dict):
+                d = dict(c["args"]["draft"])
+                comps = list(dict.fromkeys((a or {}).get("component") for a in d.get("affected") or [] if (a or {}).get("component")))
+                d["affected"] = [{"repo": self.repo, "component": x} for x in comps]  # component가 없으면 빈 목록 → validate가 막는다
+                c = {**c, "args": {**c["args"], "draft": d}}
+            out.append(c)
+        return {"messages": [msg.model_copy(update={"tool_calls": out})]}  # 같은 id — add_messages가 바꿔 끼운다
+
+    async def aafter_model(self, state, runtime):
+        return self.after_model(state, runtime)
+
+
+def capture_agent(model, checkpointer, gate=True, repo=None):
     mw = [HumanInTheLoopMiddleware(interrupt_on={"propose_adr": {"allowed_decisions": DECISIONS}})] if gate else []
+    mw.append(PinRepo(repo))
     return create_agent(model, tools=[match_adr, propose_adr], system_prompt=CAPTURE_INSTRUCTIONS,
                         response_format=ProviderStrategy(CaptureResult), middleware=mw, checkpointer=checkpointer,
                         context_schema=Ctx, name="capture")
@@ -91,13 +121,13 @@ def make_item_id(ctx, conversation, store):
     return hitl.new_item_id(ctx, "capture", hashlib.sha1(conversation.encode("utf-8")).hexdigest()[:8], taken=set(store.threads()))
 
 
-async def capture_turn1(ctx, model, conversation, now, state_path, model_name, gate=True, item_id=None, fingerprint=None):
+async def capture_turn1(ctx, model, conversation, now, state_path, model_name, gate=True, item_id=None, fingerprint=None, repo=None):
     ctx.now, ctx.calls = now, 0
     store = hitl.StateStore(state_path)
     item_id = item_id or make_item_id(ctx, conversation, store)
     log = llm_log.attach(model, ctx, "capture", model_name)
     with SqliteSaver.from_conn_string(state_path) as cp:
-        r = capture_agent(model, cp, gate).invoke({"messages": [{"role": "user", "content": capture_prompt(conversation, now)}]},
+        r = capture_agent(model, cp, gate, repo=repo).invoke({"messages": [{"role": "user", "content": capture_prompt(conversation, now, repo)}]},
                                                    config={**thread_config(item_id), "recursion_limit": limit(ops.CAPTURE_MAX_TURNS)},
                                                    context=ctx)
     its = _interrupts(r)
@@ -169,6 +199,11 @@ def capture_turn2(ctx, model, state_path, decision, now, model_name, *, item_id=
             return stop("고친 초안이 검사를 통과하지 못했다 — 쓰지 않았다. 다시 고쳐 달라", awaiting=True, preview=preview, edit_errors=errs)
         edited_draft = draft.model_dump()
         approval["draft_hash_original"] = hitl.sha(ops.render(AdrDraft.model_validate(original), ctx.now)) if original else None
+
+    if decision == "approve" and original is not None:  # 대상 밖 repo(예: 모델이 지은 unknown)·빈 affected면 쓰지 않는다 — 사람이 고쳐서 승인한다 (R18)
+        errs = hitl.affected_errors(ctx, original)
+        if errs:
+            return stop("affected가 비었거나 레이더 대상이 아니다 — 쓰지 않았다. repo·component를 고쳐서 승인해 달라", awaiting=True, preview=preview, edit_errors=errs)
 
     if decision != "reject":
         blocked = hitl.sync_exporter(ctx)  # 내보내기를 켰으면 원격을 먼저 따라잡는다 — 사람이 그 사이 push했으면 지문 비교가 그 세상을 본다 (결정 8)
