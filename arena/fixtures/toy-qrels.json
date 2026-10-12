@@ -1,0 +1,7 @@
+{
+  "toy1": {"stack:decision-radar/infra/compose.yaml": 1, "stack:decision-radar/CLAUDE.md#stack": 1},
+  "toy2": {"github-release:vllm-project/vllm@v0.31.0": 2},
+  "toy3": {"adr:0004": 2, "source-hint:leann-releases": 1},
+  "toy4": {"adr:0003": 2, "adr:0002": 1},
+  "toy5": {"adr:0011": 2}
+}

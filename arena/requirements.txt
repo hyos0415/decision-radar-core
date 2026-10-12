@@ -1,0 +1,11 @@
+# Arena 하네스 의존성 — 메인 .venv에 같이 설치한다 (2026-10-12 설치로 확인한 버전, Python 3.12)
+# 직접 쓰는 것 (ES는 urllib로 직접 부른다 — elasticsearch 클라이언트 없음)
+ranx==0.3.21
+tokenizers==0.23.2
+PyYAML==6.0.3
+
+# ranx가 끌어오는 것 (pip install ranx 결과). 숫자 라이브러리가 바뀌면 지표가 달라질 수 있어 함께 적는다
+numpy==2.5.4
+scipy==1.16.3   # 1.18.1은 이 PC(Windows 앱 제어 정책)에서 _sobol.pyd 로드가 차단돼 1.16.3으로 내림
+pandas==3.0.6
+numba==0.68.0

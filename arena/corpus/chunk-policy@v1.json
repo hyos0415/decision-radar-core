@@ -1,0 +1,24 @@
+{
+  "version": "chunk-policy@v1",
+  "status": "fixed",
+  "note": "상한은 BAAI/bge-m3 토크나이저로 잰다(특수 토큰 포함). 바꾸면 코퍼스 버전이 바뀐다. 결정 2026-10-12(사용자): bert-base-uncased는 한국어를 잘게 쪼개 ADR 11건 중 7건을 불필요하게 나눴다 — BERT 어휘를 쓰는 전략(SPLADE-v3)은 자기 모델 한도에서 자르고 잘린 조각 수를 system.json에 적는다",
+  "max_tokens": 512,
+  "tokenizers": [
+    "BAAI/bge-m3"
+  ],
+  "tokenizer_roles": {
+    "BAAI/bge-m3": "청크 상한 · S3b·S4 입력 한도"
+  },
+  "split_heading_levels": [
+    2,
+    3
+  ],
+  "table_header_rows": 2,
+  "kind_rules": {
+    "adr": "파일 하나. 상한 초과 시 frontmatter 조각 + 헤딩 조각(각 조각 앞에 frontmatter 요약)",
+    "doc": "H2/H3 헤딩. 초과 시 문단 경계, 표는 행 단위 + 머리행 반복, 그래도 크면 줄 → 고정 길이",
+    "claude_md": "스택 절 안의 헤딩. doc과 같음",
+    "manifest": "파일 하나. 상한 초과 시(표의 「—」와 달리) 줄 경계로 자름 — 상한이 우선",
+    "other": "고정 길이"
+  }
+}
