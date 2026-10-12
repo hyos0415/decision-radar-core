@@ -1,7 +1,7 @@
 """Arena CLI.
 
   python arena/cli.py stats --snapshots <radar-snapshots> --adr <adr> --repo decision-radar=<경로> ... [--out stats.json]
-  python arena/cli.py run   --strategy s2|s3b|s4|s5a|s6 --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
+  python arena/cli.py run   --strategy s1|s2|s3a|s3b|s4|s4.int8|s4.bbq|s5a|s5b|s6 --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
 
 코퍼스 폴더 위치는 전부 인자다 (Windows · M1 Mac 둘 다). 설정(버전·커밋·파일)은 arena/corpus/c-all@v1.json.
 gold가 확정되기 전이라 `run`은 장난감 질의로만 돌린다 — gold 버전 이름에 `toy`를 넣는다.
@@ -65,26 +65,40 @@ def cmd_stats(args):
                                              ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
 
-STRATEGY_CHOICES = ["s2", "s3b", "s4", "s5a", "s6"]
-EMBEDDING_STRATEGIES = ("s3b", "s4", "s5a", "s6")
+STRATEGY_CHOICES = ["s1", "s2", "s3a", "s3b", "s4", "s4.int8", "s4.bbq", "s5a", "s5b", "s6"]
+BGE_STRATEGIES = ("s3b", "s4", "s4.int8", "s4.bbq", "s5a", "s5b", "s6")          # BGE-M3 임베딩이 필요하다
+SPLADE_STRATEGIES = ("s3a", "s5b")                                               # SPLADE-v3(HF 토큰)가 필요하다
+EMBEDDING_STRATEGIES = tuple(dict.fromkeys(BGE_STRATEGIES + SPLADE_STRATEGIES))
 
 
-def make_strategy(name, args, cfg, policy, embedder):
-    """전략 객체를 만든다. s5a는 S2와 S4를 같은 실행 안에서 새로 만든다 (저장된 결과를 재사용하지 않는다)."""
+def make_strategy(name, args, cfg, policy, embedder, splade=None, docs=None):
+    """전략 객체를 만든다. s5a는 S2와 S4를, s5b는 S3a와 S4를 같은 실행 안에서 새로 만든다 (저장된 결과를 재사용하지 않는다).
+    s1은 코퍼스 문서(C-ADR frontmatter)가 필요하다 — docs."""
     from arena.strategies.s2_bm25 import S2BM25
     cv = cfg["version"]
+    if name == "s1":
+        from arena.strategies.s1_match import S1Match
+        return S1Match(docs)
     if name == "s2":
         return S2BM25(cv, es_url=args.es_url)
+    if name == "s3a":
+        from arena.strategies.s3a_splade import S3aSplade
+        return S3aSplade(cv, splade)
     if name == "s3b":
         from arena.strategies.s3b_bgem3_sparse import S3bSparse
         return S3bSparse(cv, embedder)
 
-    def s4():
-        from arena.strategies.s4_dense import S4Dense
-        return S4Dense(cv, embedder, es_url=args.es_url, m=args.hnsw_m, ef_construction=args.ef_construction,
-                       num_candidates=args.num_candidates)
-    if name == "s4":
-        return s4()
+    def s4(variant="s4"):
+        from arena.strategies import s4_dense
+        cls = {"s4": s4_dense.S4Dense, "s4.int8": s4_dense.S4Int8, "s4.bbq": s4_dense.S4BBQ}[variant]
+        return cls(cv, embedder, es_url=args.es_url, m=args.hnsw_m, ef_construction=args.ef_construction,
+                   num_candidates=args.num_candidates)
+    if name in ("s4", "s4.int8", "s4.bbq"):
+        return s4(name)
+    if name == "s5b":
+        from arena.strategies.s3a_splade import S3aSplade
+        from arena.strategies.s5b_rrf import S5bRRF
+        return S5bRRF(S3aSplade(cv, splade), s4(), rrf_k=args.rrf_k, chunk_k=args.chunk_k)
     from arena.strategies.s5a_rrf import S5aRRF
     s5a = S5aRRF(S2BM25(cv, es_url=args.es_url), s4(), rrf_k=args.rrf_k, chunk_k=args.chunk_k)
     if name == "s5a":
@@ -100,13 +114,28 @@ def make_embedder(args, cfg, policy):
     return embed.Embedder(encoder, cfg["version"], policy["version"], use_cache=not args.no_cache)
 
 
+def make_splade_embedder(args, cfg, policy):
+    """S3a용 SPLADE 인코더 — .env의 HF_TOKEN이 없으면 모델을 받기 전에 한국어 메시지로 끝낸다."""
+    from arena.strategies import s3a_splade
+    try:
+        encoder = s3a_splade.SpladeEncoder(device=args.device, batch_size=args.encode_batch)
+    except s3a_splade.HFTokenError as e:
+        raise SystemExit(str(e))
+    return s3a_splade.SpladeEmbedder(encoder, cfg["version"], policy["version"], use_cache=not args.no_cache)
+
+
 def cmd_run(args):
     cfg, policy, policy_path, docs, chunks, counter, chunk_secs = build(args)
     queries = harness.load_queries(args.queries)
     qrels = harness.load_qrels(args.qrels)
     harness.check_gold(queries, qrels, [d["doc_id"] for d in docs])
-    embedder = make_embedder(args, cfg, policy) if args.strategy in EMBEDDING_STRATEGIES else None
-    strat = make_strategy(args.strategy, args, cfg, policy, embedder)
+    if args.strategy == "s1":                         # S1은 질의의 nodes를 쓴다 — 없는 질의가 섞이면 시작 전에 알린다
+        no_nodes = [q["qid"] for q in queries if not q.get("nodes")]
+        if no_nodes:
+            raise SystemExit(f"s1은 nodes가 있는 질의(K 유형)만 돌린다 — nodes가 없는 질의: {no_nodes[:5]}")
+    splade = make_splade_embedder(args, cfg, policy) if args.strategy in SPLADE_STRATEGIES else None     # 토큰 확인을 먼저
+    embedder = make_embedder(args, cfg, policy) if args.strategy in BGE_STRATEGIES else None
+    strat = make_strategy(args.strategy, args, cfg, policy, embedder, splade=splade, docs=docs)
     key = harness.result_key(strat.id, strat.version, cfg["version"], args.gold_version, args.tier, args.seed)
     if (Path(args.results) / key).exists():            # 색인을 만들기 전에 먼저 막는다
         raise SystemExit(f"결과 폴더가 이미 있다 — 덮어쓰지 않는다: {Path(args.results) / key}")
@@ -143,6 +172,11 @@ def cmd_run(args):
         system["reranker"] = {**rinfo, "rerank_ms_per_query": harness.latency_summary(strat.rerank_ms),
                               "pairs_per_query": strat.pairs_per_query, "truncated_pairs": 0,
                               "truncation_note": "채점 전 쌍마다 길이를 세어 넘으면 실패한다 — 이 실행은 잘림 0 (실패 없이 끝남)"}
+    if splade:
+        sinfo = splade.info()
+        system["splade"] = sinfo
+        extra["device"] = sinfo["device"]
+        extra["splade"] = {k: sinfo[k] for k in ("model_id", "revision", "dtype", "max_length", "device", "libraries")}
     if embedder:
         info = embedder.info()
         system["embedding"] = info
@@ -173,14 +207,14 @@ def main(argv=None):
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--k", type=int, default=20, help="문서 순위 길이")
     p.add_argument("--chunk-k", type=int, default=100,
-                   help="전략이 가져오는 상위 청크 수 (S5a·S6는 구성요소 둘 다 같은 값). 기본 100")
+                   help="전략이 가져오는 상위 청크 수 (S5a·S5b·S6는 구성요소 둘 다 같은 값). 기본 100")
     p.add_argument("--device", choices=["cuda", "mps", "cpu"], default=None, help="임베딩 기기 (기본: cuda > mps > cpu 자동)")
     p.add_argument("--encode-batch", type=int, default=16, help="임베딩 배치 크기 (기본 16)")
     p.add_argument("--no-cache", action="store_true", help="임베딩 디스크 캐시를 쓰지 않는다")
-    p.add_argument("--hnsw-m", type=int, default=16, help="S4 HNSW m (자리표시 — dev에서 정한다)")
+    p.add_argument("--hnsw-m", type=int, default=16, help="S4(·변형) HNSW m (자리표시 — dev에서 정한다)")
     p.add_argument("--ef-construction", type=int, default=100, help="S4 HNSW ef_construction (자리표시)")
     p.add_argument("--num-candidates", type=int, default=100, help="S4 kNN num_candidates (자리표시, chunk-k 이상이어야 한다)")
-    p.add_argument("--rrf-k", type=int, default=60, help="S5a RRF k (자리표시 — dev에서 정한다)")
+    p.add_argument("--rrf-k", type=int, default=60, help="S5a·S5b RRF k (자리표시 — dev에서 정한다)")
     p.add_argument("--rerank-depth", type=int, default=50, help="S6 재정렬할 1단계(S5a) 문서 수 (기본 50)")
     p.add_argument("--rerank-batch", type=int, default=16, help="S6 reranker 배치 크기 (기본 16)")
     p.add_argument("--results", default=str(HERE / "results"))

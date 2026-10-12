@@ -1,0 +1,2 @@
+{"qid": "tk1", "type": "K", "text": "obs 컴포넌트의 Bedrock Guardrails 결정", "nodes": [{"technology": "Amazon Bedrock Guardrails", "repo": "medical-mate-ai", "component": "obs"}]}
+{"qid": "tk2", "type": "K", "text": "Electron 또는 decision-radar runtime의 Agents SDK 결정", "nodes": [{"technology": "Electron"}, {"technology": "OpenAI Agents SDK", "repo": "decision-radar", "component": "runtime"}]}
