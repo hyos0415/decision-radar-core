@@ -18,8 +18,8 @@ sys.path.insert(0, str(HERE.parent))
 
 import yaml  # noqa: E402
 
-from arena import chunking, corpus, es, harness  # noqa: E402
-from arena.strategies import s2_bm25  # noqa: E402
+from arena import chunking, corpus, embed, es, harness  # noqa: E402
+from arena.strategies import s2_bm25, s3b_bgem3_sparse, s4_dense, s5a_rrf  # noqa: E402
 
 FAILS = []
 
@@ -606,6 +606,316 @@ def _():
         assert raises(es.ESError, s.index, chunks)
     finally:
         es.call = real
+
+
+# --- HYO-35: 임베딩 · S4 · S3b · S5a (모델 다운로드 없음 — 가짜 인코더) ---------------------------------------------------
+
+class FakeBGEModel:
+    """BGEM3FlagModel 흉내: tokenizer(공백 단어 + 특수 토큰 2개) · encode(texts, **kw). 받은 인자를 기록한다."""
+
+    class _Tok:
+        def __call__(self, texts, add_special_tokens=True, truncation=False):
+            return {"input_ids": [list(range(len(t.split()) + (2 if add_special_tokens else 0))) for t in texts]}
+
+    def __init__(self):
+        self.tokenizer = self._Tok()
+        self.calls = []
+
+    def encode(self, texts, **kw):
+        import numpy as np
+        self.calls.append(dict(kw))
+        dense = np.zeros((len(texts), 1024), dtype=np.float32)
+        lex = []
+        for i, t in enumerate(texts):
+            dense[i, len(t) % 1024] = 1.0
+            lex.append({str(100 + j): 0.5 for j, _ in enumerate(t.split())})
+        return {"dense_vecs": dense, "lexical_weights": lex}
+
+
+class FakeEncoder:
+    """Embedder 테스트용 인코더 — 인코딩한 텍스트를 센다. dense는 단위 벡터(텍스트 길이 자리), sparse는 단어 → 가중치."""
+    model_id, revision, max_length, batch_size, device = "fake/model", "rev0123456789abcdef", 512, 16, "cpu"
+
+    def __init__(self):
+        self.encoded = []
+
+    def _enc(self, texts):
+        import numpy as np
+        dense = np.zeros((len(texts), 1024), dtype=np.float32)
+        sparse = []
+        for i, t in enumerate(texts):
+            dense[i, len(t) % 1024] = 1.0
+            sparse.append({w: 1.0 for w in t.split()})
+        return dense, sparse
+
+    def encode_docs(self, texts):
+        self.encoded += list(texts)
+        return self._enc(texts)
+
+    def encode_queries(self, texts):
+        return self._enc(texts)
+
+
+def chunks_of(*texts):
+    return [{"chunk_id": f"d{i}#0", "doc_id": f"d{i}", "source_type": "repo", "text": t} for i, t in enumerate(texts)]
+
+
+@case("BGEM3Encoder: 질의 · 문서가 같은 인자(fp32 설정 · max_length 512 · 지시문 없음)로 인코딩된다")
+def _():
+    m = FakeBGEModel()
+    enc = embed.BGEM3Encoder(model=m, revision="r", device="cpu")
+    enc.encode_docs(["alpha beta", "gamma"])
+    enc.encode_queries(["alpha"])
+    assert len(m.calls) == 2 and m.calls[0] == m.calls[1], m.calls
+    assert m.calls[0]["max_length"] == 512 and m.calls[0]["return_dense"] and m.calls[0]["return_sparse"]
+    assert not m.calls[0]["return_colbert_vecs"]
+    assert not any("instruction" in k or "prefix" in k for k in m.calls[0])
+
+
+@case("BGEM3Encoder: 512토큰(특수 토큰 포함)을 넘는 입력은 조용히 자르지 않고 실패한다 — 일부러 513 토큰을 넣는다")
+def _():
+    m = FakeBGEModel()
+    enc = embed.BGEM3Encoder(model=m, revision="r", device="cpu")
+    enc.encode_docs([" ".join(["w"] * 510)])                                            # 510 + 2 = 512 → 통과
+    assert raises(embed.TruncationError, enc.encode_docs, [" ".join(["w"] * 511)])      # 513 → 실패
+    assert len(m.calls) == 1                                                            # 실패한 입력은 모델에 가지도 않았다
+
+
+@case("BGEM3Encoder: 모델이 엉뚱한 모양을 돌려주면 실패한다 (dense 차원 · sparse 건수)")
+def _():
+    class BadDense(FakeBGEModel):
+        def encode(self, texts, **kw):
+            out = super().encode(texts, **kw)
+            out["dense_vecs"] = out["dense_vecs"][:, :512]
+            return out
+
+    class BadSparse(FakeBGEModel):
+        def encode(self, texts, **kw):
+            out = super().encode(texts, **kw)
+            out["lexical_weights"] = out["lexical_weights"][:-1]
+            return out
+    assert raises(ValueError, embed.BGEM3Encoder(model=BadDense(), revision="r", device="cpu").encode_docs, ["a b"])
+    assert raises(ValueError, embed.BGEM3Encoder(model=BadSparse(), revision="r", device="cpu").encode_docs, ["a b", "c d"])
+
+
+@case("임베딩 캐시: 같은 텍스트는 적중 · 텍스트가 바뀌면 다시 인코딩 · 디스크에서 다시 읽어도 적중 · 버전이 다르면 적중 없음")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        enc = FakeEncoder()
+        e1 = embed.Embedder(enc, "c@v1", "p@v1", cache_root=tmp)
+        d1, s1 = e1.encode_chunks(chunks_of("alpha beta", "gamma delta epsilon"))
+        assert len(enc.encoded) == 2 and e1.stats["cache_hits"] == 0
+        # 새 Embedder(다른 프로세스 흉내) — 같은 텍스트면 인코딩 0회
+        enc2 = FakeEncoder()
+        e2 = embed.Embedder(enc2, "c@v1", "p@v1", cache_root=tmp)
+        d2, s2 = e2.encode_chunks(chunks_of("alpha beta", "gamma delta epsilon"))
+        assert enc2.encoded == [] and e2.stats["cache_hits"] == 2 and (d1 == d2).all() and s1 == s2
+        # 하나만 바뀌면 그것만 다시
+        enc3 = FakeEncoder()
+        e3 = embed.Embedder(enc3, "c@v1", "p@v1", cache_root=tmp)
+        d3, s3 = e3.encode_chunks(chunks_of("alpha beta", "gamma delta CHANGED"))
+        assert enc3.encoded == ["gamma delta CHANGED"] and e3.stats["cache_hits"] == 1
+        assert s3[1] == {"gamma": 1.0, "delta": 1.0, "CHANGED": 1.0}                    # 옛 값이 아니라 새 값
+        # 코퍼스 버전 · 정책 버전 · 모델 revision이 다르면 이름공간이 다르다 → 적중 없음
+        for corpus_v, pol_v, rev in (("c@v2", "p@v1", "rev0123456789abcdef"), ("c@v1", "p@v2", "rev0123456789abcdef"),
+                                     ("c@v1", "p@v1", "otherrevision0000")):
+            en = FakeEncoder()
+            en.revision = rev
+            embed.Embedder(en, corpus_v, pol_v, cache_root=tmp).encode_chunks(chunks_of("alpha beta"))
+            assert en.encoded == ["alpha beta"], (corpus_v, pol_v, rev)
+        # 캐시를 끄면 항상 인코딩
+        enc4 = FakeEncoder()
+        embed.Embedder(enc4, "c@v1", "p@v1", cache_root=tmp, use_cache=False).encode_chunks(chunks_of("alpha beta"))
+        assert enc4.encoded == ["alpha beta"]
+
+
+@case("임베딩 캐시: 항목 수가 어긋난(깨진) 캐시는 조용히 쓰지 않고 실패한다")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        e = embed.Embedder(FakeEncoder(), "c@v1", "p@v1", cache_root=tmp)
+        e.encode_chunks(chunks_of("alpha beta", "gamma"))
+        (Path(tmp) / e.namespace / "sparse.json").write_text(json.dumps([{"a": 1.0}]), encoding="utf-8")   # 2건이어야 하는데 1건
+        assert raises(ValueError, embed.Embedder, FakeEncoder(), "c@v1", "p@v1", tmp)
+
+
+@case("임베딩 info: 모델 id · revision · dtype fp32 · 기기 · 라이브러리 버전 · 인코딩 시간을 기록한다")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        e = embed.Embedder(FakeEncoder(), "c@v1", "p@v1", cache_root=tmp)
+        e.encode_chunks(chunks_of("a b"))
+        e.encode_query("a")
+        i = e.info()
+        assert i["model_id"] == "fake/model" and i["revision"] == "rev0123456789abcdef" and i["dtype"] == "float32"
+        assert i["device"] == "cpu" and i["dense_dim"] == 1024 and i["max_length"] == 512 and i["instruction_prefix"] is None
+        assert "torch" in i["libraries"] and "FlagEmbedding" in i["libraries"]
+        assert i["encoded"] == 1 and i["chunk_encode_seconds"] >= 0 and i["queries_encoded"] == 1
+        assert "c@v1" in i["cache_namespace"] and "p@v1" in i["cache_namespace"] and "rev012345678" in i["cache_namespace"]
+
+
+def fake_es_for(state, hits):
+    def fake(base, method, path, body=None, ndjson=False, timeout=120):
+        state.setdefault("calls", []).append((method, path, body))
+        if path.endswith("/_count"):
+            return 200, {"count": state["count"]}
+        if path.endswith("/_search"):
+            return 200, {"took": 2, "hits": {"hits": [{"_id": c, "_score": s} for c, s in hits]}}
+        if path == "/_bulk":
+            return 200, {"errors": False, "items": []}
+        return 200, {}
+    return fake
+
+
+@case("S4: 색인 본문 — dims 1024 · cosine · hnsw(m · ef_construction) · 양자화 없음 · replicas 0 · 인덱스 이름에 코퍼스 버전")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        emb = embed.Embedder(FakeEncoder(), "c-all@v1", "p@v1", cache_root=tmp)
+        s = s4_dense.S4Dense("c-all@v1", emb, m=24, ef_construction=150, num_candidates=80)
+        assert s.index_name == "arena-c-all-v1-s4"
+        f = s._body()["mappings"]["properties"]["embedding"]
+        assert f == {"type": "dense_vector", "dims": 1024, "index": True, "similarity": "cosine",
+                     "index_options": {"type": "hnsw", "m": 24, "ef_construction": 150}}, f
+        assert "int8" not in json.dumps(s._body()) and "bbq" not in json.dumps(s._body())
+        assert s._body()["settings"]["index"]["number_of_replicas"] == 0
+        st = s.settings()
+        assert st["dense_vector"]["index_options"] == {"type": "hnsw", "m": 24, "ef_construction": 150}
+        assert st["query"]["num_candidates"] == 80 and st["quantization"] is None
+        assert st["embedding_model"] == "fake/model@rev0123456789abcdef"
+        d = s4_dense.S4Dense("c-all@v1", emb)
+        assert (d.m, d.ef_construction, d.num_candidates) == (16, 100, 100)             # 기본값
+        for bad in ({"m": 1}, {"m": 16.0}, {"ef_construction": 0}, {"num_candidates": 20000}, {"m": True}):
+            assert raises(ValueError, s4_dense.S4Dense, "c-all@v1", emb, **bad), bad
+
+
+@case("S4: kNN 질의 본문(k · num_candidates · 1024차원 벡터) · k > num_candidates는 거부 · 건수 불일치는 실패 — 가짜 ES")
+def _():
+    real = es.call
+    state = {"count": 2}
+    try:
+        es.call = fake_es_for(state, [("d0#0", 0.9), ("d1#0", 0.6)])
+        with tempfile.TemporaryDirectory() as tmp:
+            emb = embed.Embedder(FakeEncoder(), "c-all@v1", "p@v1", cache_root=tmp)
+            s = s4_dense.S4Dense("c-all@v1", emb, num_candidates=50)
+            chunks = chunks_of("alpha beta", "gamma")
+            s.index(chunks)
+            put = [c for c in state["calls"] if c[0] == "PUT"][0]
+            assert put[2]["mappings"]["properties"]["embedding"]["dims"] == 1024
+            assert s.search("alpha", 10) == [("d0#0", 0.9), ("d1#0", 0.6)] and s.took_ms == [2]
+            knn = [c for c in state["calls"] if c[1].endswith("/_search")][0][2]["knn"]
+            assert knn["k"] == 10 and knn["num_candidates"] == 50 and knn["field"] == "embedding" and len(knn["query_vector"]) == 1024
+            assert raises(ValueError, s.search, "alpha", 51)
+            state["count"] = 1
+            assert raises(es.ESError, s.index, chunks)
+    finally:
+        es.call = real
+
+
+@case("S3b: 점수 = lexical weights 내적 (손계산과 같다) · 겹침 없는 청크는 순위에 없다 · 동점은 색인 순서")
+def _():
+    # 손계산: q={a:.5, b:.25}  d0={a:.4, c:1} → .5*.4 = .2   d1={b:.8, a:.2} → .25*.8+.5*.2 = .3   d2={z:1} → 0   d3={a:.4} → .2
+    assert abs(s3b_bgem3_sparse.dot({"a": .5, "b": .25}, {"a": .4, "c": 1.0}) - 0.2) < 1e-12
+    assert abs(s3b_bgem3_sparse.dot({"b": .8, "a": .2}, {"a": .5, "b": .25}) - 0.3) < 1e-12
+
+    class SparseEmb:
+        encoder = FakeEncoder()
+
+        def encode_chunks(self, chunks):
+            return None, [{"a": .4, "c": 1.0}, {"b": .8, "a": .2}, {"z": 1.0}, {"a": .4}]
+
+        def encode_query(self, text):
+            return None, {"a": .5, "b": .25}
+    s = s3b_bgem3_sparse.S3bSparse("c@v1", SparseEmb())
+    s.index(chunks_of("x", "y", "z", "w"))
+    got = s.search("q", 10)
+    assert [c for c, _ in got] == ["d1#0", "d0#0", "d3#0"]                              # d3도 .2로 d0와 동점 → 색인 순서
+    assert abs(got[0][1] - 0.3) < 1e-12 and abs(got[1][1] - 0.2) < 1e-12 and abs(got[2][1] - 0.2) < 1e-12
+    assert [c for c, _ in s.search("q", 2)] == ["d1#0", "d0#0"]
+    assert s.n_indexed == 4 and s.index_size_bytes() == 6 * 8 and s.server_version() is None
+
+
+@case("RRF: ranx 결과가 손계산(1/(k+순위) 합)과 같다 · k 기록 · 빈 구성요소 · 잘못된 k는 거부")
+def _():
+    # k=60: A = 1/61 + 1/63 · B = 1/62 + 1/61 · C = 1/63 · D = 1/62
+    got = dict(s5a_rrf.rrf_fuse([["A", "B", "C"], ["B", "D", "A"]], k=60))
+    want = {"A": 1 / 61 + 1 / 63, "B": 1 / 62 + 1 / 61, "C": 1 / 63, "D": 1 / 62}
+    assert set(got) == set(want) and all(abs(got[d] - want[d]) < 1e-9 for d in want), (got, want)
+    assert [d for d, _ in s5a_rrf.rrf_fuse([["A", "B", "C"], ["B", "D", "A"]], k=60)] == ["B", "A", "D", "C"]
+    # k를 바꾸면 점수가 바뀐다 (k=1: A = 1/2 + 1/4)
+    got1 = dict(s5a_rrf.rrf_fuse([["A", "B", "C"], ["B", "D", "A"]], k=1))
+    assert abs(got1["A"] - (1 / 2 + 1 / 4)) < 1e-9
+    # 한쪽이 비어도 다른 쪽 순위가 그대로 나온다 (자리표시 문서는 결과에 없다)
+    one = s5a_rrf.rrf_fuse([["A", "B"], []], k=60)
+    assert [d for d, _ in one] == ["A", "B"] and abs(one[0][1] - 1 / 61) < 1e-9
+    assert s5a_rrf.rrf_fuse([[], []], k=60) == []
+    for bad in (0, -1, 60.0, True):
+        assert raises(ValueError, s5a_rrf.rrf_fuse, [["A"]], bad), bad
+
+
+class FakeComponent:
+    def __init__(self, id_, hits):
+        self.id, self.version, self._hits = id_, "v1", hits
+        self.took_ms, self.n_indexed, self.asked = [], 0, []
+
+    def settings(self):
+        return {"marker": self.id}
+
+    def index(self, chunks):
+        self.n_indexed = len(chunks)
+
+    def search(self, q, k):
+        self.asked.append(k)
+        return self._hits
+
+    def index_size_bytes(self):
+        return 10
+
+
+@case("S5a: 문서 단위 융합 — 같은 문서의 두 청크는 한 번만 센다 · 손계산과 같다 · 대표 청크 · 설정 기록 · k 불일치는 거부")
+def _():
+    chunk_to_doc = {"A#0": "A", "A#1": "A", "B#0": "B", "C#0": "C"}
+    chunks = [{"chunk_id": c, "doc_id": d, "source_type": "repo", "text": "t"} for c, d in chunk_to_doc.items()]
+    # S2: A#1 (A 1위), B#0 (B 2위), A#0 (같은 문서 A — 버린다)      S4: C#0 (C 1위), B#0 (B 2위), A#0 (A 3위)
+    s2 = FakeComponent("S2", [("A#1", 9.0), ("B#0", 8.0), ("A#0", 7.0)])
+    s4 = FakeComponent("S4", [("C#0", 0.9), ("B#0", 0.8), ("A#0", 0.7)])
+    s = s5a_rrf.S5aRRF(s2, s4, rrf_k=60, chunk_k=100)
+    s.index(chunks)
+    got = s.search("q", 100)
+    # A = 1/61 + 1/63 · B = 1/62 + 1/62 · C = 1/61.  (A#0을 문서 순위에 두 번 세면 A가 더 커졌을 것이다)
+    want = {"A": 1 / 61 + 1 / 63, "B": 2 / 62, "C": 1 / 61}
+    by_doc = {chunk_to_doc[c]: sc for c, sc in got}
+    assert len(got) == 3 and all(abs(by_doc[d] - want[d]) < 1e-9 for d in want), (by_doc, want)
+    assert [chunk_to_doc[c] for c, _ in got] == sorted(want, key=lambda d: -want[d])
+    rep = {chunk_to_doc[c]: c for c, _ in got}
+    assert rep["A"] == "A#1" and rep["C"] == "C#0"                                      # 더 높은 순위로 올라온 청크가 대표
+    assert s2.asked == [100] and s4.asked == [100]                                      # 두 구성요소가 같은 N
+    # 하네스 rollup을 거쳐도 문서당 하나이고 순서가 같다
+    assert [d for d, _ in harness.rollup(got, chunk_to_doc)] == [chunk_to_doc[c] for c, _ in got]
+    st = s.settings()
+    assert st["fusion"]["method"] == "rrf" and st["fusion"]["params"] == {"k": 60} and st["component_chunk_k"] == 100
+    assert st["components"]["s2"]["marker"] == "S2" and st["components"]["s4"]["marker"] == "S4"
+    assert st["reuse_of_saved_results"] is False
+    assert raises(ValueError, s.search, "q", 50)                                        # chunk_k와 다른 k
+    assert s.index_size_bytes() == 20 and s.size_breakdown() == {"s2": 10, "s4": 10}
+    for bad in ({"rrf_k": 0}, {"chunk_k": 0}, {"rrf_k": 1.5}):
+        assert raises(ValueError, s5a_rrf.S5aRRF, s2, s4, **bad), bad
+
+
+@case("S5a: 구성요소를 둘 다 새로 색인한다 (저장된 결과 재사용 없음) · 모르는 청크 id는 실패")
+def _():
+    s2, s4 = FakeComponent("S2", []), FakeComponent("S4", [("ghost#0", 1.0)])
+    s = s5a_rrf.S5aRRF(s2, s4)
+    s.index(chunks_of("x", "y"))
+    assert s2.n_indexed == 2 and s4.n_indexed == 2 and s.n_indexed == 2
+    assert raises(KeyError, s.search, "q", 100)
+
+
+@case("CLI: --strategy에 s2 · s3b · s4 · s5a가 있다 · 결과 키에 전략 id/버전이 들어간다")
+def _():
+    import importlib
+    cli = importlib.import_module("arena.cli")
+    assert cli.STRATEGY_CHOICES == ["s2", "s3b", "s4", "s5a"]
+    assert harness.result_key("S5a", "v1", "c-all@v1", "toy@v0").startswith("S5a.v1__")
+    assert harness.result_key("S3b", "v1", "c-all@v1", "toy@v0").startswith("S3b.v1__")
+    assert harness.result_key("S4", "v1", "c-all@v1", "toy@v0").startswith("S4.v1__")
 
 
 if FAILS:
