@@ -1,7 +1,7 @@
 """Arena CLI.
 
   python arena/cli.py stats --snapshots <radar-snapshots> --adr <adr> --repo decision-radar=<경로> ... [--out stats.json]
-  python arena/cli.py run   --strategy s2|s3b|s4|s5a --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
+  python arena/cli.py run   --strategy s2|s3b|s4|s5a|s6 --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
 
 코퍼스 폴더 위치는 전부 인자다 (Windows · M1 Mac 둘 다). 설정(버전·커밋·파일)은 arena/corpus/c-all@v1.json.
 gold가 확정되기 전이라 `run`은 장난감 질의로만 돌린다 — gold 버전 이름에 `toy`를 넣는다.
@@ -65,8 +65,8 @@ def cmd_stats(args):
                                              ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
 
-STRATEGY_CHOICES = ["s2", "s3b", "s4", "s5a"]
-EMBEDDING_STRATEGIES = ("s3b", "s4", "s5a")
+STRATEGY_CHOICES = ["s2", "s3b", "s4", "s5a", "s6"]
+EMBEDDING_STRATEGIES = ("s3b", "s4", "s5a", "s6")
 
 
 def make_strategy(name, args, cfg, policy, embedder):
@@ -86,7 +86,12 @@ def make_strategy(name, args, cfg, policy, embedder):
     if name == "s4":
         return s4()
     from arena.strategies.s5a_rrf import S5aRRF
-    return S5aRRF(S2BM25(cv, es_url=args.es_url), s4(), rrf_k=args.rrf_k, chunk_k=args.chunk_k)
+    s5a = S5aRRF(S2BM25(cv, es_url=args.es_url), s4(), rrf_k=args.rrf_k, chunk_k=args.chunk_k)
+    if name == "s5a":
+        return s5a
+    from arena.strategies.s6_rerank import CrossEncoder, S6Rerank
+    reranker = CrossEncoder(device=args.device, batch_size=args.rerank_batch)
+    return S6Rerank(s5a, reranker, depth=args.rerank_depth)
 
 
 def make_embedder(args, cfg, policy):
@@ -133,11 +138,18 @@ def cmd_run(args):
         "elasticsearch": strat.server_version(),
         "gold_version": args.gold_version, "tier": args.tier, "seed": args.seed,
     }
+    if hasattr(strat, "reranker"):
+        rinfo = strat.reranker.info()
+        system["reranker"] = {**rinfo, "rerank_ms_per_query": harness.latency_summary(strat.rerank_ms),
+                              "pairs_per_query": strat.pairs_per_query, "truncated_pairs": 0,
+                              "truncation_note": "채점 전 쌍마다 길이를 세어 넘으면 실패한다 — 이 실행은 잘림 0 (실패 없이 끝남)"}
     if embedder:
         info = embedder.info()
         system["embedding"] = info
         extra["device"] = info["device"]
         extra["embedding"] = {k: info[k] for k in ("model_id", "revision", "dtype", "max_length", "device", "libraries")}
+        if "reranker" in system:
+            extra["reranker"] = {k: system["reranker"][k] for k in ("model_id", "revision", "dtype", "max_length", "device", "libraries")}
     env = harness.env_info(extra)
     out = harness.save_results(args.results, key, run, metrics, system, env)
     print(f"결과: {out}")
@@ -161,7 +173,7 @@ def main(argv=None):
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--k", type=int, default=20, help="문서 순위 길이")
     p.add_argument("--chunk-k", type=int, default=100,
-                   help="전략이 가져오는 상위 청크 수 (S5a는 구성요소 둘 다 같은 값). 기본 100")
+                   help="전략이 가져오는 상위 청크 수 (S5a·S6는 구성요소 둘 다 같은 값). 기본 100")
     p.add_argument("--device", choices=["cuda", "mps", "cpu"], default=None, help="임베딩 기기 (기본: cuda > mps > cpu 자동)")
     p.add_argument("--encode-batch", type=int, default=16, help="임베딩 배치 크기 (기본 16)")
     p.add_argument("--no-cache", action="store_true", help="임베딩 디스크 캐시를 쓰지 않는다")
@@ -169,6 +181,8 @@ def main(argv=None):
     p.add_argument("--ef-construction", type=int, default=100, help="S4 HNSW ef_construction (자리표시)")
     p.add_argument("--num-candidates", type=int, default=100, help="S4 kNN num_candidates (자리표시, chunk-k 이상이어야 한다)")
     p.add_argument("--rrf-k", type=int, default=60, help="S5a RRF k (자리표시 — dev에서 정한다)")
+    p.add_argument("--rerank-depth", type=int, default=50, help="S6 재정렬할 1단계(S5a) 문서 수 (기본 50)")
+    p.add_argument("--rerank-batch", type=int, default=16, help="S6 reranker 배치 크기 (기본 16)")
     p.add_argument("--results", default=str(HERE / "results"))
     p.add_argument("--es-url", default=None)
     p.set_defaults(fn=cmd_run)

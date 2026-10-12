@@ -25,3 +25,6 @@ sentencepiece==0.2.2
 # (accelerate 1.15.0 · peft 0.21.2 · datasets 5.1.0 · scikit-learn 1.9.1 · sentence-transformers 6.1.0 도 같이 설치됐다 — FlagEmbedding의 의존성이고 Arena는 직접 쓰지 않는다)
 # 모델: BAAI/bge-m3 (HF revision은 실행마다 env.json · system.json에 기록된다. 2026-10-12 받은 것: 5617a9f61b028005a4858fdac845db406aefb181)
 # naver/splade-v3 (S3a)는 Hugging Face 게이트 모델이라 자격 없이는 받을 수 없다 — 아직 설치·구현하지 않았다
+
+# --- HYO-35: S6 Reranker — 새 의존성 없음 (FlagEmbedding의 FlagReranker를 쓴다) ---
+# 모델: BAAI/bge-reranker-v2-m3 (약 2.2GB, fp32. HF revision은 실행마다 system.json · env.json에 기록된다. 2026-10-12 받은 것: 953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e)
