@@ -98,20 +98,38 @@ class S5aRRF:
         self.warmup_seconds = warm_up()
         self.n_indexed = self.s2.n_indexed
 
-    def search(self, query, k):
-        if k != self.chunk_k:
-            raise ValueError(f"S5a는 구성요소마다 같은 상위 N 청크(chunk_k={self.chunk_k})를 쓴다 — 요청 k={k}와 달라 거부한다")
-        ranked = []          # [[(doc, chunk, score)]] 구성요소별 문서 순위
+    def _first_stage(self, query):
+        """-> (fused [(doc, 점수)], rep {doc: (순위, 구성요소 순서, 대표 chunk_id)},
+        seen {doc: [chunk_id]} 두 구성요소 상위 chunk_k 청크 목록에 나온 청크 (구성요소 순서 → 순위 순서, 중복 없음))"""
+        ranked, seen = [], {}
         for comp in (self.s2, self.s4):
-            ranked.append(harness.rollup_chunks(comp.search(query, self.chunk_k), self.chunk_to_doc))
-        rep = {}             # doc → (순위, 구성요소 순서, chunk_id) 가장 좋은 것
+            hits = comp.search(query, self.chunk_k)
+            for cid, _ in hits:
+                if cid not in self.chunk_to_doc:          # rollup과 같게 모르는 청크 id는 실패
+                    raise KeyError(f"전략이 모르는 청크 id를 돌려줬다: {cid}")
+                lst = seen.setdefault(self.chunk_to_doc[cid], [])
+                if cid not in lst:
+                    lst.append(cid)
+            ranked.append(harness.rollup_chunks(hits, self.chunk_to_doc))
+        rep = {}             # doc -> (순위, 구성요소 순서, chunk_id) 가장 좋은 것
         for ci, docs in enumerate(ranked):
             for rank, (doc, chunk, _) in enumerate(docs):
                 cur = rep.get(doc)
                 if cur is None or (rank, ci) < cur[:2]:
                     rep[doc] = (rank, ci, chunk)
         fused = rrf_fuse([[d for d, _, _ in docs] for docs in ranked], self.rrf_k)
+        return fused, rep, seen
+
+    def search(self, query, k):
+        if k != self.chunk_k:
+            raise ValueError(f"S5a는 구성요소마다 같은 상위 N 청크(chunk_k={self.chunk_k})를 쓴다 — 요청 k={k}와 달라 거부한다")
+        fused, rep, _ = self._first_stage(query)
         return [(rep[d][2], round(s, 12)) for d, s in fused]
+
+    def first_stage_candidates(self, query):
+        """S6용 — 융합 순서의 [(doc, [후보 chunk_id])]. 후보 = 두 구성요소 상위 chunk_k 청크 목록에 나온 그 문서의 청크 전부."""
+        fused, _, seen = self._first_stage(query)
+        return [(d, seen[d]) for d, _ in fused]
 
     def index_size_bytes(self):
         return self.s2.index_size_bytes() + self.s4.index_size_bytes()

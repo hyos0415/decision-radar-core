@@ -19,7 +19,7 @@ sys.path.insert(0, str(HERE.parent))
 import yaml  # noqa: E402
 
 from arena import chunking, corpus, embed, es, harness  # noqa: E402
-from arena.strategies import s2_bm25, s3b_bgem3_sparse, s4_dense, s5a_rrf  # noqa: E402
+from arena.strategies import s2_bm25, s3b_bgem3_sparse, s4_dense, s5a_rrf, s6_rerank  # noqa: E402
 
 FAILS = []
 
@@ -908,12 +908,107 @@ def _():
     assert raises(KeyError, s.search, "q", 100)
 
 
-@case("CLI: --strategy에 s2 · s3b · s4 · s5a가 있다 · 결과 키에 전략 id/버전이 들어간다")
+# --- HYO-35: S6 Reranker (가짜 cross-encoder — 모델 다운로드 없음) ---------------------------------------------------------
+
+class FakeRerankModel:
+    """FlagReranker 흉내: tokenizer(질의들, 청크들) = 공백 단어 수 + 특수 토큰 4개 · compute_score(pairs, **kw) = 청크 텍스트 → 점수 표."""
+
+    class _Tok:
+        def __call__(self, qs, ps, add_special_tokens=True, truncation=False):
+            return {"input_ids": [list(range(len(q.split()) + len(p.split()) + (4 if add_special_tokens else 0)))
+                                  for q, p in zip(qs, ps)]}
+
+    def __init__(self, table):
+        self.tokenizer, self.table, self.calls, self.pairs_seen = self._Tok(), table, [], []
+
+    def compute_score(self, pairs, **kw):
+        self.calls.append(dict(kw))
+        self.pairs_seen += [tuple(p) for p in pairs]
+        return [self.table[p[1]] for p in pairs]
+
+
+def s6_setup(table, depth=50, max_length=1024):
+    """문서 A(청크 2개) B C D. S2 상위 A#0 B#0 C#0 · S4 상위 B#0 A#1 D#0 → 융합 순서 A B C D (A·B 동점은 먼저 등장한 A)"""
+    chunks = [{"chunk_id": cid, "doc_id": cid[0], "source_type": "repo", "text": f"text-{cid}"}
+              for cid in ("A#0", "A#1", "B#0", "C#0", "D#0", "D#1")]       # D#1은 두 목록 어디에도 안 나온다 — 채점 대상이 아니다
+    s2 = FakeComponent("S2", [("A#0", 3.0), ("B#0", 2.0), ("C#0", 1.0)])
+    s4 = FakeComponent("S4", [("B#0", 3.0), ("A#1", 2.0), ("D#0", 1.0)])
+    first = s5a_rrf.S5aRRF(s2, s4, chunk_k=100)
+    model = FakeRerankModel({f"text-{cid}": v for cid, v in table.items()})
+    enc = s6_rerank.CrossEncoder(model=model, device="cpu", revision="revfake0123456789", max_length=max_length, batch_size=8)
+    s = s6_rerank.S6Rerank(first, enc, depth=depth)
+    s.index(chunks)
+    return s, model, {c["chunk_id"]: c["doc_id"] for c in chunks}
+
+
+S6_TABLE = {"A#0": 0.1, "A#1": 0.9, "B#0": 0.5, "C#0": 0.5, "D#0": 0.7, "D#1": 99.0}
+
+
+@case("S6: 문서 점수 = 청크 점수의 최댓값 (2번째 청크가 이긴다) · 대표 청크 = 최고 점수 청크 · 동점은 1단계 순서")
+def _():
+    s, model, c2d = s6_setup(S6_TABLE)
+    assert [d for d, _, _ in harness.rollup_chunks([(c, 0.0) for c in ["A#0"]], c2d)] == ["A"]      # 도우미 확인
+    first_order = [d for d, _ in s.first._first_stage("q")[0]]
+    assert first_order == ["A", "B", "C", "D"], first_order                                        # 1단계: 재정렬 전 A가 1위
+    got = s.search("q", 100)
+    docs = [c2d[c] for c, _ in got]
+    assert docs == ["A", "D", "B", "C"], docs                           # A: max(.1,.9)=.9 · D .7 · B·C 동점 .5 → 1단계 순서(B 먼저)
+    assert dict(got)["A#1"] == 0.9 and "A#0" not in dict(got)           # 대표 청크는 2번째 청크 A#1
+    assert [round(sc, 3) for _, sc in got] == [0.9, 0.7, 0.5, 0.5]
+    assert s.first.s2.asked == [100, 100] and s.first.s4.asked == [100, 100]       # 1단계(직접 호출 1 + search 1) 모두 chunk_k=100
+    # 하네스 rollup을 거쳐도 순서·대표가 그대로다
+    assert [(d, c) for d, c, _ in harness.rollup_chunks(got, c2d)] == [(c2d[c], c) for c, _ in got]
+    # 후보 = 두 목록에 나온 청크만 (D#1은 채점하지 않았다)
+    assert sorted(p[1] for p in model.pairs_seen) == sorted(f"text-{c}" for c in ("A#0", "A#1", "B#0", "C#0", "D#0"))
+    assert all(p[0] == "q" for p in model.pairs_seen)
+
+
+@case("S6: 깊이 컷 — 1단계 상위 depth 문서만 채점·반환한다")
+def _():
+    s, model, c2d = s6_setup(S6_TABLE, depth=2)
+    got = s.search("q", 100)
+    assert [c2d[c] for c, _ in got] == ["A", "B"], got                  # C·D는 점수가 높아도 후보가 아니다
+    assert sorted(p[1] for p in model.pairs_seen) == ["text-A#0", "text-A#1", "text-B#0"]
+    assert s.pairs_per_query == [3] and len(s.rerank_ms) == 1
+    for bad in (0, -1, 1.5, True):
+        assert raises(ValueError, s6_rerank.S6Rerank, s.first, s.reranker, depth=bad), bad
+
+
+@case("S6: 쌍이 max_length를 넘으면 채점 전에 실패한다 (조용한 잘림 없음) · 안 넘으면 통과")
+def _():
+    s, model, _ = s6_setup(S6_TABLE, max_length=7)                      # 질의 1 + 청크 1 + 특수 4 = 6 ≤ 7
+    assert len(s.search("q", 100)) == 4
+    n_calls = len(model.calls)
+    assert raises(s6_rerank.TruncationError, s.search, "긴 질의 하나 둘", 100)    # 4 + 1 + 4 = 9 > 7
+    assert len(model.calls) == n_calls                                  # 모델은 부르지 않았다
+    assert s.reranker.max_pair_tokens == 9
+    assert raises(ValueError, s.search, "q", 50)                        # chunk_k와 다른 k
+
+
+@case("S6: 설정·모델·revision·기기·dtype·인자 기록 (system.json 재료)")
+def _():
+    s, model, _ = s6_setup(S6_TABLE, depth=3)
+    s.search("q", 100)
+    st = s.settings()
+    assert st["model"] == s6_rerank.MODEL_ID
+    assert st["revision"] == "revfake0123456789" and st["dtype"] == "float32" and st["max_length"] == 1024
+    assert st["rerank_depth"] == 3 and st["batch_size"] == 8 and "logit" in st["score"]
+    assert st["first_stage"]["id"] == "S5a" and st["first_stage"]["component_chunk_k"] == 100
+    assert st["first_stage"]["fusion"]["params"] == {"k": 60} and "s2" in st["first_stage"]["components"]
+    assert model.calls == [{"batch_size": 8, "max_length": 1024, "normalize": False}]       # 정규화 끔 · 배치 · 길이가 모델까지 간다
+    info = s.reranker.info()
+    assert info["model_id"] == s6_rerank.MODEL_ID and info["dtype"] == "float32" and info["device"] == "cpu"
+    assert info["pairs_scored"] == 4 and "FlagEmbedding" in info["libraries"]
+    assert s.index_size_bytes() == 20 and s.n_indexed == 6
+
+
+@case("CLI: --strategy에 s2 · s3b · s4 · s5a · s6이 있다 · 결과 키에 전략 id/버전이 들어간다")
 def _():
     import importlib
     cli = importlib.import_module("arena.cli")
-    assert cli.STRATEGY_CHOICES == ["s2", "s3b", "s4", "s5a"]
+    assert cli.STRATEGY_CHOICES == ["s2", "s3b", "s4", "s5a", "s6"] and "s6" in cli.EMBEDDING_STRATEGIES
     assert harness.result_key("S5a", "v1", "c-all@v1", "toy@v0").startswith("S5a.v1__")
+    assert harness.result_key("S6", "v1", "c-all@v1", "toy@v0").startswith("S6.v1__")
     assert harness.result_key("S3b", "v1", "c-all@v1", "toy@v0").startswith("S3b.v1__")
     assert harness.result_key("S4", "v1", "c-all@v1", "toy@v0").startswith("S4.v1__")
 
