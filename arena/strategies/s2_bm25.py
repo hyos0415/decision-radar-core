@@ -35,7 +35,7 @@ class S2BM25:
         return {
             "index": self.index_name,
             "similarity": {"type": "BM25", "k1": self.k1, "b": self.b},
-            "analyzers": {"text": "nori (decompound_mode=discard, 기본)", "text.en": "english"},
+            "analyzers": {"text": "nori (decompound_mode=mixed — 원형과 분해형을 둘 다 색인, 사용자 2026-10-12)", "text.en": "english"},
             "query": {"type": "multi_match", "fields": self.fields, "multi_match_type": "best_fields"},
             "number_of_shards": 1, "number_of_replicas": 0,
         }
@@ -45,7 +45,7 @@ class S2BM25:
             "settings": {
                 "index": {"number_of_shards": 1, "number_of_replicas": 0,
                           "similarity": {"bm25_s2": {"type": "BM25", "k1": self.k1, "b": self.b}}},
-                "analysis": {"analyzer": {"ko_nori": {"type": "nori"}}},
+                "analysis": {"analyzer": {"ko_nori": {"type": "nori", "decompound_mode": "mixed"}}},
             },
             "mappings": {"properties": {
                 "chunk_id": {"type": "keyword"},

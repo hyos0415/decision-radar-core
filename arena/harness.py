@@ -14,7 +14,8 @@ from importlib import metadata
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-METRICS = ["recall@5", "recall@10", "recall@20", "ndcg@10", "mrr"]
+# Recall·MRR은 등급 2(답이 되는 1차 출처)만 정답으로 센다(-l2). 등급 1까지는 등급을 쓰는 nDCG가 반영한다 (사용자 2026-10-12)
+METRICS = ["recall@5-l2", "recall@10-l2", "recall@20-l2", "ndcg@10", "mrr-l2"]
 SOURCE_TYPE_KS = (5, 10, 20)
 GRADES = (0, 1, 2)
 

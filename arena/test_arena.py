@@ -320,7 +320,7 @@ def _():
     blob = json.dumps(cfg)
     assert ":/" not in blob and "\\\\" not in blob and "Users" not in blob
     pol = chunking.load_policy(HERE / "corpus" / "chunk-policy@v1.json")
-    assert pol["max_tokens"] == 512 and pol["tokenizers"] == ["BAAI/bge-m3", "bert-base-uncased"]
+    assert pol["max_tokens"] == 512 and pol["tokenizers"] == ["BAAI/bge-m3"] and pol["status"] == "fixed"
     assert cfg["chunk_policy"] == pol["version"]
 
 
@@ -483,31 +483,31 @@ def _():
         assert raises(ValueError, harness.load_queries, p)
 
 
-@case("지표: 손으로 계산한 값과 같다 (Recall@k · nDCG@10 · MRR, 유형별 · 빈 결과 질의는 0)")
+@case("지표: 손으로 계산한 값과 같다 (Recall@k·MRR은 등급 2만 · nDCG@10은 등급 1도, 유형별 · 빈 결과 질의는 0)")
 def _():
     queries = [{"qid": "q1", "text": "", "type": "A"}, {"qid": "q2", "text": "", "type": "B"},
                {"qid": "q3", "text": "", "type": "B"}]
-    qrels = {"q1": {"d1": 1}, "q2": {"d2": 2}, "q3": {"d3": 1}}
-    run = {"q1": {"d9": 3.0, "d1": 2.0},          # 정답이 2위 → MRR 0.5 · Recall@5 1 · nDCG@10 = 1/log2(3)
+    qrels = {"q1": {"d1": 2, "d5": 1}, "q2": {"d2": 2}, "q3": {"d3": 2}}
+    run = {"q1": {"d5": 4.0, "d9": 3.0, "d1": 2.0},  # 1위는 등급 1 → MRR·Recall(-l2)은 세지 않는다: 등급 2가 3위 → MRR 1/3
            "q2": {"d2": 1.0},                     # 1위 → 모두 1
            "q3": {}}                              # 결과 없음 → 모두 0
-    st = {d: "repo" for d in ("d1", "d2", "d3", "d9")}
+    st = {d: "repo" for d in ("d1", "d2", "d3", "d5", "d9")}
     st["d9"] = "paper"
     m = harness.compute_metrics(run, qrels, queries, st)
     o = m["overall"]
-    assert abs(o["mrr"] - (0.5 + 1 + 0) / 3) < 1e-6 and abs(o["recall@5"] - 2 / 3) < 1e-6
-    assert abs(o["ndcg@10"] - (0.6309297536 + 1 + 0) / 3) < 1e-5, o
-    assert m["by_type"]["A"]["n_queries"] == 1 and abs(m["by_type"]["A"]["mrr"] - 0.5) < 1e-6
-    assert m["by_type"]["B"]["n_queries"] == 2 and abs(m["by_type"]["B"]["mrr"] - 0.5) < 1e-6
-    d5 = m["source_type_at_k"]["@5"]["overall"]            # q1: paper 0.5 repo 0.5 · q2: repo 1 · q3는 결과 없어 빠진다
-    assert d5 == {"paper": 0.25, "repo": 0.75}, d5
-    assert m["source_type_at_k"]["@5"]["by_type"]["A"] == {"paper": 0.5, "repo": 0.5}
+    assert abs(o["mrr-l2"] - (1 / 3 + 1 + 0) / 3) < 1e-6 and abs(o["recall@5-l2"] - 2 / 3) < 1e-6, o
+    # nDCG는 등급 1도 센다: q1 DCG = 1/log2(2) + 2/log2(4) = 2 · IDCG = 2 + 1/log2(3) → 0.7602
+    assert abs(o["ndcg@10"] - (2 / (2 + 0.6309297536) + 1 + 0) / 3) < 1e-5, o
+    assert m["by_type"]["A"]["n_queries"] == 1 and abs(m["by_type"]["A"]["mrr-l2"] - 1 / 3) < 1e-6
+    assert m["by_type"]["B"]["n_queries"] == 2 and abs(m["by_type"]["B"]["mrr-l2"] - 0.5) < 1e-6
+    d5 = m["source_type_at_k"]["@5"]["overall"]            # q1: repo 2/3 paper 1/3 · q2: repo 1 · q3는 결과 없어 빠진다
+    assert d5 == {"paper": round(1 / 6, 4), "repo": round(5 / 6, 4)}, d5
 
 
 @case("지표 검사가 잡는다: 정답을 놓친 run은 0점, 정답 문서를 1등에 둔 run은 1점 (채점기가 무력하지 않다)")
 def _():
     queries = [{"qid": "q1", "text": "", "type": "A"}]
-    qrels = {"q1": {"d1": 1}}
+    qrels = {"q1": {"d1": 2}}
     st = {"d1": "repo", "d2": "repo"}
     miss = harness.compute_metrics({"q1": {"d2": 1.0}}, qrels, queries, st)["overall"]
     hit = harness.compute_metrics({"q1": {"d1": 1.0}}, qrels, queries, st)["overall"]
