@@ -1,7 +1,7 @@
 """Arena CLI.
 
   python arena/cli.py stats --snapshots <radar-snapshots> --adr <adr> --repo decision-radar=<경로> ... [--out stats.json]
-  python arena/cli.py run   --strategy s1|s2|s3a|s3b|s4|s4.int8|s4.bbq|s5a|s5b|s6 --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
+  python arena/cli.py run   --strategy s1|s2|s3a|s3a.ko|s3b|s4|s4.int8|s4.bbq|s4.kure|s5a|s5b|s6 [--s5b-sparse s3a|s3a.ko] --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
 
 코퍼스 폴더 위치는 전부 인자다 (Windows · M1 Mac 둘 다). 설정(버전·커밋·파일)은 arena/corpus/c-all@v1.json.
 gold가 확정되기 전이라 `run`은 장난감 질의로만 돌린다 — gold 버전 이름에 `toy`를 넣는다.
@@ -65,10 +65,22 @@ def cmd_stats(args):
                                              ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
 
-STRATEGY_CHOICES = ["s1", "s2", "s3a", "s3b", "s4", "s4.int8", "s4.bbq", "s5a", "s5b", "s6"]
+KURE_MODEL_ID = "nlpai-lab/KURE-v1"
+KURE_REVISION = "8b418a58414668e75532ed045c22d9ca018ae2b2"          # 고정 — 결과가 받는 날에 따라 달라지지 않게
+
+STRATEGY_CHOICES = ["s1", "s2", "s3a", "s3a.ko", "s3b", "s4", "s4.int8", "s4.bbq", "s4.kure", "s5a", "s5b", "s6"]
 BGE_STRATEGIES = ("s3b", "s4", "s4.int8", "s4.bbq", "s5a", "s5b", "s6")          # BGE-M3 임베딩이 필요하다
-SPLADE_STRATEGIES = ("s3a", "s5b")                                               # SPLADE-v3(HF 토큰)가 필요하다
-EMBEDDING_STRATEGIES = tuple(dict.fromkeys(BGE_STRATEGIES + SPLADE_STRATEGIES))
+KURE_STRATEGIES = ("s4.kure",)                                                   # KURE-v1 dense가 필요하다 (BGE-M3 아님)
+SPLADE_STRATEGIES = ("s3a", "s5b")                                               # SPLADE-v3(HF 토큰)가 필요하다 (s5b는 --s5b-sparse s3a.ko면 KURE-Sparse)
+KURE_SPARSE_STRATEGIES = ("s3a.ko",)                                             # KURE-Sparse-nano가 필요하다
+EMBEDDING_STRATEGIES = tuple(dict.fromkeys(BGE_STRATEGIES + KURE_STRATEGIES + SPLADE_STRATEGIES + KURE_SPARSE_STRATEGIES))
+
+
+def sparse_kind(args):
+    """이 실행이 쓰는 SPLADE 구성요소 — "s3a"(SPLADE-v3) · "s3a.ko"(KURE-Sparse-nano) · 없으면 None."""
+    if args.strategy == "s5b":
+        return getattr(args, "s5b_sparse", "s3a")
+    return args.strategy if args.strategy in ("s3a", "s3a.ko") else None
 
 
 def make_strategy(name, args, cfg, policy, embedder, splade=None, docs=None):
@@ -84,21 +96,27 @@ def make_strategy(name, args, cfg, policy, embedder, splade=None, docs=None):
     if name == "s3a":
         from arena.strategies.s3a_splade import S3aSplade
         return S3aSplade(cv, splade)
+    if name == "s3a.ko":
+        from arena.strategies.s3a_ko_kure_sparse import S3aKo
+        return S3aKo(cv, splade)
     if name == "s3b":
         from arena.strategies.s3b_bgem3_sparse import S3bSparse
         return S3bSparse(cv, embedder)
 
     def s4(variant="s4"):
         from arena.strategies import s4_dense
-        cls = {"s4": s4_dense.S4Dense, "s4.int8": s4_dense.S4Int8, "s4.bbq": s4_dense.S4BBQ}[variant]
+        cls = {"s4": s4_dense.S4Dense, "s4.int8": s4_dense.S4Int8, "s4.bbq": s4_dense.S4BBQ, "s4.kure": s4_dense.S4Kure}[variant]
         return cls(cv, embedder, es_url=args.es_url, m=args.hnsw_m, ef_construction=args.ef_construction,
                    num_candidates=args.num_candidates)
-    if name in ("s4", "s4.int8", "s4.bbq"):
+    if name in ("s4", "s4.int8", "s4.bbq", "s4.kure"):
         return s4(name)
     if name == "s5b":
+        from arena.strategies.s3a_ko_kure_sparse import S3aKo
         from arena.strategies.s3a_splade import S3aSplade
         from arena.strategies.s5b_rrf import S5bRRF
-        return S5bRRF(S3aSplade(cv, splade), s4(), rrf_k=args.rrf_k, chunk_k=args.chunk_k)
+        sparse = getattr(args, "s5b_sparse", "s3a")
+        first = S3aKo(cv, splade) if sparse == "s3a.ko" else S3aSplade(cv, splade)
+        return S5bRRF(first, s4(), rrf_k=args.rrf_k, chunk_k=args.chunk_k, sparse=sparse)
     from arena.strategies.s5a_rrf import S5aRRF
     s5a = S5aRRF(S2BM25(cv, es_url=args.es_url), s4(), rrf_k=args.rrf_k, chunk_k=args.chunk_k)
     if name == "s5a":
@@ -108,15 +126,24 @@ def make_strategy(name, args, cfg, policy, embedder, splade=None, docs=None):
     return S6Rerank(s5a, reranker, depth=args.rerank_depth)
 
 
-def make_embedder(args, cfg, policy):
+def make_embedder(args, cfg, policy, kind="bge"):
+    """kind "bge" = BGE-M3(S3b · S4 · S5 · S6) · "kure" = KURE-v1 dense(S4.kure — revision 고정)."""
     from arena import embed
-    encoder = embed.BGEM3Encoder(device=args.device, batch_size=args.encode_batch)
+    if kind == "kure":
+        encoder = embed.SentenceTransformerDenseEncoder(KURE_MODEL_ID, KURE_REVISION, device=args.device, batch_size=args.encode_batch)
+    else:
+        encoder = embed.BGEM3Encoder(device=args.device, batch_size=args.encode_batch)
     return embed.Embedder(encoder, cfg["version"], policy["version"], use_cache=not args.no_cache)
 
 
-def make_splade_embedder(args, cfg, policy):
-    """S3a용 SPLADE 인코더 — .env의 HF_TOKEN이 없으면 모델을 받기 전에 한국어 메시지로 끝낸다."""
+def make_splade_embedder(args, cfg, policy, kind="s3a"):
+    """SPLADE 인코더 — kind "s3a" = SPLADE-v3(.env의 HF_TOKEN이 없으면 모델을 받기 전에 한국어 메시지로 끝낸다) ·
+    "s3a.ko" = KURE-Sparse-nano(공개 모델, 토큰 없음 · revision 고정 · trust_remote_code)."""
     from arena.strategies import s3a_splade
+    if kind == "s3a.ko":
+        from arena.strategies import s3a_ko_kure_sparse as ko
+        encoder = ko.KureSparseEncoder(device=args.device, batch_size=args.encode_batch)
+        return ko.KureSparseEmbedder(encoder, cfg["version"], policy["version"], use_cache=not args.no_cache)
     try:
         encoder = s3a_splade.SpladeEncoder(device=args.device, batch_size=args.encode_batch)
     except s3a_splade.HFTokenError as e:
@@ -133,8 +160,10 @@ def cmd_run(args):
         no_nodes = [q["qid"] for q in queries if not q.get("nodes")]
         if no_nodes:
             raise SystemExit(f"s1은 nodes가 있는 질의(K 유형)만 돌린다 — nodes가 없는 질의: {no_nodes[:5]}")
-    splade = make_splade_embedder(args, cfg, policy) if args.strategy in SPLADE_STRATEGIES else None     # 토큰 확인을 먼저
-    embedder = make_embedder(args, cfg, policy) if args.strategy in BGE_STRATEGIES else None
+    sparse = sparse_kind(args)
+    splade = make_splade_embedder(args, cfg, policy, sparse) if sparse else None     # 토큰 확인을 먼저
+    embedder = (make_embedder(args, cfg, policy, "kure") if args.strategy in KURE_STRATEGIES
+                else make_embedder(args, cfg, policy) if args.strategy in BGE_STRATEGIES else None)
     strat = make_strategy(args.strategy, args, cfg, policy, embedder, splade=splade, docs=docs)
     key = harness.result_key(strat.id, strat.version, cfg["version"], args.gold_version, args.tier, args.seed)
     if (Path(args.results) / key).exists():            # 색인을 만들기 전에 먼저 막는다
@@ -177,6 +206,8 @@ def cmd_run(args):
         system["splade"] = sinfo
         extra["device"] = sinfo["device"]
         extra["splade"] = {k: sinfo[k] for k in ("model_id", "revision", "dtype", "max_length", "device", "libraries")}
+        if sparse == "s3a.ko":
+            extra["splade"].update({k: sinfo[k] for k in ("trust_remote_code", "prompts")})
     if embedder:
         info = embedder.info()
         system["embedding"] = info
@@ -211,6 +242,8 @@ def main(argv=None):
     p.add_argument("--device", choices=["cuda", "mps", "cpu"], default=None, help="임베딩 기기 (기본: cuda > mps > cpu 자동)")
     p.add_argument("--encode-batch", type=int, default=16, help="임베딩 배치 크기 (기본 16)")
     p.add_argument("--no-cache", action="store_true", help="임베딩 디스크 캐시를 쓰지 않는다")
+    p.add_argument("--s5b-sparse", choices=["s3a", "s3a.ko"], default="s3a",
+                   help="S5b의 SPLADE 구성요소 — s3a(SPLADE-v3, 기본) · s3a.ko(KURE-Sparse-nano). 선택은 system.json에 기록된다 (dev에서 정한다)")
     p.add_argument("--hnsw-m", type=int, default=16, help="S4(·변형) HNSW m (자리표시 — dev에서 정한다)")
     p.add_argument("--ef-construction", type=int, default=100, help="S4 HNSW ef_construction (자리표시)")
     p.add_argument("--num-candidates", type=int, default=100, help="S4 kNN num_candidates (자리표시, chunk-k 이상이어야 한다)")
@@ -221,6 +254,8 @@ def main(argv=None):
     p.add_argument("--es-url", default=None)
     p.set_defaults(fn=cmd_run)
     args = ap.parse_args(argv)
+    if getattr(args, "s5b_sparse", "s3a") != "s3a" and args.strategy != "s5b":
+        ap.error(f"--s5b-sparse {args.s5b_sparse}는 --strategy s5b에서만 뜻이 있다 (지금 {args.strategy}) — 조용히 무시하지 않는다")
     if getattr(args, "es_url", 1) is None:
         from arena import es
         args.es_url = es.DEFAULT_URL

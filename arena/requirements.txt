@@ -28,3 +28,9 @@ sentencepiece==0.2.2
 
 # --- HYO-35: S6 Reranker — 새 의존성 없음 (FlagEmbedding의 FlagReranker를 쓴다) ---
 # 모델: BAAI/bge-reranker-v2-m3 (약 2.2GB, fp32. HF revision은 실행마다 system.json · env.json에 기록된다. 2026-10-12 받은 것: 953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e)
+
+# --- HYO-35 (이슈 #66): S4.kure · S3a.ko — 새 패키지 없음 (sentence-transformers 6.1.0은 위 FlagEmbedding 의존성으로 이미 깔린다. 공유 의존성은 올리지 않았다) ---
+sentence-transformers==6.1.0   # 이제 Arena가 직접 쓴다 (SentenceTransformer · SparseEncoder) — 설치된 버전 그대로 고정, 올리지 않았다
+# 모델 (revision은 코드에 고정 — 아래 해시가 아닌 revision은 받지 않는다):
+#   nlpai-lab/KURE-v1            8b418a58414668e75532ed045c22d9ca018ae2b2   (SentenceTransformer, BGE-M3 한국어 추가 학습 dense 1024)
+#   nlpai-lab/KURE-Sparse-nano   1eb281e81edcf44cbb401d475054f817b49fddbd   (SparseEncoder, trust_remote_code — 원격 코드 1_ShiftedTopKSpladePooling/pooling.py를 전부 읽었다: 텐서 연산뿐)

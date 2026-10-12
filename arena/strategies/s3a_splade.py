@@ -187,6 +187,12 @@ class SpladeEmbedder:
                       "queries": 0, "query_encode_seconds": 0.0, "queries_truncated": 0}
         self._memo = {}
 
+    def _encode_chunk_texts(self, texts):          # 하위 클래스(KURE-Sparse)가 문서용 메서드로 바꾼다
+        return self.encoder.encode(texts)
+
+    def _encode_query_text(self, text):
+        return self.encoder.encode([text])
+
     def encode_chunks(self, chunks):
         key = hashlib.sha256("\n".join(f"{c['chunk_id']}:{text_sha256(c['text'])}" for c in chunks).encode()).hexdigest()
         if key in self._memo:
@@ -203,7 +209,7 @@ class SpladeEmbedder:
         self.stats["cache_hits"] += len(chunks) - len(todo)
         if todo:
             t0 = time.perf_counter()
-            s, tr = self.encoder.encode([chunks[i]["text"] for i in todo])
+            s, tr = self._encode_chunk_texts([chunks[i]["text"] for i in todo])
             self.stats["encode_seconds"] += time.perf_counter() - t0
             self.stats["encoded"] += len(todo)
             for j, i in enumerate(todo):
@@ -219,7 +225,7 @@ class SpladeEmbedder:
 
     def encode_query(self, text):
         t0 = time.perf_counter()
-        s, tr = self.encoder.encode([text])
+        s, tr = self._encode_query_text(text)
         self.stats["query_encode_seconds"] += time.perf_counter() - t0
         self.stats["queries"] += 1
         self.stats["queries_truncated"] += int(tr[0])

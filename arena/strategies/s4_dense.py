@@ -130,3 +130,11 @@ class S4BBQ(S4Dense):
     index_suffix = "s4-bbq"
     quantization = "bbq"
     oversample = OVERSAMPLE
+
+
+class S4Kure(S4Dense):
+    """S4.kure — 임베딩 모델만 `nlpai-lab/KURE-v1`로 바꾼 변형 (등록된 조정 항목 「임베딩 모델」, 이슈 #66). BGE-M3(XLM-R)를 한국어로 더 학습한
+    dense 모델이라 차원 1024 · cosine · hnsw float32 · HNSW 파라미터 · 청크가 S4와 같다. 인덱스 이름만 따로(`...-s4-kure`).
+    모델 · revision은 `embedder`(= `embed.SentenceTransformerDenseEncoder`)가 정하고 settings의 `embedding_model`에 적힌다."""
+    id = "S4.kure"
+    index_suffix = "s4-kure"
