@@ -35,9 +35,10 @@ class Strategy:
 
 # --- 청크 순위 → 문서 순위 ------------------------------------------------------------------------------------------
 
-def rollup(chunk_hits, chunk_to_doc):
+def rollup_chunks(chunk_hits, chunk_to_doc):
     """청크 순위를 문서 순위로 올린다 — 문서마다 최고 순위 청크 하나만 남기고 나머지는 버린다.
-    점수 내림차순(동점은 들어온 순서)으로 정렬한 뒤 문서별 첫 청크의 점수를 그 문서의 점수로 쓴다."""
+    점수 내림차순(동점은 들어온 순서)으로 정렬한 뒤 문서별 첫 청크를 그 문서의 대표로 쓴다.
+    -> [(doc_id, 대표 chunk_id, 점수)]"""
     seen, out = set(), []
     for chunk_id, score in sorted(chunk_hits, key=lambda h: -h[1]):
         if chunk_id not in chunk_to_doc:
@@ -45,8 +46,13 @@ def rollup(chunk_hits, chunk_to_doc):
         doc = chunk_to_doc[chunk_id]
         if doc not in seen:
             seen.add(doc)
-            out.append((doc, score))
+            out.append((doc, chunk_id, score))
     return out
+
+
+def rollup(chunk_hits, chunk_to_doc):
+    """rollup_chunks에서 대표 청크를 뺀 [(doc_id, 점수)]"""
+    return [(d, s) for d, _, s in rollup_chunks(chunk_hits, chunk_to_doc)]
 
 
 def run_queries(strategy, queries, chunk_to_doc, k_docs=20, chunk_k=200):
@@ -184,7 +190,7 @@ def _git(*args):
 
 def env_info(extra=None):
     libs = {}
-    for name in ("ranx", "tokenizers", "numpy", "PyYAML"):
+    for name in ("ranx", "tokenizers", "numpy", "PyYAML", "torch", "FlagEmbedding", "transformers"):
         try:
             libs[name] = metadata.version(name)
         except metadata.PackageNotFoundError:
@@ -194,7 +200,7 @@ def env_info(extra=None):
         "machine": platform.machine(),
         "os": platform.platform(),
         "python": sys.version.split()[0],
-        "device": "cpu",                      # 이번 전략(ES BM25)은 가속기를 쓰지 않는다
+        "device": "cpu",                      # BM25(S2)는 가속기를 쓰지 않는다 — 임베딩 전략은 extra로 덮어쓴다
         "libraries": libs,
         "git": {"commit": _git("rev-parse", "HEAD"), "dirty": bool(_git("status", "--porcelain"))},
     }

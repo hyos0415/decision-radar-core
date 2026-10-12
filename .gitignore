@@ -18,3 +18,6 @@ usage/out/
 
 # 프로필 필터 결과 (HYO-73)
 pipeline/out/
+
+# Arena 임베딩 캐시 (HYO-35) — 코퍼스·청크 정책·모델 revision 이름공간별 벡터
+arena/.cache/

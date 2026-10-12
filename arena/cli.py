@@ -1,7 +1,7 @@
 """Arena CLI.
 
   python arena/cli.py stats --snapshots <radar-snapshots> --adr <adr> --repo decision-radar=<경로> ... [--out stats.json]
-  python arena/cli.py run   --strategy s2 --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
+  python arena/cli.py run   --strategy s2|s3b|s4|s5a --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
 
 코퍼스 폴더 위치는 전부 인자다 (Windows · M1 Mac 둘 다). 설정(버전·커밋·파일)은 arena/corpus/c-all@v1.json.
 gold가 확정되기 전이라 `run`은 장난감 질의로만 돌린다 — gold 버전 이름에 `toy`를 넣는다.
@@ -65,25 +65,53 @@ def cmd_stats(args):
                                              ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
 
-def cmd_run(args):
+STRATEGY_CHOICES = ["s2", "s3b", "s4", "s5a"]
+EMBEDDING_STRATEGIES = ("s3b", "s4", "s5a")
+
+
+def make_strategy(name, args, cfg, policy, embedder):
+    """전략 객체를 만든다. s5a는 S2와 S4를 같은 실행 안에서 새로 만든다 (저장된 결과를 재사용하지 않는다)."""
     from arena.strategies.s2_bm25 import S2BM25
-    strategies = {"s2": S2BM25}
+    cv = cfg["version"]
+    if name == "s2":
+        return S2BM25(cv, es_url=args.es_url)
+    if name == "s3b":
+        from arena.strategies.s3b_bgem3_sparse import S3bSparse
+        return S3bSparse(cv, embedder)
+
+    def s4():
+        from arena.strategies.s4_dense import S4Dense
+        return S4Dense(cv, embedder, es_url=args.es_url, m=args.hnsw_m, ef_construction=args.ef_construction,
+                       num_candidates=args.num_candidates)
+    if name == "s4":
+        return s4()
+    from arena.strategies.s5a_rrf import S5aRRF
+    return S5aRRF(S2BM25(cv, es_url=args.es_url), s4(), rrf_k=args.rrf_k, chunk_k=args.chunk_k)
+
+
+def make_embedder(args, cfg, policy):
+    from arena import embed
+    encoder = embed.BGEM3Encoder(device=args.device, batch_size=args.encode_batch)
+    return embed.Embedder(encoder, cfg["version"], policy["version"], use_cache=not args.no_cache)
+
+
+def cmd_run(args):
     cfg, policy, policy_path, docs, chunks, counter, chunk_secs = build(args)
     queries = harness.load_queries(args.queries)
     qrels = harness.load_qrels(args.qrels)
     harness.check_gold(queries, qrels, [d["doc_id"] for d in docs])
-    key = harness.result_key(strategies[args.strategy].id, strategies[args.strategy].version, cfg["version"],
-                             args.gold_version, args.tier, args.seed)
+    embedder = make_embedder(args, cfg, policy) if args.strategy in EMBEDDING_STRATEGIES else None
+    strat = make_strategy(args.strategy, args, cfg, policy, embedder)
+    key = harness.result_key(strat.id, strat.version, cfg["version"], args.gold_version, args.tier, args.seed)
     if (Path(args.results) / key).exists():            # 색인을 만들기 전에 먼저 막는다
         raise SystemExit(f"결과 폴더가 이미 있다 — 덮어쓰지 않는다: {Path(args.results) / key}")
 
-    strat = strategies[args.strategy](cfg["version"], es_url=args.es_url)
     t0 = time.perf_counter()
-    strat.index(chunks)
+    strat.index(chunks)                       # 임베딩 인코딩 시간도 여기 들어간다 — 따로 embedding.chunk_encode_seconds로 적는다
     build_secs = time.perf_counter() - t0
 
     chunk_to_doc = {c["chunk_id"]: c["doc_id"] for c in chunks}
-    run, lat = harness.run_queries(strat, queries, chunk_to_doc, k_docs=args.k)
+    run, lat = harness.run_queries(strat, queries, chunk_to_doc, k_docs=args.k, chunk_k=args.chunk_k)
     metrics = harness.compute_metrics(run, qrels, queries, {d["doc_id"]: d["source_type"] for d in docs})
     system = {
         "index_build_seconds": round(build_secs, 3),
@@ -91,17 +119,26 @@ def cmd_run(args):
         "index_size_bytes": strat.index_size_bytes(),
         "index_chunks": strat.n_indexed,
         "index_docs": len(docs),
+        "chunk_k": args.chunk_k,
         "query_latency_ms": harness.latency_summary(lat),
         "es_took_ms": harness.latency_summary(strat.took_ms),
-        "latency_note": "client = 요청~응답 벽시계(질의 순차 1회씩, 워밍업 없음) · es_took = ES가 보고한 처리 시간",
+        "latency_note": "client = 요청~응답 벽시계(질의 순차 1회씩, 워밍업 없음, 임베딩 전략은 질의 인코딩 포함) · es_took = ES가 보고한 처리 시간",
         "strategy": {"id": strat.id, "version": strat.version, **strat.settings()},
     }
-    env = harness.env_info({
+    if hasattr(strat, "size_breakdown"):
+        system["index_size_by_component"] = strat.size_breakdown()
+    extra = {
         "corpus_version": cfg["version"], "chunk_policy": policy["version"],
         "chunk_policy_sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest()[:16],
         "elasticsearch": strat.server_version(),
         "gold_version": args.gold_version, "tier": args.tier, "seed": args.seed,
-    })
+    }
+    if embedder:
+        info = embedder.info()
+        system["embedding"] = info
+        extra["device"] = info["device"]
+        extra["embedding"] = {k: info[k] for k in ("model_id", "revision", "dtype", "max_length", "device", "libraries")}
+    env = harness.env_info(extra)
     out = harness.save_results(args.results, key, run, metrics, system, env)
     print(f"결과: {out}")
     print(json.dumps({"overall": metrics["overall"], "latency_ms": system["query_latency_ms"]}, ensure_ascii=False))
@@ -116,13 +153,22 @@ def main(argv=None):
     p.set_defaults(fn=cmd_stats)
     p = sub.add_parser("run", help="전략 하나를 색인·질의·채점·저장")
     add_corpus_args(p)
-    p.add_argument("--strategy", choices=["s2"], required=True)
+    p.add_argument("--strategy", choices=STRATEGY_CHOICES, required=True)
     p.add_argument("--queries", required=True)
     p.add_argument("--qrels", required=True)
     p.add_argument("--gold-version", required=True)
     p.add_argument("--tier", default="T0")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--k", type=int, default=20, help="문서 순위 길이")
+    p.add_argument("--chunk-k", type=int, default=100,
+                   help="전략이 가져오는 상위 청크 수 (S5a는 구성요소 둘 다 같은 값). 기본 100")
+    p.add_argument("--device", choices=["cuda", "mps", "cpu"], default=None, help="임베딩 기기 (기본: cuda > mps > cpu 자동)")
+    p.add_argument("--encode-batch", type=int, default=16, help="임베딩 배치 크기 (기본 16)")
+    p.add_argument("--no-cache", action="store_true", help="임베딩 디스크 캐시를 쓰지 않는다")
+    p.add_argument("--hnsw-m", type=int, default=16, help="S4 HNSW m (자리표시 — dev에서 정한다)")
+    p.add_argument("--ef-construction", type=int, default=100, help="S4 HNSW ef_construction (자리표시)")
+    p.add_argument("--num-candidates", type=int, default=100, help="S4 kNN num_candidates (자리표시, chunk-k 이상이어야 한다)")
+    p.add_argument("--rrf-k", type=int, default=60, help="S5a RRF k (자리표시 — dev에서 정한다)")
     p.add_argument("--results", default=str(HERE / "results"))
     p.add_argument("--es-url", default=None)
     p.set_defaults(fn=cmd_run)
