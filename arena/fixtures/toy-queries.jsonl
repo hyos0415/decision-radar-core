@@ -1,0 +1,5 @@
+{"qid": "toy1", "text": "nori 형태소 분석기 설정", "type": "toy-ko"}
+{"qid": "toy2", "text": "vLLM v0.31.0 breaking", "type": "toy-en"}
+{"qid": "toy3", "text": "LEANN incremental insert 지원", "type": "toy-mix"}
+{"qid": "toy4", "text": "Bedrock Guardrails PII masking", "type": "toy-en"}
+{"qid": "toy5", "text": "Electron 데스크톱 클라이언트", "type": "toy-ko"}

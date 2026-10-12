@@ -1,0 +1,2 @@
+# 장난감 질의(gold가 아님)로 돈 스모크 결과는 커밋하지 않는다. 실제 gold 결과는 커밋한다(retrieval-arena §9)
+results/*__toy*__*/
