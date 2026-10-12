@@ -1,0 +1,17 @@
+{
+  "version": "chunk-policy@v1",
+  "status": "provisional",
+  "note": "상한 값과 토크나이저는 아직 확정 전이다(retrieval-arena §10 A1-b). 바꾸면 코퍼스 버전이 바뀐다. 상한은 두 토크나이저 모두에서 지킨다(특수 토큰 포함).",
+  "max_tokens": 512,
+  "tokenizers": ["BAAI/bge-m3", "bert-base-uncased"],
+  "tokenizer_roles": {"BAAI/bge-m3": "S3b·S4 입력 한도", "bert-base-uncased": "SPLADE-v3(BERT 어휘)의 대리"},
+  "split_heading_levels": [2, 3],
+  "table_header_rows": 2,
+  "kind_rules": {
+    "adr": "파일 하나. 상한 초과 시 frontmatter 조각 + 헤딩 조각(각 조각 앞에 frontmatter 요약)",
+    "doc": "H2/H3 헤딩. 초과 시 문단 경계, 표는 행 단위 + 머리행 반복, 그래도 크면 줄 → 고정 길이",
+    "claude_md": "스택 절 안의 헤딩. doc과 같음",
+    "manifest": "파일 하나. 상한 초과 시(표의 「—」와 달리) 줄 경계로 자름 — 상한이 우선",
+    "other": "고정 길이"
+  }
+}

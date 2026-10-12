@@ -1,0 +1,21 @@
+{
+  "version": "c-all@v1",
+  "note": "코퍼스 구성 고정본. 폴더 위치는 여기에 두지 않는다(CLI 인자). 청크 정책이 바뀌면 코퍼스 버전이 바뀐다(retrieval-arena §2).",
+  "chunk_policy": "chunk-policy@v1",
+  "c-doc": {
+    "snapshot_week": "2026-W41",
+    "supplements": ["source-hints@2026-10-12"]
+  },
+  "c-adr": {
+    "commit": "fa3a4cf",
+    "strip_frontmatter_keys": ["revisit_last_checked"]
+  },
+  "c-code": {
+    "repos": [
+      {"name": "finance_verifier", "commit": "ef426d2", "files": ["CLAUDE.md"]},
+      {"name": "fineprint", "commit": "18123e2", "files": ["CLAUDE.md", "requirements.txt"]},
+      {"name": "decision-radar", "commit": "bb43a82",
+       "files": ["CLAUDE.md", "requirements.txt", "product/requirements.txt", "infra/compose.yaml"]}
+    ]
+  }
+}
