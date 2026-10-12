@@ -2,7 +2,7 @@
 
 - 순서: GPT 2 → ? → 초안만(스크리닝이 놓친 초안 정답 후보) → 1
 - 1점 중 무작위 10%(최소 1, 시드 qid 고정)에 sample=True — 사람이 확인해 GPT 1점의 정확도를 잰다
-- 문서 본문은 1,500자까지 (전문은 원문 링크·코퍼스에)
+- 문서 본문: 직접 볼 카드(2·?·스크리닝 누락·표본)는 저장된 전문, 접힌 1점은 1,500자 (10/12 — 1,500자에서 잘려 판정 못 하는 카드가 84/158)
 """
 import json
 import pathlib
@@ -48,7 +48,7 @@ for qid in sorted(queries):
     order = {"2": 0, "?": 1, "0": 2, "1": 3}
     for c in sorted(cands, key=lambda c: (order[c["grade"]], c["doc_id"] not in sample, c["doc_id"])):
         d = docs.get(c["doc_id"], {})
-        items.append({"doc_id": c["doc_id"], "title": d.get("title", ""), "text": (d.get("text") or "")[:1500],
+        items.append({"doc_id": c["doc_id"], "title": d.get("title", ""), "text": (d.get("text") or "") if (c["grade"] != "1" or c["doc_id"] in sample or c.get("draft_only")) else (d.get("text") or "")[:1500],
                       "url": urls.get(c["doc_id"]), "source_type": stype(c["doc_id"]), "gpt_grade": c["grade"],
                       "gpt_reason": c["reason"], "explain": {"what": c.get("what", "")} if c.get("what") else None,
                       "sample": c["doc_id"] in sample, "draft_only": bool(c.get("draft_only"))})
