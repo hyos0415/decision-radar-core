@@ -46,6 +46,31 @@ export function dateTime(iso: string): string {
   return iso.slice(0, 16).replace('T', ' ')
 }
 
+const WEEKDAY = ['일', '월', '화', '수', '목', '금', '토']
+
+function localDay(d: Date): string {
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
+}
+
+// 실행 기록 묶음 머리: 오늘 · 어제 · 10월 6일 (화)
+export function dayLabel(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10)
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+  if (localDay(d) === localDay(now)) return '오늘'
+  if (localDay(d) === localDay(yesterday)) return '어제'
+  return `${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEKDAY[d.getDay()]})`
+}
+
+// 14:05 · 정기 실행 칸은 "월 09:00"
+export function timeOnly(iso: string, withWeekday = false): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso.slice(11, 16)
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  return withWeekday ? `${WEEKDAY[d.getDay()]} ${hm}` : hm
+}
+
 export function isMac(): boolean {
   return navigator.platform.toLowerCase().includes('mac')
 }

@@ -47,6 +47,7 @@ export type Mode = Health['mode']
 export type Job = S['Job']
 export type JobKind = Job['kind']
 export type JobState = Job['state']
+export type Schedule = S['Schedule']
 
 export type EventName = 'item_opened' | 'app_opened' | 'decision_opened' | 'capture_opened'
 
@@ -119,5 +120,6 @@ export const api = {
       })
     ).then((r) => r.job),
   jobs: () => unwrap(client.GET('/jobs')).then((r) => r.items),
+  schedule: () => unwrap(client.GET('/schedule')),
   job: (id: string) => unwrap(client.GET('/jobs/{job_id}', { params: { path: { job_id: id } } }))
 }

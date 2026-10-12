@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, shell } from 'electron'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
@@ -37,6 +37,18 @@ function navigate(t: NavTarget): void {
   if (win && !win.isDestroyed()) win.webContents.send('nav', t)
 }
 
+// same values as the renderer tokens (main.css --background · --muted-foreground)
+function windowColors(): { background: string; symbol: string } {
+  return nativeTheme.shouldUseDarkColors
+    ? { background: '#0a0a0a', symbol: '#a3a3a3' }
+    : { background: '#fafafa', symbol: '#737373' }
+}
+
+function titleBarOverlay(): Electron.TitleBarOverlayOptions {
+  const c = windowColors()
+  return { color: c.background, symbolColor: c.symbol, height: 47 }
+}
+
 function createWindow(): void {
   win = new BrowserWindow({
     width: 1200,
@@ -44,9 +56,15 @@ function createWindow(): void {
     minWidth: 900,
     minHeight: 600,
     title: 'Decision Radar',
-    backgroundColor: '#ffffff',
+    backgroundColor: windowColors().background,
     show: false,
     autoHideMenuBar: true,
+    // flat custom title bar (HYO-101): the 48px header rows are the drag area.
+    // macOS keeps its traffic lights; Windows draws its caption buttons over the right of that row.
+    titleBarStyle: 'hidden',
+    ...(process.platform === 'darwin'
+      ? { trafficLightPosition: { x: 16, y: 16 } }
+      : { titleBarOverlay: titleBarOverlay() }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -56,6 +74,14 @@ function createWindow(): void {
   })
 
   win.on('ready-to-show', () => win?.show())
+  // the app follows the system theme — keep the window and caption buttons in step
+  const onTheme = (): void => {
+    if (!win || win.isDestroyed()) return
+    win.setBackgroundColor(windowColors().background)
+    if (process.platform !== 'darwin') win.setTitleBarOverlay(titleBarOverlay())
+  }
+  nativeTheme.on('updated', onTheme)
+  win.on('closed', () => nativeTheme.off('updated', onTheme))
   win.on('close', (e) => {
     if (!quitting) {
       e.preventDefault()
@@ -134,7 +160,10 @@ if (!app.requestSingleInstanceLock()) {
       onQuit: quitApp,
       onCapture: showCapture,
       onRun: (flow) => {
-        void postRun(flow).then(() => pollNow())
+        // the job is accepted at once — tell the window so its run row shows it running
+        void postRun(flow).then(() => {
+          if (win && !win.isDestroyed()) win.webContents.send('data:changed')
+        })
       }
     })
     setTrayState({ shortcutOk: registerCaptureShortcut() })
