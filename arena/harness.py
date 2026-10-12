@@ -60,7 +60,12 @@ def run_queries(strategy, queries, chunk_to_doc, k_docs=20, chunk_k=200):
     run, latencies = {}, []
     for q in queries:
         t0 = time.perf_counter()
-        hits = strategy.search(q["text"], chunk_k)
+        if getattr(strategy, "uses_query_nodes", False):         # S1 — 질의 글이 아니라 구조화된 nodes로 찾는다
+            if not q.get("nodes"):
+                raise ValueError(f"{strategy.id}는 질의에 nodes가 필요하다: {q['qid']}")
+            hits = strategy.search(q["text"], chunk_k, nodes=q["nodes"])
+        else:
+            hits = strategy.search(q["text"], chunk_k)
         latencies.append((time.perf_counter() - t0) * 1000)
         run[q["qid"]] = {d: s for d, s in rollup(hits, chunk_to_doc)[:k_docs]}
     return run, latencies

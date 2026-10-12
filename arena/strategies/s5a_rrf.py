@@ -54,16 +54,19 @@ def warm_up():
     return time.perf_counter() - t0
 
 
-class S5aRRF:
-    id = "S5a"
+class TwoWayRRF:
+    """두 구성요소를 문서 단위 RRF로 합치는 공통 몸통 — S5a(BM25 + Dense)와 S5b(SPLADE + Dense)가 같은 코드를 쓴다.
+    `names` = settings()["components"]의 키 (구성요소 순서 — 대표 청크 동점은 앞쪽이 이긴다)."""
+    id = "S?"
     version = "v1"
+    names = ("first", "second")
 
-    def __init__(self, s2, s4, rrf_k=RRF_K, chunk_k=CHUNK_K):
+    def __init__(self, first, second, rrf_k=RRF_K, chunk_k=CHUNK_K):
         if isinstance(rrf_k, bool) or not isinstance(rrf_k, int) or rrf_k < 1:
             raise ValueError(f"RRF k={rrf_k!r} — 1 이상의 정수여야 한다")
         if isinstance(chunk_k, bool) or not isinstance(chunk_k, int) or chunk_k < 1:
             raise ValueError(f"chunk_k={chunk_k!r} — 1 이상의 정수여야 한다")
-        self.s2, self.s4 = s2, s4
+        self.components = (first, second)
         self.rrf_k, self.chunk_k = rrf_k, chunk_k
         self.chunk_to_doc = {}
         self.n_indexed = 0
@@ -71,7 +74,7 @@ class S5aRRF:
 
     @property
     def took_ms(self):
-        return self.s2.took_ms + self.s4.took_ms
+        return [ms for c in self.components for ms in c.took_ms]
 
     def settings(self):
         try:
@@ -83,26 +86,23 @@ class S5aRRF:
                        "level": "document (청크→문서 rollup 뒤 융합 · 문서마다 최고 순위 청크)", "norm": "max (RRF는 순위만 쓴다)",
                        "status": "자리표시 기본값 — RRF k는 dev에서 정한다 (이슈 #58)"},
             "component_chunk_k": self.chunk_k,
-            "components": {
-                "s2": {"id": self.s2.id, "version": self.s2.version, **self.s2.settings()},
-                "s4": {"id": self.s4.id, "version": self.s4.version, **self.s4.settings()},
-            },
+            "components": {n: {"id": c.id, "version": c.version, **c.settings()} for n, c in zip(self.names, self.components)},
             "reuse_of_saved_results": False,
             "ranx_jit_warmup_seconds": None if self.warmup_seconds is None else round(self.warmup_seconds, 3),
         }
 
     def index(self, chunks):
         self.chunk_to_doc = {c["chunk_id"]: c["doc_id"] for c in chunks}
-        self.s2.index(chunks)
-        self.s4.index(chunks)
+        for c in self.components:
+            c.index(chunks)
         self.warmup_seconds = warm_up()
-        self.n_indexed = self.s2.n_indexed
+        self.n_indexed = self.components[0].n_indexed
 
     def _first_stage(self, query):
         """-> (fused [(doc, 점수)], rep {doc: (순위, 구성요소 순서, 대표 chunk_id)},
         seen {doc: [chunk_id]} 두 구성요소 상위 chunk_k 청크 목록에 나온 청크 (구성요소 순서 → 순위 순서, 중복 없음))"""
         ranked, seen = [], {}
-        for comp in (self.s2, self.s4):
+        for comp in self.components:
             hits = comp.search(query, self.chunk_k)
             for cid, _ in hits:
                 if cid not in self.chunk_to_doc:          # rollup과 같게 모르는 청크 id는 실패
@@ -122,7 +122,7 @@ class S5aRRF:
 
     def search(self, query, k):
         if k != self.chunk_k:
-            raise ValueError(f"S5a는 구성요소마다 같은 상위 N 청크(chunk_k={self.chunk_k})를 쓴다 — 요청 k={k}와 달라 거부한다")
+            raise ValueError(f"{self.id}는 구성요소마다 같은 상위 N 청크(chunk_k={self.chunk_k})를 쓴다 — 요청 k={k}와 달라 거부한다")
         fused, rep, _ = self._first_stage(query)
         return [(rep[d][2], round(s, 12)) for d, s in fused]
 
@@ -132,14 +132,28 @@ class S5aRRF:
         return [(d, seen[d]) for d, _ in fused]
 
     def index_size_bytes(self):
-        return self.s2.index_size_bytes() + self.s4.index_size_bytes()
+        return sum(c.index_size_bytes() for c in self.components)
 
     def size_breakdown(self):
-        return {"s2": self.s2.index_size_bytes(), "s4": self.s4.index_size_bytes()}
+        return {n: c.index_size_bytes() for n, c in zip(self.names, self.components)}
 
     def server_version(self):
-        return self.s2.server_version()
+        for c in self.components:                 # ES를 쓰는 구성요소의 버전 (로컬 전략은 None)
+            v = c.server_version()
+            if v is not None:
+                return v
+        return None
 
     def drop(self):
-        self.s2.drop()
-        self.s4.drop()
+        for c in self.components:
+            c.drop()
+
+
+class S5aRRF(TwoWayRRF):
+    id = "S5a"
+    version = "v1"
+    names = ("s2", "s4")
+
+    def __init__(self, s2, s4, rrf_k=RRF_K, chunk_k=CHUNK_K):
+        super().__init__(s2, s4, rrf_k=rrf_k, chunk_k=chunk_k)
+        self.s2, self.s4 = s2, s4

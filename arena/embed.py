@@ -49,11 +49,12 @@ def text_sha256(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def resolve_revision(model_id=MODEL_ID):
-    """-> (로컬 스냅숏 경로, HF revision 해시). 받아 둔 게 있으면 네트워크 없이도 된다."""
+def resolve_revision(model_id=MODEL_ID, token=None):
+    """-> (로컬 스냅숏 경로, HF revision 해시). 받아 둔 게 있으면 네트워크 없이도 된다.
+    token = 게이트 모델(S3a SPLADE-v3)용 HF 토큰 — 명시로만 넘긴다(환경 변수에 넣지 않는다)."""
     from huggingface_hub import snapshot_download
     try:
-        path = snapshot_download(model_id)
+        path = snapshot_download(model_id, token=token)
     except Exception:                                   # 오프라인이면 로컬 캐시만
         path = snapshot_download(model_id, local_files_only=True)
     return path, Path(path).name

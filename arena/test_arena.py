@@ -19,7 +19,8 @@ sys.path.insert(0, str(HERE.parent))
 import yaml  # noqa: E402
 
 from arena import chunking, corpus, embed, es, harness  # noqa: E402
-from arena.strategies import s2_bm25, s3b_bgem3_sparse, s4_dense, s5a_rrf, s6_rerank  # noqa: E402
+from arena.strategies import (s1_match, s2_bm25, s3a_splade, s3b_bgem3_sparse, s4_dense, s5a_rrf,  # noqa: E402
+                              s5b_rrf, s6_rerank)
 
 FAILS = []
 
@@ -908,6 +909,48 @@ def _():
     assert raises(KeyError, s.search, "q", 100)
 
 
+@case("S5a 고정(pin) — 리팩터링 전후 출력이 바이트까지 같다: search · 후보 · settings sha256 · took · 크기 · 서버 버전")
+def _():
+    class FC:
+        def __init__(self, i, h):
+            self.id, self.version, self._h = i, "v1", h
+            self.took_ms, self.n_indexed = ([1] if i == "S2" else [2, 3]), 0
+
+        def settings(self):
+            return {"marker": self.id}
+
+        def index(self, c):
+            self.n_indexed = len(c)
+
+        def search(self, q, k):
+            return self._h
+
+        def index_size_bytes(self):
+            return 10 if self.id == "S2" else 7
+
+        def server_version(self):
+            return "9.5.4" if self.id == "S2" else None
+    c2d = {"A#0": "A", "A#1": "A", "B#0": "B", "C#0": "C", "D#0": "D", "E#0": "E"}
+    chunks = [{"chunk_id": c, "doc_id": d} for c, d in c2d.items()]
+    s2 = FC("S2", [("A#1", 9.0), ("B#0", 8.0), ("A#0", 7.0), ("D#0", 6.0)])
+    s4 = FC("S4", [("C#0", .9), ("B#0", .8), ("A#0", .7), ("E#0", .6), ("D#0", .5)])
+    s = s5a_rrf.S5aRRF(s2, s4, rrf_k=30, chunk_k=100)
+    s.index(chunks)
+    s.warmup_seconds = 0.5
+    assert json.dumps(s.search("q", 100)) == ('[["A#1", 0.062561094819], ["B#0", 0.0625], ["D#0", 0.058874458874], '
+                                              '["C#0", 0.032258064516], ["E#0", 0.029411764706]]')
+    assert json.dumps(s.first_stage_candidates("q")) == ('[["A", ["A#1", "A#0"]], ["B", ["B#0"]], ["D", ["D#0"]], '
+                                                         '["C", ["C#0"]], ["E", ["E#0"]]]')
+    st = s.settings()
+    st["fusion"]["ranx_version"] = "X"          # 설치된 버전에 따라 달라지는 칸만 고정
+    import hashlib
+    assert hashlib.sha256(json.dumps(st, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest() == \
+        "057dabb8bbba20705b267049d1a045368f3a9e3b736bbea138a7dbd8030454a1"
+    assert (s.took_ms, s.index_size_bytes(), s.size_breakdown(), s.server_version(), s.n_indexed) == \
+        ([1, 2, 3], 17, {"s2": 10, "s4": 7}, "9.5.4", 6)
+    assert s.s2 is s2 and s.s4 is s4
+
+
 # --- HYO-35: S6 Reranker (가짜 cross-encoder — 모델 다운로드 없음) ---------------------------------------------------------
 
 class FakeRerankModel:
@@ -1002,11 +1045,419 @@ def _():
     assert s.index_size_bytes() == 20 and s.n_indexed == 6
 
 
+# --- HYO-35 (이슈 #63): S1 · S4.int8 · S4.bbq · S3a SPLADE-v3 · S5b ----------------------------------------------------------
+
+def adr_doc_of(n, technology, affected, use="u"):
+    fm = ["status: adopted", f"technology: {technology}", f"use: {use}", "affected:"]
+    fm += [f"- repo: {r}\n  component: {c}" for r, c in affected]
+    text = "---\n" + "\n".join(fm) + "\n---\n# 제목\n본문"
+    return doc(f"adr:{n:04d}", "c-adr", f"ADR {n}", text)
+
+
+S1_DOCS = [
+    adr_doc_of(1, "Foo DB", [("a", "x")]),
+    adr_doc_of(2, "foo db", [("b", "y")]),
+    adr_doc_of(3, "Bar", [("a", "x"), ("a", "z")]),
+    adr_doc_of(4, "Baz", [("c", "z")]),
+    adr_doc_of(5, "  Bar   Lib ", [("A", " X ")]),
+    doc("github:o/r", "c-doc", "릴리스", "technology: Foo DB"),                 # C-ADR이 아니면 쓰지 않는다
+]
+
+
+def s1_chunks():
+    return [{"chunk_id": f"{d['doc_id']}#{s}", "doc_id": d["doc_id"], "source_type": "adr", "text": "t"}
+            for d in S1_DOCS for s in ("a", "b")]
+
+
+def s1_ready():
+    s = s1_match.S1Match(S1_DOCS)
+    s.index(s1_chunks())
+    return s
+
+
+@case("S1: norm이 radar.py의 norm과 모든 입력에서 같다 (두 구현이 어긋나지 않게)")
+def _():
+    radar_norm = s1_match.load_radar_norm()
+    for x in ("", None, "  A  B ", "Foo\tBar\n baz", "ÄB  ß", "한글  테스트 ", "Amazon Bedrock Guardrails", "x"):
+        assert s1_match.norm(x) == radar_norm(x), repr(x)
+    assert s1_match.norm("  Foo   DB ") == "foo db"
+
+
+@case("S1: 등급 순위 — 1(technology+컴포넌트) > 2(technology만) > 3(컴포넌트만) · 같은 등급은 ADR id 순서 · 정규화 · 첫 청크")
+def _():
+    s = s1_ready()
+    got = s.search("전혀 상관없는 질의 글", 100, nodes=[{"technology": "Foo DB", "repo": "a", "component": "x"}])
+    # 0001 = 등급 1 · 0002 = foo db 대소문자 정규화로 등급 2 · 0003(a/x) · 0005(A/ X 공백·대소문자 정규화)는 등급 3 → id 순서
+    assert got == [("adr:0001#a", 3.0), ("adr:0002#a", 2.0), ("adr:0003#a", 1.0), ("adr:0005#a", 1.0)], got
+    assert [c for c, _ in s.search("q", 2, nodes=[{"technology": "Foo DB", "repo": "a", "component": "x"}])] == ["adr:0001#a", "adr:0002#a"]
+    assert s.search("q", 5, nodes=[{"technology": "Nope", "repo": "q", "component": "q"}]) == []      # 안 맞으면 빈 결과
+    # 질의 글은 결과에 영향이 없다
+    n = [{"technology": "Baz"}]
+    assert s.search("A", 5, nodes=n) == s.search("완전히 다른 글", 5, nodes=n) == [("adr:0004#a", 2.0)]
+    # 빈 technology / 빈 repo·component는 일치로 세지 않는다
+    assert s.search("q", 5, nodes=[{"technology": "", "repo": "a", "component": "x"}]) == \
+        [("adr:0001#a", 1.0), ("adr:0003#a", 1.0), ("adr:0005#a", 1.0)]
+    assert s.search("q", 5, nodes=[{"technology": "Foo DB", "repo": "a"}]) == [("adr:0001#a", 2.0), ("adr:0002#a", 2.0)]
+
+
+@case("S1: 노드가 여럿이면 합집합 — ADR마다 가장 좋은 등급")
+def _():
+    s = s1_ready()
+    got = s.search("q", 100, nodes=[{"technology": "Baz"}, {"technology": "Bar", "repo": "a", "component": "x"}])
+    # 0003: 노드2 등급 1 · 0004: 노드1 등급 2 · 0001: 노드2의 a/x만 → 3 · 0005: "bar lib" ≠ "bar"지만 A/X 정규화로 3
+    assert got == [("adr:0003#a", 3.0), ("adr:0004#a", 2.0), ("adr:0001#a", 1.0), ("adr:0005#a", 1.0)], got
+    # 한 ADR이 두 노드에 걸리면 좋은 쪽: 0001은 노드1(컴포넌트만)에서 3, 노드2(technology+컴포넌트)에서 1
+    got = dict(s.search("q", 100, nodes=[{"technology": "x", "repo": "a", "component": "x"}, {"technology": "Foo DB", "repo": "a", "component": "x"}]))
+    assert got["adr:0001#a"] == 3.0
+
+
+@case("S1: nodes 없음·빈 노드는 실패 · 하네스가 nodes를 넘긴다(질의 글만 보는 전략과 구분) · settings에 uses_query_nodes")
+def _():
+    s = s1_ready()
+    for bad in (None, [], [{}], [{"repo": "a"}], "Foo"):
+        assert raises(ValueError, s.search, "q", 5, nodes=bad), bad
+    assert s.settings()["uses_query_nodes"] is True and s.index_size_bytes() == 0 and s.server_version() is None
+    c2d = {c["chunk_id"]: c["doc_id"] for c in s1_chunks()}
+    queries = [{"qid": "k1", "type": "K", "text": "x", "nodes": [{"technology": "Baz"}]},
+               {"qid": "k2", "type": "K", "text": "y", "nodes": [{"technology": "Nope"}]}]
+    run, lat = harness.run_queries(s, queries, c2d, k_docs=20, chunk_k=100)
+    assert run == {"k1": {"adr:0004": 2.0}, "k2": {}} and len(lat) == 2
+    assert raises(ValueError, harness.run_queries, s, [{"qid": "k3", "type": "K", "text": "x"}], c2d)     # nodes 없는 질의
+    # 다른 전략은 nodes 없이 그대로 돈다
+    run, _ = harness.run_queries(FakeComponent("S2", [("adr:0001#a", 1.0)]), [{"qid": "q", "type": "K", "text": "x"}], c2d)
+    assert run == {"q": {"adr:0001": 1.0}}
+    # C-ADR이 없으면 만들 수 없다 · ADR에 청크가 없으면 색인이 실패한다
+    assert raises(ValueError, s1_match.S1Match, [S1_DOCS[-1]])
+    assert raises(ValueError, s1_match.S1Match(S1_DOCS).index, [])
+
+
+@case("S4 변형: S4.int8 · S4.bbq는 index_options.type만 다르다 (본문 나머지는 S4와 같다) · 인덱스 이름·id 구분 · oversample 3.0은 bbq만")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        emb = embed.Embedder(FakeEncoder(), "c-all@v1", "p@v1", cache_root=tmp)
+        base = s4_dense.S4Dense("c-all@v1", emb, m=24, ef_construction=150, num_candidates=80)
+        int8 = s4_dense.S4Int8("c-all@v1", emb, m=24, ef_construction=150, num_candidates=80)
+        bbq = s4_dense.S4BBQ("c-all@v1", emb, m=24, ef_construction=150, num_candidates=80)
+        assert (base.id, int8.id, bbq.id) == ("S4", "S4.int8", "S4.bbq") and int8.version == bbq.version == "v1"
+        assert (base.index_name, int8.index_name, bbq.index_name) == \
+            ("arena-c-all-v1-s4", "arena-c-all-v1-s4-int8", "arena-c-all-v1-s4-bbq")
+
+        def body_with_type(typ):                          # S4 본문에서 type만 바꾼 것
+            b = json.loads(json.dumps(base._body()))
+            b["mappings"]["properties"]["embedding"]["index_options"]["type"] = typ
+            return b
+        assert int8._body() == body_with_type("int8_hnsw")
+        assert bbq._body() == body_with_type("bbq_hnsw")
+        f = bbq._body()["mappings"]["properties"]["embedding"]
+        assert f == {"type": "dense_vector", "dims": 1024, "index": True, "similarity": "cosine",
+                     "index_options": {"type": "bbq_hnsw", "m": 24, "ef_construction": 150}}, f
+        assert "int8" not in json.dumps(base._body()) and "bbq" not in json.dumps(base._body())     # 기본 S4는 그대로
+        for s, typ, quant in ((base, "hnsw", None), (int8, "int8_hnsw", "int8"), (bbq, "bbq_hnsw", "bbq")):
+            st = s.settings()
+            assert st["dense_vector"]["index_options"]["type"] == typ and st["embedding_model"] == base.settings()["embedding_model"]
+            assert st["quantization"] == quant and st["index"] == s.index_name
+        assert base.settings()["query"] == {k: v for k, v in bbq.settings()["query"].items() if k != "rescore_vector"}
+        assert bbq.settings()["query"]["rescore_vector"] == {"oversample": 3.0}
+        assert "rescore_vector" not in int8.settings()["query"] and "rescore_vector" not in base.settings()["query"]
+        assert bbq.oversample == 3.0 and int8.oversample is None and base.oversample is None
+
+
+@case("S4 변형: kNN 질의 본문 — bbq는 rescore_vector.oversample 3.0을 넣고 int8·S4는 넣지 않는다 · 색인은 변형 이름으로 생성 — 가짜 ES")
+def _():
+    real = es.call
+    try:
+        for cls, want_rescore in ((s4_dense.S4Dense, None), (s4_dense.S4Int8, None), (s4_dense.S4BBQ, {"oversample": 3.0})):
+            state = {"count": 2}
+            es.call = fake_es_for(state, [("d0#0", 0.9)])
+            with tempfile.TemporaryDirectory() as tmp:
+                emb = embed.Embedder(FakeEncoder(), "c-all@v1", "p@v1", cache_root=tmp)
+                s = cls("c-all@v1", emb, num_candidates=50)
+                s.index(chunks_of("alpha beta", "gamma"))
+                put = [c for c in state["calls"] if c[0] == "PUT"][0]
+                assert put[1] == "/" + s.index_name
+                assert put[2]["mappings"]["properties"]["embedding"]["index_options"]["type"] == s.index_type
+                assert s.search("alpha", 10) == [("d0#0", 0.9)]
+                knn = [c for c in state["calls"] if c[1].endswith("/_search")][0][2]["knn"]
+                assert knn.get("rescore_vector") == want_rescore, (cls.__name__, knn.keys())
+                assert knn["k"] == 10 and knn["num_candidates"] == 50 and len(knn["query_vector"]) == 1024
+    finally:
+        es.call = real
+
+
+# SPLADE — 가짜 토크나이저·모델 (다운로드 없음). 단어 j → 토큰 id 3+j, [CLS]=1 · [SEP]=2 · 패딩 0. 모델은 입력 토큰 id%8 칸에 logit 1.0을 낸다.
+class FakeSpladeTok:
+    def __init__(self):
+        self.calls = []
+
+    def _ids(self, t, special):
+        ids = [3 + j for j, _ in enumerate(t.split())]
+        return [1] + ids + [2] if special else ids
+
+    def __call__(self, texts, add_special_tokens=True, truncation=False, max_length=None, padding=False, return_tensors=None):
+        import torch
+        self.calls.append({"truncation": truncation, "max_length": max_length})
+        rows = [self._ids(t, add_special_tokens) for t in texts]
+        if not truncation:
+            return {"input_ids": rows}
+        rows = [r[:max_length] for r in rows]
+        width = max(len(r) for r in rows)
+        ids = torch.tensor([r + [0] * (width - len(r)) for r in rows])
+        mask = torch.tensor([[1] * len(r) + [0] * (width - len(r)) for r in rows])
+        return {"input_ids": ids, "attention_mask": mask}
+
+
+class FakeSpladeModel:
+    V = 8
+
+    def __call__(self, input_ids, attention_mask):
+        import torch
+        from types import SimpleNamespace
+        logits = torch.zeros(*input_ids.shape, self.V)
+        for b in range(input_ids.shape[0]):
+            for pos in range(input_ids.shape[1]):
+                logits[b, pos, int(input_ids[b, pos]) % self.V] = 1.0        # 패딩 칸(id 0)도 켠다 — mask가 가려야 한다
+        return SimpleNamespace(logits=logits)
+
+
+def fake_splade_encoder(max_length=5, batch_size=2):
+    return s3a_splade.SpladeEncoder(device="cpu", max_length=max_length, batch_size=batch_size,
+                                    model=FakeSpladeModel(), tokenizer=FakeSpladeTok(), revision="splrev0123456789")
+
+
+@case("S3a: 풀링 = max_위치 log(1+relu(logits)) · mask — 손계산 · 마스크 밖 위치는 무시 · 음수는 0")
+def _():
+    import math
+    import torch
+    e = math.e
+    logits = torch.tensor([[[1.0, -2.0, 0.0, e - 1], [0.0, 3.0, -1.0, 0.0], [100.0, 100.0, 100.0, 100.0]],
+                           [[0.5, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 7.0, 0.0]]])
+    mask = torch.tensor([[1, 1, 0], [1, 1, 1]])
+    rep = s3a_splade.splade_pool(logits, mask)
+    # 행0: 위치0 → [ln2, 0, 0, ln(e)=1] · 위치1 → [0, ln4, 0, 0] · 위치2는 가려짐 → max = [ln2, ln4, 0, 1]
+    want0 = [math.log(2), math.log(4), 0.0, 1.0]
+    # 행1: [log1p(.5), 0, log1p(7)=ln8, 0]
+    want1 = [math.log(1.5), 0.0, math.log(8), 0.0]
+    assert rep.shape == (2, 4)
+    assert all(abs(float(a) - b) < 1e-6 for a, b in zip(rep[0], want0)), rep[0]
+    assert all(abs(float(a) - b) < 1e-6 for a, b in zip(rep[1], want1)), rep[1]
+
+
+@case("S3a: 인코더 — 희소 표현은 0이 아닌 칸만 · 패딩은 mask로 가려진다 · 잘림 표시 · 잘린 입력은 max_length에서 실제로 잘린다")
+def _():
+    enc = fake_splade_encoder(max_length=5, batch_size=2)
+    sparse, trunc = enc.encode(["a b", "a b c", "a b c d", "a"])
+    ln2 = 0.6931471805599453
+    # "a b" = [1,3,4,2] → 칸 1·3·4·2 · 길이 4 ≤ 5
+    assert sorted(sparse[0]) == ["1", "2", "3", "4"] and all(abs(w - ln2) < 1e-6 for w in sparse[0].values())
+    # "a b c" = 길이 5 → 안 잘림 [1,3,4,5,2] → 칸 1·3·4·5·2
+    assert sorted(sparse[1]) == ["1", "2", "3", "4", "5"] and trunc[:2] == [False, False]
+    # "a b c d" = 길이 6 > 5 → 잘림 [1,3,4,5,6]: [SEP](2)가 사라지고 6%8=6 칸이 켜진다
+    assert trunc[2] is True and sorted(sparse[2]) == ["1", "3", "4", "5", "6"], sparse[2]
+    assert trunc[3] is False and sorted(sparse[3]) == ["1", "2", "3"]
+    assert "0" not in sparse[0] and "0" not in sparse[3]             # 패딩(id 0 칸)은 mask로 가려져 들어오지 않는다
+    assert enc.max_tokens_seen == 6 and enc.model_id == "naver/splade-v3" and enc.revision == "splrev0123456789"
+    assert {c["max_length"] for c in enc.tokenizer.calls if c["truncation"]} == {5}
+
+
+@case("S3a: Embedder — 잘린 청크 수를 센다(캐시에서 읽어도) · info에 모델·revision·dtype·잘림 정책 · 토큰 값 없음 · 캐시 재사용")
+def _():
+    texts = ["a b", "a b c d", "a b c d e", "a"]
+    chunks = chunks_of(*texts)
+    with tempfile.TemporaryDirectory() as tmp:
+        emb = s3a_splade.SpladeEmbedder(fake_splade_encoder(max_length=5), "c@v1", "p@v1", cache_root=tmp)
+        dense, sp = emb.encode_chunks(chunks)
+        assert dense is None and len(sp) == 4
+        assert emb.stats["truncated_chunks"] == 2 and emb.stats["truncated_chunk_ids"] == ["d1#0", "d2#0"]
+        emb.encode_chunks(chunks)                                        # 같은 실행 안 — 메모(다시 세지 않는다)
+        assert emb.stats["truncated_chunks"] == 2
+        emb2 = s3a_splade.SpladeEmbedder(fake_splade_encoder(max_length=5), "c@v1", "p@v1", cache_root=tmp)
+        _, sp2 = emb2.encode_chunks(chunks)
+        assert sp2 == sp and emb2.stats["cache_hits"] == 4 and emb2.stats["encoded"] == 0
+        assert emb2.stats["truncated_chunks"] == 2                       # 캐시에서 읽어도 잘림은 센다
+        _, q = emb2.encode_query("a b c d")
+        assert emb2.stats["queries_truncated"] == 1 and sorted(q) == ["1", "3", "4", "5", "6"]
+        i = emb2.info()
+        assert i["truncated_chunks"] == 2 and i["model_id"] == "naver/splade-v3" and i["revision"] == "splrev0123456789"
+        assert i["dtype"] == "float32" and i["max_length"] == 5 and i["device"] == "cpu" and "torch" in i["libraries"]
+        assert i["chunks"] == 4 and i["cache_hits"] == 4 and i["queries_truncated"] == 1 and "자르고" in i["truncation_policy"]
+        assert "splrev012345" in i["cache_namespace"] and "naver-splade-v3" in i["cache_namespace"]
+        assert i["mean_nonzero_per_chunk"] > 0 and "value not recorded" in i["hf_token"]
+        # 텍스트가 바뀌면 sha가 달라 다시 인코딩한다
+        emb3 = s3a_splade.SpladeEmbedder(fake_splade_encoder(max_length=5), "c@v1", "p@v1", cache_root=tmp)
+        emb3.encode_chunks(chunks_of("a b", "a b c d", "NEW text", "a"))
+        assert emb3.stats["cache_hits"] == 3 and emb3.stats["encoded"] == 1
+
+
+@case("S3a: HF_TOKEN — .env에서 읽기만 한다(os.environ 불변) · 없거나 비면 .env.example을 가리키는 한국어 실패 · 인코더·CLI도 같다")
+def _():
+    import os
+    before = dict(os.environ)
+    with tempfile.TemporaryDirectory() as tmp:
+        ok = Path(tmp) / "ok.env"
+        ok.write_text("# 주석\nOTHER=1\nHF_TOKEN = \"hf_secret_value\"\n", encoding="utf-8")
+        assert s3a_splade.load_hf_token([ok]) == "hf_secret_value"
+        assert dict(os.environ) == before                                  # 환경 변수에 넣지 않았다
+        for name, body in (("empty.env", "HF_TOKEN=\n"), ("none.env", "OTHER=1\n"), ("missing.env", None)):
+            p = Path(tmp) / name
+            if body is not None:
+                p.write_text(body, encoding="utf-8")
+            try:
+                s3a_splade.load_hf_token([p])
+                raise AssertionError("토큰이 없는데 통과했다")
+            except s3a_splade.HFTokenError as e:
+                assert ".env.example" in str(e) and "HF_TOKEN" in str(e) and "게이트" in str(e)
+        # 여러 후보 중 앞 파일에 없으면 다음 파일에서 찾는다
+        assert s3a_splade.load_hf_token([Path(tmp) / "none.env", ok]) == "hf_secret_value"
+        # 인코더를 모델 없이 만들면(실제 로딩 경로) 다운로드 전에 토큰 오류로 끝난다
+        assert raises(s3a_splade.HFTokenError, s3a_splade.SpladeEncoder, device="cpu", env_files=[Path(tmp) / "none.env"])
+        # CLI는 SystemExit로 같은 메시지를 낸다
+        import importlib
+        from types import SimpleNamespace
+        cli = importlib.import_module("arena.cli")
+        real = s3a_splade._env_files
+        s3a_splade._env_files = lambda: [Path(tmp) / "none.env"]
+        try:
+            try:
+                cli.make_splade_embedder(SimpleNamespace(device="cpu", encode_batch=4, no_cache=True), {"version": "c"}, {"version": "p"})
+                raise AssertionError("SystemExit가 아니다")
+            except SystemExit as e:
+                assert ".env.example" in str(e)
+        finally:
+            s3a_splade._env_files = real
+
+
+@case("S3a: 실제 로딩 경로는 토큰을 token=으로 명시해 다운로드·from_pretrained에 넘긴다 (환경 변수 아님) — 가짜 HF")
+def _():
+    import os
+    import transformers
+    seen = {}
+
+    class FM:
+        def to(self, d):
+            seen["device"] = d
+            return self
+
+        def eval(self):
+            seen["eval"] = True
+            return self
+
+    def fake_resolve(model_id, token=None):
+        seen["resolve"] = (model_id, token)
+        return "/fake/snap", "revfake0000000000"
+
+    def fake_tok(path, token=None, **kw):
+        seen["tok"] = (path, token)
+        return FakeSpladeTok()
+
+    def fake_model(path, token=None, **kw):
+        seen["model"] = (path, token, kw)
+        return FM()
+    real = (s3a_splade.resolve_revision, transformers.AutoTokenizer.from_pretrained, transformers.AutoModelForMaskedLM.from_pretrained)
+    before = dict(os.environ)
+    with tempfile.TemporaryDirectory() as tmp:
+        env = Path(tmp) / ".env"
+        env.write_text("HF_TOKEN=tok123\n", encoding="utf-8")
+        try:
+            s3a_splade.resolve_revision = fake_resolve
+            transformers.AutoTokenizer.from_pretrained = staticmethod(fake_tok)
+            transformers.AutoModelForMaskedLM.from_pretrained = staticmethod(fake_model)
+            e = s3a_splade.SpladeEncoder(device="cpu", env_files=[env])
+        finally:
+            s3a_splade.resolve_revision, transformers.AutoTokenizer.from_pretrained, transformers.AutoModelForMaskedLM.from_pretrained = real
+    assert seen["resolve"] == ("naver/splade-v3", "tok123") and seen["tok"] == ("/fake/snap", "tok123")
+    assert seen["model"][:2] == ("/fake/snap", "tok123") and seen["device"] == "cpu" and seen["eval"] is True
+    assert e.revision == "revfake0000000000" and dict(os.environ) == before
+
+
+@case("S3a: 전략 — 희소 내적 점수(S3b와 같은 식) · 설정에 모델·max_length·잘림 정책 · id/버전")
+def _():
+    class SpEmb:
+        encoder = fake_splade_encoder(max_length=512)
+
+        def encode_chunks(self, chunks):
+            return None, [{"1": .5, "2": 1.0}, {"1": .5}, {"9": 1.0}]
+
+        def encode_query(self, text):
+            return None, {"1": .4, "2": .2}
+    s = s3a_splade.S3aSplade("c@v1", SpEmb())
+    s.index(chunks_of("x", "y", "z"))
+    got = s.search("q", 10)
+    # d0 = .4*.5 + .2*1 = .4 · d1 = .2 · d2 겹침 없음 → 제외
+    assert [c for c, _ in got] == ["d0#0", "d1#0"] and abs(got[0][1] - 0.4) < 1e-12 and abs(got[1][1] - 0.2) < 1e-12
+    st = s.settings()
+    assert s.id == "S3a" and s.version == "v1" and st["embedding_model"] == "naver/splade-v3@splrev0123456789"
+    assert st["max_length"] == 512 and "자르고" in st["truncation"]
+
+
+@case("S5b: S3a+S4 문서 단위 RRF — 손계산과 같다 · 대표 청크(동점은 S3a 쪽) · 구성요소 키 s3a/s4 · 같은 chunk_k · k 불일치는 거부 · 새로 색인")
+def _():
+    chunk_to_doc = {"A#0": "A", "A#1": "A", "B#0": "B", "C#0": "C"}
+    chunks = [{"chunk_id": c, "doc_id": d, "source_type": "repo", "text": "t"} for c, d in chunk_to_doc.items()]
+    s3a = FakeComponent("S3a", [("A#1", 9.0), ("B#0", 8.0), ("A#0", 7.0)])
+    s4 = FakeComponent("S4", [("C#0", 0.9), ("B#0", 0.8), ("A#0", 0.7)])
+    s = s5b_rrf.S5bRRF(s3a, s4, rrf_k=60, chunk_k=100)
+    assert s.id == "S5b" and s.version == "v1"
+    s.index(chunks)
+    assert s3a.n_indexed == 4 and s4.n_indexed == 4 and s.n_indexed == 4
+    got = s.search("q", 100)
+    # S5a 테스트와 같은 손계산: A = 1/61 + 1/63 · B = 2/62 · C = 1/61
+    want = {"A": 1 / 61 + 1 / 63, "B": 2 / 62, "C": 1 / 61}
+    by_doc = {chunk_to_doc[c]: sc for c, sc in got}
+    assert len(got) == 3 and all(abs(by_doc[d] - want[d]) < 1e-9 for d in want), (by_doc, want)
+    assert [chunk_to_doc[c] for c, _ in got] == sorted(want, key=lambda d: -want[d])
+    rep = {chunk_to_doc[c]: c for c, _ in got}
+    assert rep["A"] == "A#1" and rep["C"] == "C#0" and rep["B"] == "B#0"
+    # 같은 구성요소 순위를 넣은 S5a와 출력이 같다 (같은 융합 코드)
+    s5a = s5a_rrf.S5aRRF(FakeComponent("S2", s3a._hits), FakeComponent("S4", s4._hits), rrf_k=60, chunk_k=100)
+    s5a.index(chunks)
+    assert s5a.search("q", 100) == got
+    # 대표 청크 동점(두 구성요소가 같은 순위) → 앞 구성요소(S3a) 쪽 청크
+    t1 = FakeComponent("S3a", [("A#0", 2.0), ("B#0", 1.0)])
+    t2 = FakeComponent("S4", [("A#1", 2.0), ("B#0", 1.0)])
+    tie = s5b_rrf.S5bRRF(t1, t2)
+    tie.index(chunks)
+    assert dict((chunk_to_doc[c], c) for c, _ in tie.search("q", 100))["A"] == "A#0"
+    st = s.settings()
+    assert list(st["components"]) == ["s3a", "s4"] and st["components"]["s3a"]["marker"] == "S3a"
+    assert st["fusion"]["params"] == {"k": 60} and st["component_chunk_k"] == 100 and st["reuse_of_saved_results"] is False
+    assert s3a.asked and set(s3a.asked) == {100} and set(s4.asked) == {100}
+    assert raises(ValueError, s.search, "q", 50)
+    assert s.index_size_bytes() == 20 and s.size_breakdown() == {"s3a": 10, "s4": 10}
+    for bad in ({"rrf_k": 0}, {"chunk_k": 0}, {"rrf_k": 1.5}):
+        assert raises(ValueError, s5b_rrf.S5bRRF, s3a, s4, **bad), bad
+
+
+@case("CLI: 새 전략(s1 · s3a · s4.int8 · s4.bbq · s5b)이 --strategy에 있고 make_strategy가 알맞은 객체를 만든다 · 점 있는 id도 결과 키에 들어간다")
+def _():
+    import importlib
+    from types import SimpleNamespace
+    cli = importlib.import_module("arena.cli")
+    assert cli.STRATEGY_CHOICES == ["s1", "s2", "s3a", "s3b", "s4", "s4.int8", "s4.bbq", "s5a", "s5b", "s6"]
+    assert set(cli.SPLADE_STRATEGIES) == {"s3a", "s5b"} and {"s4.int8", "s4.bbq", "s5b"} <= set(cli.BGE_STRATEGIES)
+    assert {"s3a", "s5b", "s4.bbq"} <= set(cli.EMBEDDING_STRATEGIES) and "s1" not in cli.EMBEDDING_STRATEGIES
+    args = SimpleNamespace(es_url="http://x", hnsw_m=16, ef_construction=100, num_candidates=100, rrf_k=60, chunk_k=100)
+    cfg = {"version": "c-all@v1"}
+    with tempfile.TemporaryDirectory() as tmp:
+        emb = embed.Embedder(FakeEncoder(), "c-all@v1", "p@v1", cache_root=tmp)
+        spl = s3a_splade.SpladeEmbedder(fake_splade_encoder(), "c-all@v1", "p@v1", cache_root=tmp)
+
+        def mk(n):
+            return cli.make_strategy(n, args, cfg, {"version": "p@v1"}, emb, splade=spl, docs=S1_DOCS)
+        assert type(mk("s1")) is s1_match.S1Match and type(mk("s3a")) is s3a_splade.S3aSplade
+        assert type(mk("s4.int8")) is s4_dense.S4Int8 and type(mk("s4.bbq")) is s4_dense.S4BBQ and type(mk("s4")) is s4_dense.S4Dense
+        b = mk("s5b")
+        assert type(b) is s5b_rrf.S5bRRF and type(b.s3a) is s3a_splade.S3aSplade and type(b.s4) is s4_dense.S4Dense
+        assert type(mk("s5a")) is s5a_rrf.S5aRRF
+    for sid in ("S1", "S3a", "S4.int8", "S4.bbq", "S5b"):
+        key = harness.result_key(sid, "v1", "c-all@v1", "toy@v0")
+        assert key == f"{sid}.v1__c-all@v1__toy@v0__T0__seed0", key
+
+
 @case("CLI: --strategy에 s2 · s3b · s4 · s5a · s6이 있다 · 결과 키에 전략 id/버전이 들어간다")
 def _():
     import importlib
     cli = importlib.import_module("arena.cli")
-    assert cli.STRATEGY_CHOICES == ["s2", "s3b", "s4", "s5a", "s6"] and "s6" in cli.EMBEDDING_STRATEGIES
+    assert {"s2", "s3b", "s4", "s5a", "s6"} <= set(cli.STRATEGY_CHOICES) and "s6" in cli.EMBEDDING_STRATEGIES
     assert harness.result_key("S5a", "v1", "c-all@v1", "toy@v0").startswith("S5a.v1__")
     assert harness.result_key("S6", "v1", "c-all@v1", "toy@v0").startswith("S6.v1__")
     assert harness.result_key("S3b", "v1", "c-all@v1", "toy@v0").startswith("S3b.v1__")

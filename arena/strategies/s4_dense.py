@@ -6,6 +6,10 @@
 HNSW 파라미터(m · ef_construction · num_candidates)는 **dev에서 정하고 test 전에 고정**한다 (모든 S4 변형이 같은 값).
 지금 기본값(m=16 · ef_construction=100 · num_candidates=100)은 장난감 실행용 자리표시다 — 정한 값이 아니다.
 같은 인덱스 이름 규칙(코퍼스 버전 포함) · 색인 건수 검증 · bulk 오류 확인은 S2와 같다.
+
+양자화 변형 (§6 변경 2026-10-02 「Should 변형」, 이슈 #63) — 임베딩 · 청크 · HNSW 파라미터 · cosine은 S4와 같고 `index_options.type`만 다르다.
+  `S4.int8` = `int8_hnsw`  ·  `S4.bbq` = `bbq_hnsw` + knn 질의의 `rescore_vector.oversample` **3.0 명시**
+인덱스 이름이 따로라(`...-s4-int8` · `...-s4-bbq`) 같은 실행에서 S4와 나란히 둘 수 있다.
 """
 import numpy as np
 
@@ -17,9 +21,16 @@ FIELD = "embedding"
 M, EF_CONSTRUCTION, NUM_CANDIDATES = 16, 100, 100
 
 
+OVERSAMPLE = 3.0                 # S4.bbq 재채점 배수 (등록값 — 바꾸면 변형 새 버전)
+
+
 class S4Dense:
     id = "S4"
     version = "v1"
+    index_type = "hnsw"              # ES index_options.type — 변형은 이 칸만 바꾼다
+    index_suffix = "s4"
+    oversample = None                # 값이 있으면 knn 질의에 rescore_vector를 넣는다
+    quantization = None
 
     def __init__(self, corpus_version, embedder, es_url=es.DEFAULT_URL, m=M, ef_construction=EF_CONSTRUCTION,
                  num_candidates=NUM_CANDIDATES):
@@ -29,7 +40,7 @@ class S4Dense:
                 raise ValueError(f"S4 {name}={v!r} — {lo}~{hi} 정수여야 한다")
         self.es_url, self.embedder = es_url, embedder
         self.m, self.ef_construction, self.num_candidates = m, ef_construction, num_candidates
-        self.index_name = index_name_for(corpus_version, "s4")
+        self.index_name = index_name_for(corpus_version, self.index_suffix)
         self.took_ms = []
         self.n_indexed = 0
 
@@ -38,9 +49,10 @@ class S4Dense:
             "index": self.index_name,
             "embedding_model": f"{self.embedder.encoder.model_id}@{self.embedder.encoder.revision}",
             "dense_vector": {"dims": DIMS, "index": True, "similarity": "cosine",
-                             "index_options": {"type": "hnsw", "m": self.m, "ef_construction": self.ef_construction}},
-            "quantization": None,
+                             "index_options": {"type": self.index_type, "m": self.m, "ef_construction": self.ef_construction}},
+            "quantization": self.quantization,
             "query": {"type": "knn", "num_candidates": self.num_candidates,
+                      **({"rescore_vector": {"oversample": self.oversample}} if self.oversample is not None else {}),
                       "note": "k = 요청한 청크 수(하네스 chunk_k) · num_candidates ≥ k여야 한다 · ES cosine 점수는 (1+cos)/2"},
             "hnsw_status": "자리표시 기본값 — dev에서 정하고 test 전에 고정한다 (retrieval-arena §6 변경 2026-10-02)",
             "number_of_shards": 1, "number_of_replicas": 0,
@@ -54,7 +66,7 @@ class S4Dense:
                 "doc_id": {"type": "keyword"},
                 "source_type": {"type": "keyword"},
                 FIELD: {"type": "dense_vector", "dims": DIMS, "index": True, "similarity": "cosine",
-                        "index_options": {"type": "hnsw", "m": self.m, "ef_construction": self.ef_construction}},
+                        "index_options": {"type": self.index_type, "m": self.m, "ef_construction": self.ef_construction}},
             }},
         }
 
@@ -81,8 +93,10 @@ class S4Dense:
         if k > self.num_candidates:
             raise ValueError(f"k={k} > num_candidates={self.num_candidates} — ES가 거부한다. chunk_k를 줄이거나 --num-candidates를 늘린다")
         qd, _ = self.embedder.encode_query(query)
-        body = {"size": k, "_source": False,
-                "knn": {"field": FIELD, "query_vector": qd.tolist(), "k": k, "num_candidates": self.num_candidates}}
+        knn = {"field": FIELD, "query_vector": qd.tolist(), "k": k, "num_candidates": self.num_candidates}
+        if self.oversample is not None:
+            knn["rescore_vector"] = {"oversample": self.oversample}
+        body = {"size": k, "_source": False, "knn": knn}
         st, res = es.call(self.es_url, "POST", f"/{self.index_name}/_search", body)
         es.expect(st, res, "search")
         self.took_ms.append(res.get("took", 0))
@@ -99,3 +113,20 @@ class S4Dense:
 
     def drop(self):
         es.call(self.es_url, "DELETE", "/" + self.index_name)
+
+
+class S4Int8(S4Dense):
+    """S4.int8 — `int8_hnsw` (손실이 가장 작은 압축). 재채점 설정은 ES 기본값에 맡기지 않고 쓰지 않는다(질의 본문은 S4와 같다)."""
+    id = "S4.int8"
+    index_type = "int8_hnsw"
+    index_suffix = "s4-int8"
+    quantization = "int8"
+
+
+class S4BBQ(S4Dense):
+    """S4.bbq — `bbq_hnsw` (1비트 양자화, Basic의 기본값) + 재채점 `oversample` 3.0 명시."""
+    id = "S4.bbq"
+    index_type = "bbq_hnsw"
+    index_suffix = "s4-bbq"
+    quantization = "bbq"
+    oversample = OVERSAMPLE
