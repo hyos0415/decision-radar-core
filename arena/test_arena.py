@@ -1432,7 +1432,7 @@ def _():
     import importlib
     from types import SimpleNamespace
     cli = importlib.import_module("arena.cli")
-    assert cli.STRATEGY_CHOICES == ["s1", "s2", "s3a", "s3b", "s4", "s4.int8", "s4.bbq", "s5a", "s5b", "s6"]
+    assert cli.STRATEGY_CHOICES == ["s1", "s2", "s3a", "s3a.ko", "s3b", "s4", "s4.int8", "s4.bbq", "s4.kure", "s5a", "s5b", "s6"]
     assert set(cli.SPLADE_STRATEGIES) == {"s3a", "s5b"} and {"s4.int8", "s4.bbq", "s5b"} <= set(cli.BGE_STRATEGIES)
     assert {"s3a", "s5b", "s4.bbq"} <= set(cli.EMBEDDING_STRATEGIES) and "s1" not in cli.EMBEDDING_STRATEGIES
     args = SimpleNamespace(es_url="http://x", hnsw_m=16, ef_construction=100, num_candidates=100, rrf_k=60, chunk_k=100)
@@ -1462,6 +1462,263 @@ def _():
     assert harness.result_key("S6", "v1", "c-all@v1", "toy@v0").startswith("S6.v1__")
     assert harness.result_key("S3b", "v1", "c-all@v1", "toy@v0").startswith("S3b.v1__")
     assert harness.result_key("S4", "v1", "c-all@v1", "toy@v0").startswith("S4.v1__")
+
+
+# --- HYO-35 (이슈 #66): S4.kure KURE-v1 · S3a.ko KURE-Sparse-nano · S5b SPLADE 선택 -----------------------------------------------
+# 가짜 모델만 쓴다 — 다운로드 없음.
+
+class FakeSTModel:
+    """SentenceTransformer 흉내: tokenizer(공백 단어 + 특수 토큰 2개) · prompts(비어 있음 = 접두 없음) · max_seq_length · encode."""
+
+    class _Tok:
+        def __call__(self, texts, add_special_tokens=True, truncation=False):
+            return {"input_ids": [list(range(len(t.split()) + (2 if add_special_tokens else 0))) for t in texts]}
+
+    def __init__(self, prompts=None):
+        self.tokenizer = self._Tok()
+        self.prompts = {} if prompts is None else prompts
+        self.max_seq_length = 8192
+        self.calls = []
+
+    def encode(self, texts, **kw):
+        import numpy as np
+        self.calls.append((list(texts), dict(kw)))
+        out = np.zeros((len(texts), 1024), dtype=np.float32)
+        for i, t in enumerate(texts):
+            out[i, len(t) % 1024] = 1.0
+        return out
+
+
+def kure_encoder(model=None, **kw):
+    return embed.SentenceTransformerDenseEncoder("nlpai-lab/KURE-v1", "8b418a58414668e75532ed045c22d9ca018ae2b2",
+                                                 device="cpu", model=model or FakeSTModel(), **kw)
+
+
+@case("S4.kure 인코더: 질의 · 문서가 같은 인자(fp32 · normalize · 접두 없음 · max_seq_length 512)로 인코딩되고 sparse 자리는 비어 있다")
+def _():
+    m = FakeSTModel()
+    enc = kure_encoder(m)
+    assert m.max_seq_length == 512 and enc.max_length == 512            # 모델 기본 8192를 512로 내린다
+    d, s = enc.encode_docs(["alpha beta", "gamma"])
+    q, _ = enc.encode_queries(["alpha"])
+    assert d.shape == (2, 1024) and d.dtype.name == "float32" and q.shape == (1, 1024) and s == [{}, {}]
+    assert len(m.calls) == 2 and m.calls[0][1] == m.calls[1][1], m.calls
+    assert m.calls[0][1]["normalize_embeddings"] is True and m.calls[0][1]["convert_to_numpy"] is True
+    assert not any("prompt" in k for k in m.calls[0][1]) and enc.instruction_prefix is None and enc.prompts == {}
+    assert enc.revision == "8b418a58414668e75532ed045c22d9ca018ae2b2"
+
+
+@case("S4.kure 인코더: 512토큰(특수 토큰 포함)을 넘는 입력은 실패한다 — 510+2는 통과 · 511+2는 실패하고 모델에 가지도 않는다 · 최대 토큰 수 기록")
+def _():
+    m = FakeSTModel()
+    enc = kure_encoder(m)
+    enc.encode_docs([" ".join(["w"] * 510)])
+    assert enc.max_tokens_seen == 512
+    assert raises(embed.TruncationError, enc.encode_docs, ["a b", " ".join(["w"] * 511)])
+    assert len(m.calls) == 1
+    bad = FakeSTModel()
+    bad.encode = lambda texts, **kw: __import__("numpy").zeros((len(texts), 512), dtype="float32")
+    assert raises(ValueError, kure_encoder(bad).encode_docs, ["a b"])           # 차원이 1024가 아니면 실패
+
+
+@case("S4.kure: 색인 본문 · 설정은 S4와 같고 id · 인덱스 이름 · 임베딩 모델만 다르다 — 같은 청크 · 같은 HNSW 파라미터")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        bge = embed.Embedder(FakeEncoder(), "c-all@v1", "p@v1", cache_root=tmp)
+        ku = embed.Embedder(kure_encoder(), "c-all@v1", "p@v1", cache_root=tmp)
+        a = s4_dense.S4Dense("c-all@v1", bge, m=24, ef_construction=150, num_candidates=80)
+        b = s4_dense.S4Kure("c-all@v1", ku, m=24, ef_construction=150, num_candidates=80)
+        assert (a.id, b.id, b.version) == ("S4", "S4.kure", "v1")
+        assert (a.index_name, b.index_name) == ("arena-c-all-v1-s4", "arena-c-all-v1-s4-kure")
+        assert a._body() == b._body()
+        sa, sb = a.settings(), b.settings()
+        for key in ("index", "embedding_model"):
+            assert sa.pop(key) != sb.pop(key)
+        assert sa == sb
+        assert b.settings()["embedding_model"] == "nlpai-lab/KURE-v1@8b418a58414668e75532ed045c22d9ca018ae2b2"
+        f = b._body()["mappings"]["properties"]["embedding"]
+        assert f == {"type": "dense_vector", "dims": 1024, "index": True, "similarity": "cosine",
+                     "index_options": {"type": "hnsw", "m": 24, "ef_construction": 150}}, f
+        assert b.quantization is None and b.oversample is None
+
+
+@case("S4.kure: 임베딩 캐시 이름공간이 모델마다 다르다 (모델 id + revision) — KURE 캐시가 BGE-M3 캐시를 건드리지 않고, 두 번째 실행은 캐시에서 읽는다")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        m = FakeSTModel()
+        ku = embed.Embedder(kure_encoder(m), "c-all@v1", "p@v1", cache_root=tmp)
+        bge = embed.Embedder(FakeEncoder(), "c-all@v1", "p@v1", cache_root=tmp)
+        assert ku.namespace != bge.namespace and "KURE-v1-8b418a584146" in ku.namespace, ku.namespace
+        other_rev = embed.Embedder(embed.SentenceTransformerDenseEncoder("nlpai-lab/KURE-v1", "ffffffffffffffff", device="cpu", model=FakeSTModel()),
+                                   "c-all@v1", "p@v1", cache_root=tmp)
+        assert other_rev.namespace != ku.namespace                          # revision이 바뀌면 캐시도 바뀐다
+        ch = chunks_of("alpha beta", "gamma")
+        ku.encode_chunks(ch)
+        assert (Path(tmp) / ku.namespace / "index.json").is_file() and not (Path(tmp) / bge.namespace).exists()
+        ku2 = embed.Embedder(kure_encoder(m), "c-all@v1", "p@v1", cache_root=tmp)
+        before = len(m.calls)
+        ku2.encode_chunks(ch)
+        assert len(m.calls) == before and ku2.stats["cache_hits"] == 2
+        info = ku.info()
+        assert info["model_id"] == "nlpai-lab/KURE-v1" and info["instruction_prefix"] is None and info["dtype"] == "float32"
+        assert "sentence-transformers" in info["libraries"] and info["max_tokens_seen_in_encoded"] == 4
+
+
+class FakeKureSparseModel:
+    """SparseEncoder 흉내 — 질의용 · 문서용 메서드를 따로 기록한다. 받은 입력(접두 지시문은 모델 안에서 붙으므로 원문)과 호출한 메서드를 남긴다."""
+
+    class _Tok:
+        def __call__(self, texts, add_special_tokens=True, truncation=False):
+            return {"input_ids": [list(range(len(t.split()) + (2 if add_special_tokens else 0))) for t in texts]}
+
+    def __init__(self, prompts=None):
+        self.tokenizer = self._Tok()
+        self.prompts = {"query": "[Q] ", "document": "[D] "} if prompts is None else prompts
+        self.max_seq_length = 512
+        self.calls = []
+
+    def _enc(self, kind, texts, **kw):
+        import torch
+        self.calls.append((kind, list(texts), dict(kw)))
+        out = torch.zeros(len(texts), 12)
+        for i, t in enumerate(texts):
+            out[i, len(t) % 12] = 1.5 if kind == "query" else 2.5          # 질의 · 문서가 구별되는 값
+        return out
+
+    def encode_query(self, texts, **kw):
+        return self._enc("query", texts, **kw)
+
+    def encode_document(self, texts, **kw):
+        return self._enc("document", texts, **kw)
+
+    def encode(self, *a, **kw):                          # 직접 encode는 부르면 안 된다 (접두 지시문이 안 붙는다)
+        raise AssertionError("encode()를 직접 부르면 질의 · 문서 접두 지시문이 빠진다")
+
+
+def kure_sparse_encoder(model=None, **kw):
+    from arena.strategies import s3a_ko_kure_sparse as ko
+    return ko.KureSparseEncoder(device="cpu", model=model or FakeKureSparseModel(), **kw)
+
+
+@case("S3a.ko 인코더: 문서는 encode_document · 질의는 encode_query로 부른다 (encode 직접 호출 없음) · 핀 고정 모델 id · 표현은 0이 아닌 칸만")
+def _():
+    from arena.strategies import s3a_ko_kure_sparse as ko
+    m = FakeKureSparseModel()
+    enc = kure_sparse_encoder(m, max_length=64)
+    assert (enc.model_id, enc.revision, enc.trust_remote_code) == ("nlpai-lab/KURE-Sparse-nano", "1eb281e81edcf44cbb401d475054f817b49fddbd", True)
+    assert ko.REVISION == "1eb281e81edcf44cbb401d475054f817b49fddbd" and ko.MAX_LENGTH == 8192
+    docs, tr = enc.encode_docs(["alpha beta", "gamma"])
+    qs, _ = enc.encode_queries(["alpha"])
+    assert [c[0] for c in m.calls] == ["document", "query"] and enc.call_log == ["document", "query"]
+    assert docs == [{str(len("alpha beta") % 12): 2.5}, {str(len("gamma") % 12): 2.5}] and tr == [False, False]
+    assert qs == [{str(len("alpha") % 12): 1.5}]
+    assert m.calls[0][2]["convert_to_sparse_tensor"] is False and m.max_seq_length == 64
+    assert raises(ValueError, kure_sparse_encoder, FakeKureSparseModel(prompts={}))                  # prompts가 없으면 실패
+    assert raises(ValueError, kure_sparse_encoder, FakeKureSparseModel(prompts={"query": "[Q] "}))
+
+
+@case("S3a.ko 인코더: 접두 지시문까지 포함해 max_length를 넘으면 실패한다 (조용히 자르지 않는다) · 최대 토큰 수 기록 · 질의도 같다")
+def _():
+    m = FakeKureSparseModel()
+    enc = kure_sparse_encoder(m, max_length=12)
+    # 접두 "[D] "가 단어 하나로 센다 — 단어 9개 + 접두 1 + 특수 2 = 12 → 통과 · 단어 10개 → 13 → 실패
+    docs, tr = enc.encode_docs([" ".join(["w"] * 8)])
+    assert len(m.calls) == 1 and enc.max_tokens_seen == 11
+    enc.encode_docs([" ".join(["w"] * 9)])
+    assert enc.max_tokens_seen == 12
+    assert raises(embed.TruncationError, enc.encode_docs, ["a", " ".join(["w"] * 10)])
+    assert raises(embed.TruncationError, enc.encode_queries, [" ".join(["w"] * 10)])
+    assert len(m.calls) == 2                                          # 실패한 입력은 모델에 가지도 않았다
+
+
+@case("S3a.ko 임베더: 캐시 이름공간이 S3a와 다르다 · 문서/질의 메서드 구분 · 잘림 0 · system.json 기록(모델 · revision · trust_remote_code · prompts · 버전)")
+def _():
+    from arena.strategies import s3a_ko_kure_sparse as ko
+    with tempfile.TemporaryDirectory() as tmp:
+        m = FakeKureSparseModel()
+        emb = ko.KureSparseEmbedder(kure_sparse_encoder(m), "c@v1", "p@v1", cache_root=tmp)
+        spl = s3a_splade.SpladeEmbedder(fake_splade_encoder(), "c@v1", "p@v1", cache_root=tmp)
+        assert emb.namespace != spl.namespace and "KURE-Sparse-nano-1eb281e81edc" in emb.namespace and emb.namespace.endswith("fp32-L8192")
+        ch = chunks_of("alpha beta", "gamma")
+        _, sp = emb.encode_chunks(ch)
+        _, q = emb.encode_query("alpha")
+        assert len(sp) == 2 and len(q) == 1 and [c[0] for c in m.calls] == ["document", "query"]
+        emb2 = ko.KureSparseEmbedder(kure_sparse_encoder(m), "c@v1", "p@v1", cache_root=tmp)         # 두 번째: 캐시
+        emb2.encode_chunks(ch)
+        assert [c[0] for c in m.calls] == ["document", "query"] and emb2.stats["cache_hits"] == 2
+        info = emb.info()
+        assert info["model_id"] == "nlpai-lab/KURE-Sparse-nano" and info["revision"] == "1eb281e81edcf44cbb401d475054f817b49fddbd"
+        assert info["trust_remote_code"] is True and info["prompts"] == {"query": "[Q] ", "document": "[D] "}
+        assert info["dtype"] == "float32" and info["similarity"] == "dot" and info["truncated_chunks"] == 0
+        assert info["max_tokens_seen_in_encoded"] == 5 and info["max_length"] == 8192 and info["libraries"]["torch"]
+        assert info["query_method"] == "encode_query" and info["document_method"] == "encode_document"
+        assert info["chunk_encode_seconds"] >= 0 and info["cache_namespace"] == emb.namespace
+        s = ko.S3aKo("c@v1", emb)
+        assert s.id == "S3a.ko" and s.version == "v1"
+        s.index(ch)
+        assert s.n_indexed == 2 and s.index_size_bytes() == (len(sp[0]) + len(sp[1])) * 8
+        hits = s.search("alpha", 10)                                       # 점수 = 질의 · 문서 내적 (같은 칸이 켜진 청크만)
+        assert hits and all(isinstance(c, str) for c, _ in hits)
+        st = s.settings()
+        assert st["embedding_model"] == "nlpai-lab/KURE-Sparse-nano@1eb281e81edcf44cbb401d475054f817b49fddbd" and st["trust_remote_code"] is True
+        assert st["prompts"] == {"query": "[Q] ", "document": "[D] "} and st["max_length"] == 8192
+
+
+@case("S5b: --s5b-sparse 선택 — 기본은 s3a(구성요소 키 s3a · sparse_component s3a)로 옛 동작 그대로 · s3a.ko면 키와 기록이 바뀐다 · 알 수 없는 값은 거부")
+def _():
+    hits3 = [("A#1", 9.0), ("B#0", 8.0)]
+    hits4 = [("B#0", 0.9), ("A#1", 0.8)]
+    default = s5b_rrf.S5bRRF(FakeComponent("S3a", hits3), FakeComponent("S4", hits4))
+    st = default.settings()
+    assert list(st["components"]) == ["s3a", "s4"] and st["sparse_component"] == "s3a" and default.sparse == "s3a"
+    ko = s5b_rrf.S5bRRF(FakeComponent("S3a.ko", hits3), FakeComponent("S4", hits4), sparse="s3a.ko")
+    sk = ko.settings()
+    assert list(sk["components"]) == ["s3a.ko", "s4"] and sk["sparse_component"] == "s3a.ko"
+    assert sk["components"]["s3a.ko"]["marker"] == "S3a.ko" and ko.id == "S5b"
+    assert raises(ValueError, s5b_rrf.S5bRRF, FakeComponent("x", []), FakeComponent("y", []), sparse="s3b")
+    for s in (default, ko):                                              # 순위 · 점수는 구성요소 선택과 무관하게 같은 규칙
+        s.index([{"chunk_id": c, "doc_id": c.split("#")[0], "source_type": "repo", "text": c} for c in ("A#1", "B#0")])
+    assert default.search("q", 100) == ko.search("q", 100)
+
+
+@case("CLI: s4.kure · s3a.ko가 --strategy에 있다 · make_strategy가 알맞은 객체를 만든다 · s5b는 --s5b-sparse로 SPLADE를 고르고 기본은 s3a · 다른 전략에 쓰면 거부 · 핀 고정")
+def _():
+    import importlib
+    from types import SimpleNamespace
+    from arena.strategies import s3a_ko_kure_sparse as ko
+    cli = importlib.import_module("arena.cli")
+    assert {"s4.kure", "s3a.ko"} <= set(cli.STRATEGY_CHOICES) and "s4.kure" in cli.KURE_STRATEGIES and "s3a.ko" in cli.KURE_SPARSE_STRATEGIES
+    assert "s4.kure" not in cli.BGE_STRATEGIES and "s3a.ko" not in cli.SPLADE_STRATEGIES              # BGE-M3 · HF 토큰이 필요 없다
+    assert {"s4.kure", "s3a.ko"} <= set(cli.EMBEDDING_STRATEGIES)
+    assert cli.KURE_MODEL_ID == "nlpai-lab/KURE-v1" and cli.KURE_REVISION == "8b418a58414668e75532ed045c22d9ca018ae2b2"
+    assert ko.MODEL_ID == "nlpai-lab/KURE-Sparse-nano"
+    base = dict(es_url="http://x", hnsw_m=16, ef_construction=100, num_candidates=100, rrf_k=60, chunk_k=100)
+    cfg = {"version": "c-all@v1"}
+    with tempfile.TemporaryDirectory() as tmp:
+        kemb = embed.Embedder(kure_encoder(), "c-all@v1", "p@v1", cache_root=tmp)
+        bemb = embed.Embedder(FakeEncoder(), "c-all@v1", "p@v1", cache_root=tmp)
+        sko = ko.KureSparseEmbedder(kure_sparse_encoder(), "c-all@v1", "p@v1", cache_root=tmp)
+        spl = s3a_splade.SpladeEmbedder(fake_splade_encoder(), "c-all@v1", "p@v1", cache_root=tmp)
+        a = cli.make_strategy("s4.kure", SimpleNamespace(**base), cfg, {"version": "p@v1"}, kemb)
+        assert type(a) is s4_dense.S4Kure and a.embedder is kemb
+        assert type(cli.make_strategy("s3a.ko", SimpleNamespace(**base), cfg, {"version": "p@v1"}, None, splade=sko)) is ko.S3aKo
+        d = cli.make_strategy("s5b", SimpleNamespace(**base), cfg, {"version": "p@v1"}, bemb, splade=spl)           # s5b_sparse 인자 없음 = 옛 호출
+        assert type(d.s3a) is s3a_splade.S3aSplade and d.sparse == "s3a" and list(d.settings()["components"]) == ["s3a", "s4"]
+        k = cli.make_strategy("s5b", SimpleNamespace(**base, s5b_sparse="s3a.ko"), cfg, {"version": "p@v1"}, bemb, splade=sko)
+        assert type(k.s3a) is ko.S3aKo and type(k.s4) is s4_dense.S4Dense and list(k.settings()["components"]) == ["s3a.ko", "s4"]
+        assert k.settings()["sparse_component"] == "s3a.ko"
+    for args, want in ((SimpleNamespace(strategy="s5b", s5b_sparse="s3a.ko"), "s3a.ko"), (SimpleNamespace(strategy="s5b", s5b_sparse="s3a"), "s3a"),
+                       (SimpleNamespace(strategy="s5b"), "s3a"), (SimpleNamespace(strategy="s3a.ko"), "s3a.ko"),
+                       (SimpleNamespace(strategy="s3a"), "s3a"), (SimpleNamespace(strategy="s4.kure"), None), (SimpleNamespace(strategy="s2"), None)):
+        assert cli.sparse_kind(args) == want, (args, want)
+    for sid in ("S4.kure", "S3a.ko"):
+        assert harness.result_key(sid, "v1", "c-all@v1", "toy@v0") == f"{sid}.v1__c-all@v1__toy@v0__T0__seed0"
+    try:                                                                  # 다른 전략에 --s5b-sparse를 쓰면 코퍼스를 읽기 전에 거부
+        cli.main(["run", "--strategy", "s2", "--s5b-sparse", "s3a.ko", "--queries", "q", "--qrels", "r", "--gold-version", "toy@v0",
+                  "--snapshots", "s", "--adr", "a"])
+        raise AssertionError("거부되지 않았다")
+    except SystemExit as e:
+        assert e.code == 2
 
 
 if FAILS:

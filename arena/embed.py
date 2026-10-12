@@ -129,6 +129,62 @@ class BGEM3Encoder:
         return self._encode(texts)
 
 
+class SentenceTransformerDenseEncoder:
+    """sentence-transformers dense 모델 얇은 포장 — S4.kure(KURE-v1)가 쓴다. `BGEM3Encoder`와 같은 인터페이스(encode_docs/encode_queries)라
+    같은 `Embedder`(캐시 · 측정)를 그대로 쓴다. dense만 있어 sparse 자리는 빈 dict다. `model=`로 가짜 모델을 넣을 수 있다(테스트).
+
+    - fp32 · `normalize_embeddings=True` · 질의와 문서는 같은 설정 · 접두 지시문 없음(모델의 prompts가 비어 있다 — `prompts`에 기록)
+    - 인코딩 전에 `model.tokenizer`로 특수 토큰 포함 길이를 세어 `max_length`(=`model.max_seq_length`)를 넘는 텍스트가 있으면 **실패**한다
+    """
+    library_names = ("torch", "sentence-transformers", "transformers")
+
+    def __init__(self, model_id, revision, device=None, max_length=MAX_LENGTH, batch_size=BATCH_SIZE, model=None):
+        self.model_id = model_id
+        self.max_length = max_length
+        self.batch_size = batch_size
+        self.device = device or pick_device()
+        if model is None:
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer(model_id, revision=revision, device=self.device)
+        model.max_seq_length = max_length
+        self.model = model
+        self.revision = revision or "unknown"
+        self.prompts = dict(getattr(model, "prompts", None) or {})          # 비어 있으면 접두 없음
+        self.instruction_prefix = None if not any(self.prompts.values()) else self.prompts
+        self.call_log = []
+        self.max_tokens_seen = 0
+
+    def check_no_truncation(self, texts):
+        if not texts:
+            return []
+        ids = self.model.tokenizer(list(texts), add_special_tokens=True, truncation=False)["input_ids"]
+        lengths = [len(x) for x in ids]
+        self.max_tokens_seen = max([self.max_tokens_seen] + lengths)
+        over = [i for i, n in enumerate(lengths) if n > self.max_length]
+        if over:
+            raise TruncationError(f"{len(over)}건이 {self.max_length}토큰(특수 토큰 포함)을 넘는다 — 청크 상한이 어긋났다: "
+                                  f"index {over[:5]} 길이 {[lengths[i] for i in over[:5]]}")
+        return lengths
+
+    def _encode(self, texts):
+        texts = list(texts)
+        if not texts:
+            return np.zeros((0, DIM), dtype=np.float32), []
+        self.check_no_truncation(texts)
+        kw = {"batch_size": self.batch_size, "normalize_embeddings": True, "convert_to_numpy": True}
+        self.call_log.append(dict(kw, max_length=self.max_length))
+        dense = np.asarray(self.model.encode(texts, **kw), dtype=np.float32)
+        if dense.shape != (len(texts), DIM):
+            raise ValueError(f"dense 모양 {dense.shape} ≠ ({len(texts)}, {DIM})")
+        return dense, [{} for _ in texts]
+
+    def encode_docs(self, texts):
+        return self._encode(texts)
+
+    def encode_queries(self, texts):
+        return self._encode(texts)
+
+
 # --- 캐시 ---------------------------------------------------------------------------------------------------------
 
 class EncodingCache:
@@ -242,7 +298,7 @@ class Embedder:
     def info(self):
         """env.json · system.json에 기록할 것: 모델 · revision · 기기 · dtype · 라이브러리 버전 · 인코딩 시간."""
         libs = {}
-        for name in ("torch", "FlagEmbedding", "transformers"):
+        for name in getattr(self.encoder, "library_names", ("torch", "FlagEmbedding", "transformers")):
             try:
                 libs[name] = metadata.version(name)
             except metadata.PackageNotFoundError:
@@ -258,7 +314,8 @@ class Embedder:
         return {
             "model_id": self.encoder.model_id, "revision": self.encoder.revision,
             "dtype": "float32", "max_length": self.encoder.max_length, "batch_size": self.encoder.batch_size,
-            "dense_dim": DIM, "instruction_prefix": None,
+            "dense_dim": DIM, "instruction_prefix": getattr(self.encoder, "instruction_prefix", None),
+            "max_tokens_seen_in_encoded": getattr(self.encoder, "max_tokens_seen", None),
             **dev, "libraries": libs,
             "cache_namespace": self.namespace,
             "chunks": self.stats["chunks"], "cache_hits": self.stats["cache_hits"], "encoded": self.stats["encoded"],
