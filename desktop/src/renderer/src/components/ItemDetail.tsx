@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useEffectEvent, useState } from 'react'
 import { AlertTriangle, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -12,6 +12,7 @@ import {
 import { EditDialog } from './EditDialog'
 import { Markdown } from './Markdown'
 import { STATE_ICON, STATE_LABEL, waitText } from '@renderer/lib/inbox'
+import { shortcutKey } from '@renderer/lib/shortcuts'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,11 +29,12 @@ type StaleState = { kind: 'approve' | 'edit'; draft?: AdrDraft; changes: string[
 const STALE_BUTTONS: {
   answer: StaleAnswer
   label: string
+  key: string
   variant: 'default' | 'outline' | 'ghost'
 }[] = [
-  { answer: 'continue', label: '계속', variant: 'default' },
-  { answer: 'rejudge', label: '다시 판정', variant: 'outline' },
-  { answer: 'discard', label: '버림', variant: 'ghost' }
+  { answer: 'continue', label: '계속', key: '1', variant: 'default' },
+  { answer: 'rejudge', label: '다시 판정', key: '2', variant: 'outline' },
+  { answer: 'discard', label: '버림', key: '3', variant: 'ghost' }
 ]
 
 export function ItemDetail({
@@ -40,13 +42,16 @@ export function ItemDetail({
   onResolved,
   onClose,
   onPrev,
-  onNext
+  onNext,
+  active
 }: {
   detail: InboxDetail
   onResolved: () => void
   onClose: () => void
   onPrev: (() => void) | null
   onNext: (() => void) | null
+  // false while the next item loads — the old detail stays visible but must not take keys
+  active: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -95,6 +100,32 @@ export function ItemDetail({
     }
   }
 
+  // a approve · e edit dialog · r reject confirm; while stale is up, 1 continue · 2 rejudge · 3 discard.
+  // No button, no key (R8). Nothing while busy.
+  const onKey = useEffectEvent((e: KeyboardEvent): void => {
+    const k = shortcutKey(e)
+    if (!k || !active || busy) return
+    let act: (() => void) | null = null
+    if (stale) {
+      const b = STALE_BUTTONS.find((x) => x.key === k)
+      if (b) act = () => void run(stale.kind, stale.draft, b.answer)
+    } else if (k === 'a' && has('approve')) {
+      act = () => void run('approve')
+    } else if (k === 'e' && has('edit')) {
+      act = () => setEditOpen(true)
+    } else if (k === 'r' && has('reject')) {
+      act = () => setRejectOpen(true)
+    }
+    if (!act) return
+    e.preventDefault()
+    act()
+  })
+  useEffect(() => {
+    const listener = (e: KeyboardEvent): void => onKey(e)
+    window.addEventListener('keydown', listener)
+    return () => window.removeEventListener('keydown', listener)
+  }, [])
+
   return (
     <>
       <div className="panel-head">
@@ -104,6 +135,7 @@ export function ItemDetail({
           onClick={onPrev ?? undefined}
           disabled={!onPrev}
           aria-label="이전 항목"
+          title="이전 항목 (k)"
         >
           <ChevronUp size={15} />
         </button>
@@ -112,6 +144,7 @@ export function ItemDetail({
           onClick={onNext ?? undefined}
           disabled={!onNext}
           aria-label="다음 항목"
+          title="다음 항목 (j)"
         >
           <ChevronDown size={15} />
         </button>
@@ -172,6 +205,9 @@ export function ItemDetail({
                   onClick={() => run(stale.kind, stale.draft, b.answer)}
                 >
                   {b.label}
+                  <kbd className="key-hint" aria-hidden>
+                    {b.key}
+                  </kbd>
                 </Button>
               ))}
             </div>
@@ -194,16 +230,25 @@ export function ItemDetail({
             {has('approve') && (
               <Button disabled={busy} onClick={() => run('approve')}>
                 승인
+                <kbd className="key-hint" aria-hidden>
+                  A
+                </kbd>
               </Button>
             )}
             {has('edit') && (
               <Button variant="outline" disabled={busy} onClick={() => setEditOpen(true)}>
                 고쳐서 승인
+                <kbd className="key-hint" aria-hidden>
+                  E
+                </kbd>
               </Button>
             )}
             {has('reject') && (
               <Button variant="ghost" disabled={busy} onClick={() => setRejectOpen(true)}>
                 거부
+                <kbd className="key-hint" aria-hidden>
+                  R
+                </kbd>
               </Button>
             )}
           </div>
