@@ -14,6 +14,7 @@ import {
   unregisterCaptureShortcut
 } from './capture'
 import { markKnown, pollNow, postRun, startPoller, stopPoller } from './poller'
+import { getTheme, loadTheme, setTheme } from './theme'
 import type { NavTarget } from '../shared'
 
 let win: BrowserWindow | null = null
@@ -98,7 +99,7 @@ function createWindow(): void {
   })
 
   win.on('ready-to-show', () => win?.show())
-  // the app follows the system theme — keep the window and caption buttons in step
+  // OS theme change or the user's choice (HYO-104) — keep the window and caption buttons in step
   const onTheme = (): void => {
     if (!win || win.isDestroyed()) return
     win.setBackgroundColor(windowColors().background)
@@ -150,6 +151,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     if (process.platform === 'win32') app.setAppUserModelId('decision-radar')
+    loadTheme()
 
     ipcMain.handle('backend:get', () => getStatus())
     // 모든 창에 보낸다 — capture 창은 백엔드 준비 전에 만들어지므로 메인 창에만 보내면 계속 '기동 중'에 머문다
@@ -164,6 +166,8 @@ if (!app.requestSingleInstanceLock()) {
       shortcutOk: isShortcutOk(),
       platform: process.platform
     }))
+    ipcMain.handle('theme:get', () => getTheme())
+    ipcMain.handle('theme:set', (_e, v: unknown) => setTheme(v))
     ipcMain.handle('capture:open', () => showCapture())
     ipcMain.on('capture:hide', () => hideCapture())
     ipcMain.on('nav:go', (_e, t: NavTarget) => {

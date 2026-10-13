@@ -11,6 +11,10 @@ export type NavTarget = {
   id?: string
 }
 
+// App theme (HYO-104) — 'system' follows the OS. Kept by main in userData/theme.json.
+export const THEME_SOURCES = ['system', 'light', 'dark'] as const
+export type ThemeSource = (typeof THEME_SOURCES)[number]
+
 export type RadarInfo = {
   shortcut: string // accelerator string, e.g. CommandOrControl+Shift+Space
   shortcutOk: boolean

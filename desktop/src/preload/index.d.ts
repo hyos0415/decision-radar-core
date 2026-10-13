@@ -1,4 +1,4 @@
-import type { BackendStatus, NavTarget, RadarInfo } from '../shared'
+import type { BackendStatus, NavTarget, RadarInfo, ThemeSource } from '../shared'
 
 declare global {
   interface Window {
@@ -6,6 +6,8 @@ declare global {
       getBackend(): Promise<BackendStatus>
       onBackendStatus(cb: (s: BackendStatus) => void): () => void
       getInfo(): Promise<RadarInfo>
+      getTheme(): Promise<ThemeSource>
+      setTheme(t: ThemeSource): Promise<ThemeSource>
       openCapture(): Promise<void>
       hideCapture(): void
       navigate(t: NavTarget): void
