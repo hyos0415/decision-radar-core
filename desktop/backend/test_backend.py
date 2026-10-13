@@ -6,6 +6,7 @@
 edit(검사 실패는 쓰지 않음, status 칸 거부) · 거부 · 버림 · 행동 로그 · 내보내기 스위치가 새지 않는다 · 실제 모델 거부 ·
 개발 데이터 프로필(andbread — 선택·폴더 분리·시드·실행, default는 그대로) ·
 HYO-85: 로컬 내보내기로 detect 초안 승인·수정·거부 · 「왜 왔나」 · 작업+폴링 · 데모 모드(대역 모델 — 사본에만 쓰기, 원본 무변경, 안전장치).
+HYO-110: 지난 알림 목록(클릭 짝 · 열어 봄 · 항목의 지금 상태 · 묶은 알림).
 """
 
 import glob
@@ -175,6 +176,7 @@ def main():
         scenario_hyo85(tmp)
         scenario_hyo92(tmp)
         scenario_hyo95(tmp)
+        scenario_hyo110(tmp)
     finally:
         os.environ.pop("RADAR_EXPORT", None)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -646,6 +648,79 @@ def scenario_hyo95(tmp):
     det = c.get(f"/inbox/{auto_id}").json()
     e = c.post(f"/inbox/{auto_id}/edit", json={"draft": {**det["draft"], "affected": []}}).json()
     check("수정으로 affected를 비우면 거부", e["outcome"] == "edit_errors" and any("비었다" in x for x in e["errors"]) and len(adrs(svc)) == len(base) + 1, e)
+
+
+def scenario_hyo110(tmp):
+    """HYO-110 — 지난 알림 목록: notification_shown을 읽기만 한다 · 클릭 짝(nid / item·kind) · 열어 봄 · 항목의 지금 상태 · 묶은 알림 · 예전 kind."""
+    print("\n— HYO-110: 지난 알림 목록 —")
+    data = os.path.join(tmp, "data110")
+    devdata.seed(data)
+    svc = RadarService(data)
+    c = TestClient(server.create_app(svc))
+
+    def ev(event, item=None, **detail):
+        assert c.post("/events", json={"event": event, "item": item, "detail": detail}).status_code == 200
+
+    def notes(**q):
+        r = c.get("/notifications", params=q)
+        assert r.status_code == 200, r.text
+        return r.json()["items"]
+
+    check("알림 없음 → 빈 목록", notes() == [])
+    a, b, d = [i["id"] for i in c.get("/inbox").json()["items"]]
+    ev("app_opened")
+    ev("notification_shown", a, kind="capture", title="승인 대기 새 항목", body="초안 a", nid="n-a")
+    ev("notification_shown", None, kind="detect", title="detect 초안 2건", body="b 외 1건", items=[b, d])  # 묶은 알림 (HYO-109) — nid 없음
+    ev("notification_shown", "0001", kind="run_drafts")  # 예전 실행 경로 알림 — item이 ADR 번호, 제목 없음
+    ev("notification_clicked", a, kind="capture", nid="n-a")
+    ev("item_opened", b)
+    ev("notification_clicked", None, kind="detect")  # nid 없음 → 같은 (item, kind)의 바로 앞 알림
+    r = c.post(f"/inbox/{a}/approve", json={}).json()
+    files = sorted(os.listdir(data))
+    n = notes()
+    check("최근 것 먼저 · 세 통", [x["kind"] for x in n] == ["run_drafts", "detect", "capture"], [x["kind"] for x in n])
+    na, nb, legacy = n[2], n[1], n[0]
+    check("제목·본문 = 화면이 보낸 OS 알림 문구", na["title"] == "승인 대기 새 항목" and na["body"] == "초안 a" and legacy["title"] is None, na)
+    check("클릭 짝: nid", na["clicked"] and na["clicked_at"], na)
+    check("클릭 짝: nid 없으면 같은 item·kind", nb["clicked"] and not legacy["clicked"], (nb, legacy))
+    check("승인한 항목 → answered · 결과 · ADR 번호", r["outcome"] == "written" and na["items"][0]["status"] == "answered"
+          and na["items"][0]["answer"] == "approve" and na["items"][0]["outcome"] == "written" and na["items"][0]["adr"] == r["adr"], na["items"])
+    check("묶은 알림 → 항목 둘 · 지금 Inbox에 있음 · 종류·제목", [x["id"] for x in nb["items"]] == [b, d]
+          and all(x["status"] == "inbox" and x["kind"] == "capture" and x["title"] and x["state"] in ("awaiting_approval", "stale") for x in nb["items"]), nb["items"])
+    check("열어 봄 = 알림 뒤의 item_opened (항목마다)", [x["opened"] for x in nb["items"]] == [True, False] and not na["items"][0]["opened"], nb["items"])
+    check("예전 kind는 item 그대로 · 지금 상태 gone", legacy["items"] == [{**legacy["items"][0], "id": "0001", "status": "gone"}], legacy["items"])
+    check("limit = 최근 몇 통", [x["kind"] for x in notes(limit=1)] == ["run_drafts"] and c.get("/notifications", params={"limit": 0}).status_code == 422)
+    check("읽기만 — 데이터 폴더에 새 파일 없음", sorted(os.listdir(data)) == files)
+    check("같은 데이터면 id가 그대로", [x["id"] for x in notes()] == [x["id"] for x in n])
+
+    # 열어 보기 전 알림은 열어 봄이 아니다 · 클릭이 두 번이어도 한 통
+    ev("item_opened", d)
+    ev("notification_shown", d, kind="capture", nid="n-d")
+    ev("notification_clicked", d, kind="capture", nid="n-d")
+    ev("notification_clicked", d, kind="capture", nid="n-d")
+    n = notes()
+    check("알림 앞의 item_opened는 안 셈", n[0]["items"][0]["id"] == d and not n[0]["items"][0]["opened"] and n[0]["clicked"] and len(n) == 4, n[0])
+    # 같은 항목에 두 통 — 앞 것을 누르면 nid로 앞 것에 (item·kind로 짝지으면 뒤 것에 붙는다)
+    ev("notification_shown", b, kind="capture", nid="n-b1")
+    ev("notification_shown", b, kind="capture", nid="n-b2")
+    ev("notification_clicked", b, kind="capture", nid="n-b1")
+    n = notes()
+    check("클릭 짝: nid가 item·kind보다 정확", [x["clicked"] for x in n[:2]] == [False, True], [x["clicked"] for x in n[:2]])
+
+    # revisit 충족 → 확인함 → answered(ack · acked · ADR)
+    c.post("/runs/revisit", json={})
+    rv = [i for i in c.get("/inbox").json()["items"] if i["kind"] == "revisit"][0]
+    ev("notification_shown", rv["id"], kind="revisit", title="재검토 조건 충족", nid="n-rv")
+    x = notes()[0]["items"][0]
+    check("revisit 항목: inbox · ADR 번호", x["status"] == "inbox" and x["kind"] == "revisit" and x["adr"] == "0001", x)
+    c.post(f"/inbox/{rv['id']}/ack")
+    x = notes()[0]["items"][0]
+    check("확인함 뒤: answered · ack · acked · ADR 번호", (x["status"], x["answer"], x["outcome"], x["adr"]) == ("answered", "ack", "acked", "0001"), x)
+
+    # 깨진 줄(쓰는 중 읽힌 마지막 줄 등)은 건너뛴다
+    with open(svc.events_path, "a", encoding="utf-8") as f:
+        f.write('{"at": "2026-10-13T00:00:00+09:00", "event": "notification_sh')
+    check("깨진 줄은 건너뜀", len(notes()) == 7)
 
 if __name__ == "__main__":
     sys.exit(main())

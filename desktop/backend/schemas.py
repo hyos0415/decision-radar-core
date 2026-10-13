@@ -288,4 +288,40 @@ class JobList(BaseModel):
 class EventRequest(BaseModel):
     event: str = Field(description="app_opened · item_opened · notification_shown · notification_clicked · capture_opened · decision_opened")
     item: Optional[str] = None
-    detail: Optional[dict[str, Any]] = None
+    detail: Optional[dict[str, Any]] = Field(default=None, description="notification_shown·notification_clicked는 GET /notifications가 읽는 칸: "
+                                                                        "kind · title · body(OS 알림 문구) · items(묶은 알림의 항목 id 목록 — 없으면 [item]) · "
+                                                                        "nid(알림 하나의 id — shown·clicked가 같은 값이면 정확히 짝짓는다)")
+
+
+# ── 지난 알림 (HYO-110) — 행동 로그(notification_shown)를 읽기만 한다. 따로 저장하지 않는다 ─────
+
+class NotificationItem(BaseModel):
+    """알림이 가리킨 항목 하나의 지금 상태. 화면은 inbox면 Inbox 항목으로, answered + adr이면 Decisions로 보낸다."""
+    id: str
+    status: Literal["inbox", "answered", "gone"] = Field(description="inbox: 지금 Inbox에 있다 · answered: 답했다(승인·수정·거부·확인함) · "
+                                                                   "gone: 둘 다 아니다 (예전 알림의 실행 경로 kind — run_drafts·run_alerts — 는 item이 ADR 번호)")
+    kind: Optional[Literal["capture", "detect", "pending", "revisit"]] = Field(description="inbox일 때 Inbox 항목 종류")
+    title: Optional[str] = Field(description="inbox일 때 Inbox 항목 제목")
+    state: Optional[ItemState] = Field(description="inbox일 때 Inbox 상태")
+    answer: Optional[Action] = Field(description="answered: 마지막 답")
+    outcome: Optional[Outcome] = Field(description="answered: 마지막 답의 결과")
+    answered_at: Optional[str]
+    adr: Optional[str] = Field(description="이 항목의 ADR 번호 — revisit 항목, 또는 승인으로 쓴 ADR")
+    new_item: Optional[str] = Field(description="rejudge(다시 판정)로 새로 생긴 대기 항목")
+    opened: bool = Field(description="이 알림 뒤에 항목을 열어 봤나 (item_opened)")
+
+
+class NotificationEntry(BaseModel):
+    """OS 알림 한 통 (notification_shown 한 줄). 「읽음」은 clicked 또는 항목의 opened — 조용히 표시만 한다 (배지 없음)."""
+    id: str = Field(description="행동 로그의 줄 번호 기반 id — 같은 데이터 폴더에서 바뀌지 않는다")
+    at: str = Field(description="알림이 뜬 시각")
+    kind: Optional[str] = Field(description="화면이 보낸 detail.kind 그대로 (예 capture · detect · revisit, 예전 것은 inbox_new · run_drafts · run_alerts)")
+    title: Optional[str] = Field(description="OS 알림 제목 (detail.title). 화면이 안 보냈으면 null")
+    body: Optional[str] = Field(description="OS 알림 본문 (detail.body). 화면이 안 보냈으면 null")
+    clicked: bool = Field(description="이 알림을 눌렀나 (notification_clicked — nid가 같거나, 없으면 같은 item·kind의 바로 앞 알림에 짝짓는다)")
+    clicked_at: Optional[str]
+    items: list[NotificationItem] = Field(description="알림이 가리킨 항목 (묶은 알림이면 여럿, item 없는 알림이면 빈 목록)")
+
+
+class NotificationList(BaseModel):
+    items: list[NotificationEntry] = Field(description="최근 것 먼저")

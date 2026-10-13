@@ -5,6 +5,7 @@
   상세       대기 초안 · 저장될 ADR 미리보기(`ops.render`) · 「바뀐 점」(멈출 때의 지문과 지금의 지문 비교 — 읽기만)
   답         `capture_turn2`(approve·edit·reject + stale 답)를 그대로 부른다
   행동 로그   `<data>/events.jsonl` (실사용 지표, 비교 프로토콜 §7)
+  지난 알림   행동 로그의 `notification_shown` + 클릭·항목의 지금 상태 — 읽기만, 따로 저장하지 않는다 (HYO-110)
   capture    대화 → `capture_turn1` → 승인 대기 (R9: ADR repo 쓰기 0)
   Decisions  `radar.py list` + ADR 파일 제목 — 읽기만 (R8: status는 화면에서 바꾸지 않는다)
   실행       `detect`·`revisit` 그래프를 그대로 한 번 돌리고 보고서를 요약한다 (`<data>/runs.jsonl`)
@@ -256,6 +257,69 @@ class RadarService:
         if event not in UI_EVENTS:
             raise ServiceError(400, f"모르는 이벤트 {event!r} — {list(UI_EVENTS)}")
         self.log(event, item, source="app", **(detail or {}))
+
+    def _events(self):
+        """행동 로그 → [(줄 번호, 기록)]. 깨진 줄은 건너뛴다 (쓰는 중에 읽힌 마지막 줄 등)."""
+        try:
+            lines = open(self.events_path, encoding="utf-8").read().splitlines()
+        except OSError:
+            return []
+        out = []
+        for i, line in enumerate(lines):
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict):
+                out.append((i, rec))
+        return out
+
+    # ── 지난 알림 (HYO-110) — notification_shown을 읽기만 한다. 따로 저장하지 않는다 ─────
+
+    ANSWERS = ("approve", "edit", "reject", "ack")
+
+    def notifications(self, limit=100):
+        """지난 OS 알림 — notification_shown 한 줄이 한 통. 클릭(notification_clicked) · 항목 열어 봄(item_opened) · 항목의 지금 상태를 붙인다.
+        클릭 짝: detail.nid가 있으면 같은 nid, 없으면 같은 (item, kind)의 바로 앞 알림. 최근 것 먼저."""
+        evs = self._events()
+        shown, clicks, opened, answers = [], {}, {}, {}
+        for i, e in evs:
+            ev, item, d = e.get("event"), e.get("item"), e.get("detail") or {}
+            if ev == "notification_shown":
+                shown.append((i, e))
+            elif ev == "notification_clicked":
+                key = ("nid", d["nid"]) if d.get("nid") else ("ik", item, d.get("kind"))
+                for j, s in reversed(shown):  # 이 클릭보다 앞선 알림 중 가장 가까운 것
+                    sd = s.get("detail") or {}
+                    skey = ("nid", sd.get("nid")) if d.get("nid") else ("ik", s.get("item"), sd.get("kind"))
+                    if skey == key:
+                        clicks.setdefault(j, e.get("at"))
+                        break
+            elif ev == "item_opened" and item:
+                opened.setdefault(item, []).append(i)
+            elif ev in self.ANSWERS and item:
+                answers[item] = e  # 마지막 답이 이긴다
+        inbox = {r["id"]: r for r in self.inbox()}
+        out = []
+        for i, e in reversed(shown[-limit:] if limit else shown):
+            d = e.get("detail") or {}
+            ids = [x for x in d.get("items") or [] if isinstance(x, str)] or ([e["item"]] if e.get("item") else [])
+            out.append({"id": f"n{i}", "at": e.get("at"), "kind": d.get("kind"), "title": d.get("title"), "body": d.get("body"),
+                        "clicked": i in clicks, "clicked_at": clicks.get(i),
+                        "items": [self._notification_item(x, inbox, answers, any(k > i for k in opened.get(x, []))) for x in ids]})
+        return out
+
+    def _notification_item(self, item_id, inbox, answers, was_opened):
+        row, ans = inbox.get(item_id), answers.get(item_id)
+        it = {"id": item_id, "status": "gone", "kind": None, "title": None, "state": None, "answer": None, "outcome": None,
+              "answered_at": None, "adr": None, "new_item": None, "opened": was_opened}
+        if row is not None:  # 답했어도 stale·edit_errors 등으로 아직 남아 있으면 Inbox가 이긴다
+            it.update(status="inbox", kind=row["kind"], title=row["title"], state=row["state"], adr=row.get("adr"))
+        elif ans is not None:
+            ad = ans.get("detail") or {}
+            it.update(status="answered", answer=ans["event"], outcome=ad.get("outcome") or ("acked" if ans["event"] == "ack" else None),
+                      answered_at=ans.get("at"), adr=ad.get("adr"), new_item=ad.get("new_item"))
+        return it
 
     # ── Inbox ────────────────────────────────────────────────────
 

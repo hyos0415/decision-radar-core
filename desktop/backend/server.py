@@ -17,7 +17,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from fastapi import Body, FastAPI  # noqa: E402
+from fastapi import Body, FastAPI, Query  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 
@@ -119,6 +119,11 @@ def create_app(svc: RadarService = None, scheduler_on: bool = False, jobs: Jobs 
     def schedule_info():
         import datetime as dt
         return scheduling.describe(dt.datetime.now().astimezone(), svc.runs(), scheduler_on, svc.flows)
+
+    @app.get("/notifications", response_model=S.NotificationList, operation_id="notifications")
+    def notifications(limit: int = Query(default=100, ge=1, le=1000, description="최근 몇 통까지")):
+        """지난 알림 (HYO-110) — 행동 로그의 notification_shown에 클릭 여부·항목의 지금 상태를 붙인다. 읽기만."""
+        return {"items": svc.notifications(limit)}
 
     @app.post("/events", response_model=S.Ok, operation_id="event")
     def events(body: S.EventRequest):
