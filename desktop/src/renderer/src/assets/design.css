@@ -634,6 +634,7 @@ kbd {
   min-height: 0;
   flex: 1;
   overflow: auto;
+  scrollbar-width: none; /* 스크롤바만 숨긴다 — 휠·트랙패드·키보드 스크롤은 그대로 */
 }
 
 /* ── 목록 행 (Inbox · Decisions): 40px, 가장자리까지 ────────── */
