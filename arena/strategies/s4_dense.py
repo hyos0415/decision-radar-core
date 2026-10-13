@@ -51,7 +51,7 @@ class S4Dense:
             "index": self.index_name,
             "embedding_model": f"{self.embedder.encoder.model_id}@{self.embedder.encoder.revision}",
             "dense_vector": {"dims": DIMS, "index": True, "similarity": "cosine",
-                             "index_options": {"type": self.index_type, "m": self.m, "ef_construction": self.ef_construction}},
+                             "index_options": self._index_options()},
             "quantization": self.quantization,
             "query": {"type": "knn", "num_candidates": self.num_candidates,
                       **({"rescore_vector": {"oversample": self.oversample}} if self.oversample is not None else {}),
@@ -59,6 +59,12 @@ class S4Dense:
             "hnsw_status": "dev에서 정함 (2026-10-13 — num_candidates 200 · m 16 · ef_construction 100, eval/arena/dev-tuning-2026-10-13.md)",
             "number_of_shards": 1, "number_of_replicas": 0,
         }
+
+    def _index_options(self):
+        """flat 계열은 그래프가 없어 m · ef_construction을 받지 않는다 (ES가 거부) — hnsw 계열만 넣는다."""
+        if self.index_type.endswith("flat"):
+            return {"type": self.index_type}
+        return {"type": self.index_type, "m": self.m, "ef_construction": self.ef_construction}
 
     def _body(self):
         return {
@@ -68,7 +74,7 @@ class S4Dense:
                 "doc_id": {"type": "keyword"},
                 "source_type": {"type": "keyword"},
                 FIELD: {"type": "dense_vector", "dims": DIMS, "index": True, "similarity": "cosine",
-                        "index_options": {"type": self.index_type, "m": self.m, "ef_construction": self.ef_construction}},
+                        "index_options": self._index_options()},
             }},
         }
 
@@ -140,3 +146,32 @@ class S4Kure(S4Dense):
     모델 · revision은 `embedder`(= `embed.SentenceTransformerDenseEncoder`)가 정하고 settings의 `embedding_model`에 적힌다."""
     id = "S4.kure"
     index_suffix = "s4-kure"
+
+
+# --- 진단 변형 (retrieval-arena §6 「진단 — 전략이 아니라 확인 작업, dev에서 한 번」, 이슈 #83) --------------------------------
+# 같은 임베딩 · 청크 · cosine · 질의로 그래프 없는 정확 검색(`*flat`)을 돌려 손실을 가른다:
+#   S4.flat 대 S4 = 근사만의 손실 · S4.flat 대 S4.int8flat / S4.bbqflat = 양자화만의 손실 · S4.flat 대 S4.int8 / S4.bbq = 둘을 합친 손실
+# 54칸 격자 밖이다 (test에서 돌리지 않는다). bbq_flat은 bbq_hnsw와 같게 재채점 oversample 3.0을 쓴다.
+
+class S4Flat(S4Dense):
+    """S4.flat — `flat` (float32 전수 비교, 근사 없음). 진단 기준선."""
+    id = "S4.flat"
+    index_type = "flat"
+    index_suffix = "s4-flat"
+
+
+class S4Int8Flat(S4Dense):
+    """S4.int8flat — `int8_flat` (int8 양자화 · 전수 비교 — 양자화 손실만)."""
+    id = "S4.int8flat"
+    index_type = "int8_flat"
+    index_suffix = "s4-int8flat"
+    quantization = "int8"
+
+
+class S4BBQFlat(S4Dense):
+    """S4.bbqflat — `bbq_flat` (1비트 양자화 · 전수 비교 + 재채점 oversample 3.0 — 양자화 손실만)."""
+    id = "S4.bbqflat"
+    index_type = "bbq_flat"
+    index_suffix = "s4-bbqflat"
+    quantization = "bbq"
+    oversample = OVERSAMPLE
