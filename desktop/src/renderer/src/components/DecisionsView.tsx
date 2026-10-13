@@ -4,6 +4,7 @@ import { api, type Decision, type DecisionDetail } from '@renderer/lib/api'
 import { cn } from '@renderer/lib/utils'
 import { dateOnly, resultLabel, revisitParts, statusLabel } from '@renderer/lib/format'
 import { adrStatusKey, resultKey } from '@renderer/lib/status'
+import { Markdown } from './Markdown'
 import { PageHeader, Status } from './Status'
 
 const FILTERS: { key: string; label: string }[] = [
@@ -112,7 +113,7 @@ function Panel({ id, onClose }: { id: string; onClose: () => void }): React.JSX.
               <span className="mono">{d.file}</span>
               <span>상태는 ADR 파일에서 사람이 바꾼다</span>
             </div>
-            <div className="document compact">{d.markdown}</div>
+            <Markdown compact>{d.markdown}</Markdown>
           </div>
         )}
       </div>

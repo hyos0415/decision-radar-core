@@ -37,6 +37,30 @@ function navigate(t: NavTarget): void {
   if (win && !win.isDestroyed()) win.webContents.send('nav', t)
 }
 
+// 링크는 앱 창 안에서 열지 않는다 — http(s)만 시스템 브라우저로 넘기고 나머지는 버린다.
+function openExternalSafe(url: string): void {
+  try {
+    const { protocol } = new URL(url)
+    if (protocol === 'http:' || protocol === 'https:') void shell.openExternal(url)
+  } catch {
+    // 잘못된 URL은 무시한다
+  }
+}
+
+function guardNavigation(contents: Electron.WebContents): void {
+  contents.setWindowOpenHandler((d) => {
+    openExternalSafe(d.url)
+    return { action: 'deny' }
+  })
+  contents.on('will-navigate', (e, url) => {
+    // 같은 문서 안의 이동(#/capture 같은 hash)은 둔다
+    const cur = contents.getURL()
+    if (cur && url.split('#')[0] === cur.split('#')[0]) return
+    e.preventDefault()
+    openExternalSafe(url)
+  })
+}
+
 // same values as the renderer tokens (main.css --background · --muted-foreground)
 function windowColors(): { background: string; symbol: string } {
   return nativeTheme.shouldUseDarkColors
@@ -88,10 +112,6 @@ function createWindow(): void {
       win?.hide()
     }
   })
-  win.webContents.setWindowOpenHandler((d) => {
-    shell.openExternal(d.url)
-    return { action: 'deny' }
-  })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -125,6 +145,8 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', showWindow)
+  // 메인·capture 창 모두에 건다
+  app.on('web-contents-created', (_e, contents) => guardNavigation(contents))
 
   app.whenReady().then(() => {
     if (process.platform === 'win32') app.setAppUserModelId('decision-radar')

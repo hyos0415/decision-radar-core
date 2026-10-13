@@ -634,6 +634,7 @@ kbd {
   min-height: 0;
   flex: 1;
   overflow: auto;
+  scrollbar-width: none; /* 스크롤바만 숨긴다 — 휠·트랙패드·키보드 스크롤은 그대로 */
 }
 
 /* ── 목록 행 (Inbox · Decisions): 40px, 가장자리까지 ────────── */
@@ -824,13 +825,149 @@ kbd {
   font-family: var(--font-reading);
   font-size: 14px;
   line-height: 1.7;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .document.compact {
   margin: 24px 0 0;
   padding: 0;
   font-size: 13px;
+}
+
+/* ADR 마크다운 요소 (components/Markdown.tsx). prose(@tailwindcss/typography)는 쓰지 않는다 — 색·간격을 토큰에 맞춘다 */
+.document > :first-child {
+  margin-top: 0;
+}
+.document > :last-child {
+  margin-bottom: 0;
+}
+.document :where(h1, h2, h3, h4) {
+  font-weight: 600;
+  line-height: 1.35;
+  margin: 1.4em 0 0.5em;
+}
+.document h1 {
+  font-size: 1.25em;
+}
+.document h2 {
+  font-size: 1.1em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
+.document :where(h3, h4) {
+  font-size: 1em;
+}
+.document :where(p, ul, ol, table, pre, blockquote) {
+  margin: 0.6em 0;
+}
+.document :where(ul, ol) {
+  padding-left: 1.4em;
+}
+.document ul {
+  list-style: disc;
+}
+.document ol {
+  list-style: decimal;
+}
+.document li + li {
+  margin-top: 0.2em;
+}
+.document li > :where(ul, ol) {
+  margin: 0.2em 0;
+}
+.document li:has(> input[type='checkbox']) {
+  list-style: none;
+}
+.document li > input[type='checkbox'] {
+  margin: 0 0.4em 0 -1.2em;
+  vertical-align: middle;
+}
+.document a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--ring);
+}
+.document a:hover {
+  text-decoration-color: currentColor;
+}
+.document strong {
+  font-weight: 600;
+}
+.document :where(code, pre) {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+.document :not(pre) > code {
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-sm);
+  background: var(--secondary);
+}
+.document pre {
+  padding: 0.75em 1em;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--muted);
+  line-height: 1.55;
+}
+.document pre code {
+  font-size: inherit;
+}
+.document blockquote {
+  padding-left: 0.9em;
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
+}
+.document hr {
+  margin: 1.2em 0;
+  border-top: 1px solid var(--border);
+}
+.document table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+.document :where(th, td) {
+  padding: 0.35em 0.7em;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.document th {
+  font-weight: 600;
+  background: var(--secondary);
+}
+.document del {
+  color: var(--muted-foreground);
+}
+.document img {
+  max-width: 100%;
+}
+.document.compact :where(th, td) {
+  padding: 0.3em 0.5em;
+}
+.document .front-matter {
+  margin: 0 0 1em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--muted-foreground);
+}
+.document .front-matter > summary {
+  padding: 0.35em 0.75em;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  user-select: none;
+}
+.document .front-matter[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+.document .front-matter > pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  color: var(--foreground);
 }
 
 /* Decisions */

@@ -10,6 +10,7 @@ import {
   type StaleAnswer
 } from '@renderer/lib/api'
 import { EditDialog } from './EditDialog'
+import { Markdown } from './Markdown'
 import { STATE_ICON, STATE_LABEL, waitText } from '@renderer/lib/inbox'
 import {
   AlertDialog,
@@ -153,7 +154,7 @@ export function ItemDetail({
           </div>
         )}
 
-        <div className="document">{detail.markdown}</div>
+        <Markdown>{detail.markdown}</Markdown>
       </div>
 
       <div className="action-bar">
