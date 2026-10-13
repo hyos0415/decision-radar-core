@@ -55,6 +55,7 @@ export function ItemDetail({
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const [checkErrors, setCheckErrors] = useState<ActionResult | null>(null)
   const [stale, setStale] = useState<StaleState | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [rejectOpen, setRejectOpen] = useState(false)
@@ -63,6 +64,7 @@ export function ItemDetail({
   const stateLabel = STATE_LABEL[detail.state]
 
   // Returns the result so the edit dialog can show edit_errors.
+  // Outside the dialog (plain approve — R18 affected, or after a stale answer) they go in the action bar.
   async function run(
     kind: 'approve' | 'edit' | 'reject',
     draft?: AdrDraft,
@@ -70,6 +72,7 @@ export function ItemDetail({
   ): Promise<ActionResult | null> {
     setBusy(true)
     setNotice(null)
+    setCheckErrors(null)
     try {
       const res =
         kind === 'approve'
@@ -88,7 +91,9 @@ export function ItemDetail({
           draft,
           changes: res.changes ?? []
         })
-      } else if (res.outcome !== 'edit_errors') {
+      } else if (res.outcome === 'edit_errors') {
+        if (!editOpen) setCheckErrors(res)
+      } else {
         setNotice(res.message ?? (res.outcome === 'blocked' ? '막혔다.' : '오류가 났다.'))
       }
       return res
@@ -223,6 +228,18 @@ export function ItemDetail({
         {notice && (
           <div className="inline-notice" role="status">
             {notice}
+          </div>
+        )}
+        {checkErrors && (
+          <div role="alert" className="w-full rounded-md border bg-muted p-3 text-xs">
+            <div className="mb-1 font-medium">{checkErrors.message ?? '저장하지 않았다.'}</div>
+            <ul className="list-disc pl-4">
+              {checkErrors.errors?.map((e, i) => (
+                <li key={i} className="font-mono">
+                  {e}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
         {!stale && (
