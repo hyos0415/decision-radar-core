@@ -4,14 +4,17 @@ import {
   Inbox as InboxIcon,
   Library,
   Loader2,
+  Monitor,
+  Moon,
   Play,
   ScrollText,
+  Sun,
   Zap
 } from 'lucide-react'
 import type { Flow, Job } from '@renderer/lib/api'
 import { cn } from '@renderer/lib/utils'
 import { shortcutText, timeOnly } from '@renderer/lib/format'
-import type { RadarInfo } from '../../../shared'
+import type { RadarInfo, ThemeSource } from '../../../shared'
 
 export type View = 'inbox' | 'decisions' | 'runs'
 
@@ -112,6 +115,46 @@ function RunMenu({
         실행 기록 보기
       </button>
       {stub && <span className="run-menu-label">스텁 모델 — 과금 없음</span>}
+    </div>
+  )
+}
+
+const THEMES: { value: ThemeSource; label: string; icon: React.ReactNode }[] = [
+  { value: 'system', label: '시스템', icon: <Monitor size={13} /> },
+  { value: 'light', label: '라이트', icon: <Sun size={13} /> },
+  { value: 'dark', label: '다크', icon: <Moon size={13} /> }
+]
+
+// main switches nativeTheme.themeSource — main.css tokens and the window colors follow (HYO-104)
+function ThemeSwitch(): React.JSX.Element {
+  const [theme, setTheme] = useState<ThemeSource | null>(null)
+
+  useEffect(() => {
+    void window.radar.getTheme().then(setTheme)
+  }, [])
+
+  function choose(t: ThemeSource): void {
+    setTheme(t)
+    void window.radar.setTheme(t)
+  }
+
+  return (
+    <div className="sidebar-environment">
+      <span>테마</span>
+      <div className="segmented segmented-sm" role="group" aria-label="테마">
+        {THEMES.map((t) => (
+          <button
+            key={t.value}
+            aria-pressed={theme === t.value}
+            aria-label={t.label}
+            title={t.label}
+            className={cn(theme === t.value && 'active')}
+            onClick={() => choose(t.value)}
+          >
+            {t.icon}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
@@ -236,6 +279,7 @@ export function Sidebar({
             />
           )}
         </div>
+        <ThemeSwitch />
         {/* the Windows shortcut text does not fit beside the label in a 232px sidebar — own line */}
         {info && (
           <div className="sidebar-environment">

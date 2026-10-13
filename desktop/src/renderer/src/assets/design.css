@@ -362,6 +362,17 @@ kbd {
   background: var(--card);
   box-shadow: 0 0 0 1px var(--border);
 }
+/* sidebar theme switch (HYO-104) — icon-only, fits the 28px environment row */
+.segmented-sm {
+  height: var(--control-sm);
+  margin-left: auto;
+}
+.segmented-sm button {
+  height: 22px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+}
 .search {
   height: var(--control-md);
   width: 220px;

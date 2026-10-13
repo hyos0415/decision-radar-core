@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { BackendStatus, NavTarget, RadarInfo } from '../shared'
+import type { BackendStatus, NavTarget, RadarInfo, ThemeSource } from '../shared'
 
 function listen<T>(channel: string, cb: (v: T) => void): () => void {
   const handler = (_: unknown, v: T): void => cb(v)
@@ -11,6 +11,8 @@ const radar = {
   getBackend: (): Promise<BackendStatus> => ipcRenderer.invoke('backend:get'),
   onBackendStatus: (cb: (s: BackendStatus) => void): (() => void) => listen('backend:status', cb),
   getInfo: (): Promise<RadarInfo> => ipcRenderer.invoke('info:get'),
+  getTheme: (): Promise<ThemeSource> => ipcRenderer.invoke('theme:get'),
+  setTheme: (t: ThemeSource): Promise<ThemeSource> => ipcRenderer.invoke('theme:set', t),
   openCapture: (): Promise<void> => ipcRenderer.invoke('capture:open'),
   hideCapture: (): void => ipcRenderer.send('capture:hide'),
   navigate: (t: NavTarget): void => ipcRenderer.send('nav:go', t),
