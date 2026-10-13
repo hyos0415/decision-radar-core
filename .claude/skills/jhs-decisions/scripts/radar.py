@@ -50,6 +50,15 @@ def out(obj):
     print(json.dumps(obj, ensure_ascii=False, indent=2))
 
 
+def load_json_arg(path):
+    """경로 또는 - (stdin)의 JSON. stdin도 UTF-8로 — Windows에서 `python -I`는 PYTHONUTF8를 무시해
+    cp949로 읽고, 깨진 reason을 ADR에 쓴 뒤 out()에서 죽었다 (HYO-28 Haiku 실측, 2026-10-13)"""
+    if path == "-":
+        sys.stdin.reconfigure(encoding="utf-8")
+        return json.load(sys.stdin)
+    return json.load(open(path, encoding="utf-8"))
+
+
 def read_adr(path):
     text = open(path, encoding="utf-8").read()
     m = FM.match(text)
@@ -251,7 +260,7 @@ def cmd_decide(a):
     """
     now = a.now or dt.datetime.now().astimezone().isoformat(timespec="seconds")
     # 결과는 stdin("-")으로 받는 것을 기본으로 한다 — 고정 임시 파일은 병렬 실행끼리 덮어쓴다 (스모크 실측)
-    results = json.load(sys.stdin if a.results == "-" else open(a.results, encoding="utf-8"))
+    results = load_json_arg(a.results)
     by_adr = {x["id"]: x for x in load_all(a.adr_dir)}
     served = None
     log = os.environ.get("RADAR_SERVED_LOG")
@@ -360,7 +369,7 @@ def cmd_decide(a):
 
 def cmd_apply(a):
     """decide의 updates만 ADR에 쓴다. revisit_last_checked 외 필드는 건드리지 않는다 (R8)."""
-    d = json.load(sys.stdin if a.decision == "-" else open(a.decision, encoding="utf-8"))
+    d = load_json_arg(a.decision)
     out({"files_written": write_updates(a.adr_dir, d.get("updates") or {})})
 
 
