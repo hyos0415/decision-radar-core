@@ -782,7 +782,7 @@ def _():
         assert st["query"]["num_candidates"] == 80 and st["quantization"] is None
         assert st["embedding_model"] == "fake/model@rev0123456789abcdef"
         d = s4_dense.S4Dense("c-all@v1", emb)
-        assert (d.m, d.ef_construction, d.num_candidates) == (16, 100, 100)             # 기본값
+        assert (d.m, d.ef_construction, d.num_candidates) == (16, 100, 200)             # 기본값 (num_candidates는 dev 2026-10-13)
         for bad in ({"m": 1}, {"m": 16.0}, {"ef_construction": 0}, {"num_candidates": 20000}, {"m": True}):
             assert raises(ValueError, s4_dense.S4Dense, "c-all@v1", emb, **bad), bad
 
@@ -945,7 +945,7 @@ def _():
     st["fusion"]["ranx_version"] = "X"          # 설치된 버전에 따라 달라지는 칸만 고정
     import hashlib
     assert hashlib.sha256(json.dumps(st, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest() == \
-        "057dabb8bbba20705b267049d1a045368f3a9e3b736bbea138a7dbd8030454a1"
+        "582e9a4aa578393cc64353bb186498542b9e8667e28cac53d99c5dd06d2042ed"   # #75: fusion.status 문구만 바뀜 (옛 문구로 되돌리면 옛 해시 057dabb8…)
     assert (s.took_ms, s.index_size_bytes(), s.size_breakdown(), s.server_version(), s.n_indexed) == \
         ([1, 2, 3], 17, {"s2": 10, "s4": 7}, "9.5.4", 6)
     assert s.s2 is s2 and s.s4 is s4
@@ -1043,6 +1043,42 @@ def _():
     assert info["model_id"] == s6_rerank.MODEL_ID and info["dtype"] == "float32" and info["device"] == "cpu"
     assert info["pairs_scored"] == 4 and "FlagEmbedding" in info["libraries"]
     assert s.index_size_bytes() == 20 and s.n_indexed == 6
+
+
+@case("S6.dense (이슈 #75): 1단계 = S4 하나 — 문서 순서는 최고 순위 청크 · 후보는 S4 목록에 나온 청크만 · 결과 id S6.dense · 설정 기록")
+def _():
+    chunks = [{"chunk_id": cid, "doc_id": cid[0], "source_type": "repo", "text": f"text-{cid}"}
+              for cid in ("A#0", "A#1", "B#0", "C#0", "D#0", "D#1")]
+    s4 = FakeComponent("S4", [("B#0", 3.0), ("A#1", 2.0), ("D#0", 1.5), ("A#0", 1.0)])      # C는 S4 목록에 없다
+    first = s6_rerank.DenseFirstStage(s4, chunk_k=100)
+    model = FakeRerankModel({f"text-{cid}": v for cid, v in S6_TABLE.items()})
+    enc = s6_rerank.CrossEncoder(model=model, device="cpu", revision="revfake0123456789", batch_size=8)
+    s = s6_rerank.S6Rerank(first, enc, depth=50)
+    s.index(chunks)
+    assert first.first_stage_candidates("q") == [("B", ["B#0"]), ("A", ["A#1", "A#0"]), ("D", ["D#0"])]
+    c2d = {c["chunk_id"]: c["doc_id"] for c in chunks}
+    got = s.search("q", 100)
+    assert [c2d[c] for c, _ in got] == ["A", "D", "B"], got               # A .9 · D .7 · B .5 — C는 후보가 아니다 (S5a 1단계와 다른 점)
+    assert sorted(p[1] for p in model.pairs_seen) == sorted(f"text-{c}" for c in ("A#0", "A#1", "B#0", "D#0"))
+    assert s4.asked == [100, 100] and s.chunk_k == 100
+    assert s.id == "S6.dense" and harness.result_key(s.id, s.version, "c-all@v1", "toy@v0") == "S6.dense.v1__c-all@v1__toy@v0__T0__seed0"
+    st = s.settings()
+    assert st["first_stage"]["id"] == "S4" and "S4 상위 chunk_k" in st["candidates"] and st["first_stage"]["component_chunk_k"] == 100
+    assert st["first_stage"]["components"]["s4"]["marker"] == "S4" and s.size_breakdown() == {"s4": 10}
+    assert s6_setup(S6_TABLE)[0].id == "S6"                               # S5a 1단계는 그대로 S6
+    assert raises(ValueError, s6_rerank.S6Rerank, FakeComponent("S2", []), enc)          # 모르는 1단계는 거부
+    assert raises(ValueError, s6_rerank.DenseFirstStage, s4, chunk_k=0)
+    bad = s6_rerank.DenseFirstStage(FakeComponent("S4", [("Z#9", 1.0)]), chunk_k=100)
+    bad.index(chunks)
+    assert raises(KeyError, bad.first_stage_candidates, "q")              # 모르는 청크 id는 실패
+    import importlib
+    cli = importlib.import_module("arena.cli")
+    try:                                                                  # 다른 전략에 --s6-first를 쓰면 코퍼스를 읽기 전에 거부
+        cli.main(["run", "--strategy", "s5a", "--s6-first", "s4", "--queries", "q", "--qrels", "r", "--gold-version", "toy@v0",
+                  "--snapshots", "s", "--adr", "a"])
+        raise AssertionError("거부되지 않았다")
+    except SystemExit as e:
+        assert e.code == 2
 
 
 # --- HYO-35 (이슈 #63): S1 · S4.int8 · S4.bbq · S3a SPLADE-v3 · S5b ----------------------------------------------------------
@@ -1668,7 +1704,7 @@ def _():
 def _():
     hits3 = [("A#1", 9.0), ("B#0", 8.0)]
     hits4 = [("B#0", 0.9), ("A#1", 0.8)]
-    default = s5b_rrf.S5bRRF(FakeComponent("S3a", hits3), FakeComponent("S4", hits4))
+    default = s5b_rrf.S5bRRF(FakeComponent("S3a", hits3), FakeComponent("S4", hits4), rrf_k=60)    # k 기본값은 구성요소마다 달라 맞춘다 (#75)
     st = default.settings()
     assert list(st["components"]) == ["s3a", "s4"] and st["sparse_component"] == "s3a" and default.sparse == "s3a"
     ko = s5b_rrf.S5bRRF(FakeComponent("S3a.ko", hits3), FakeComponent("S4", hits4), sparse="s3a.ko")
@@ -1719,6 +1755,32 @@ def _():
         raise AssertionError("거부되지 않았다")
     except SystemExit as e:
         assert e.code == 2
+
+
+
+@case("dev 기본값 (이슈 #75, 2026-10-13): RRF k — S5a 60 · S5b(s3a) 10 · S5b(s3a.ko) 60 · --rrf-k를 주면 그 값 · S4 num_candidates 200")
+def _():
+    import importlib
+    from types import SimpleNamespace
+    from arena.strategies import s3a_ko_kure_sparse as ko
+    cli = importlib.import_module("arena.cli")
+    assert s5b_rrf.S5bRRF(FakeComponent("S3a", []), FakeComponent("S4", [])).rrf_k == 10
+    assert s5b_rrf.S5bRRF(FakeComponent("S3a.ko", []), FakeComponent("S4", []), sparse="s3a.ko").rrf_k == 60
+    assert s5a_rrf.S5aRRF(FakeComponent("S2", []), FakeComponent("S4", [])).rrf_k == 60
+    base = dict(es_url="http://x", hnsw_m=16, ef_construction=100, num_candidates=200, rrf_k=None, chunk_k=100)
+    cfg = {"version": "c-all@v1"}
+    with tempfile.TemporaryDirectory() as tmp:
+        bemb = embed.Embedder(FakeEncoder(), "c-all@v1", "p@v1", cache_root=tmp)
+        spl = s3a_splade.SpladeEmbedder(fake_splade_encoder(), "c-all@v1", "p@v1", cache_root=tmp)
+        sko = ko.KureSparseEmbedder(kure_sparse_encoder(), "c-all@v1", "p@v1", cache_root=tmp)
+
+        def k_of(name, splade=None, **kw):
+            s = cli.make_strategy(name, SimpleNamespace(**{**base, **kw}), cfg, {"version": "p@v1"}, bemb, splade=splade)
+            return s.settings()["fusion"]["params"]["k"], s
+        assert k_of("s5a")[0] == 60 and k_of("s5b", spl)[0] == 10 and k_of("s5b", sko, s5b_sparse="s3a.ko")[0] == 60
+        assert k_of("s5b", spl, rrf_k=60)[0] == 60 and k_of("s5a", rrf_k=10)[0] == 10          # 명시하면 그 값
+        k, s = k_of("s5b", spl)
+        assert "dev에서 정함" in s.settings()["fusion"]["status"] and s.s4.num_candidates == 200
 
 
 if FAILS:

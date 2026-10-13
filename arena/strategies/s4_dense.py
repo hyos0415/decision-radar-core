@@ -4,7 +4,9 @@
 `index_options: hnsw` **float32, 양자화 없음**. (ES 기본값은 라이선스·버전에 따라 bbq_hnsw 등으로 바뀐다 — 그래서 명시한다.)
 
 HNSW 파라미터(m · ef_construction · num_candidates)는 **dev에서 정하고 test 전에 고정**한다 (모든 S4 변형이 같은 값).
-지금 기본값(m=16 · ef_construction=100 · num_candidates=100)은 장난감 실행용 자리표시다 — 정한 값이 아니다.
+**num_candidates = 200** — dev에서 정했다 (2026-10-13, 사용자 결정 · `eval/arena/dev-tuning-2026-10-13.md`): 100이면 하네스가
+청크 100개를 요청해 근사 여유가 없어 한 질의의 상위 10이 정확 검색과 절반 달랐다. 200 이상은 정확 검색(4000)과 같고 지연도 같다.
+m=16 · ef_construction=100은 그대로 둔다 (코퍼스 3,856청크에서 num_candidates 200이면 이미 정확 검색과 같아 더 볼 것이 없다).
 같은 인덱스 이름 규칙(코퍼스 버전 포함) · 색인 건수 검증 · bulk 오류 확인은 S2와 같다.
 
 양자화 변형 (§6 변경 2026-10-02 「Should 변형」, 이슈 #63) — 임베딩 · 청크 · HNSW 파라미터 · cosine은 S4와 같고 `index_options.type`만 다르다.
@@ -18,7 +20,7 @@ from .s2_bm25 import index_name_for
 
 DIMS = 1024
 FIELD = "embedding"
-M, EF_CONSTRUCTION, NUM_CANDIDATES = 16, 100, 100
+M, EF_CONSTRUCTION, NUM_CANDIDATES = 16, 100, 200
 
 
 OVERSAMPLE = 3.0                 # S4.bbq 재채점 배수 (등록값 — 바꾸면 변형 새 버전)
@@ -54,7 +56,7 @@ class S4Dense:
             "query": {"type": "knn", "num_candidates": self.num_candidates,
                       **({"rescore_vector": {"oversample": self.oversample}} if self.oversample is not None else {}),
                       "note": "k = 요청한 청크 수(하네스 chunk_k) · num_candidates ≥ k여야 한다 · ES cosine 점수는 (1+cos)/2"},
-            "hnsw_status": "자리표시 기본값 — dev에서 정하고 test 전에 고정한다 (retrieval-arena §6 변경 2026-10-02)",
+            "hnsw_status": "dev에서 정함 (2026-10-13 — num_candidates 200 · m 16 · ef_construction 100, eval/arena/dev-tuning-2026-10-13.md)",
             "number_of_shards": 1, "number_of_replicas": 0,
         }
 

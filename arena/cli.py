@@ -1,7 +1,7 @@
 """Arena CLI.
 
   python arena/cli.py stats --snapshots <radar-snapshots> --adr <adr> --repo decision-radar=<경로> ... [--out stats.json]
-  python arena/cli.py run   --strategy s1|s2|s3a|s3a.ko|s3b|s4|s4.int8|s4.bbq|s4.kure|s5a|s5b|s6 [--s5b-sparse s3a|s3a.ko] --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
+  python arena/cli.py run   --strategy s1|s2|s3a|s3a.ko|s3b|s4|s4.int8|s4.bbq|s4.kure|s5a|s5b|s6 [--s5b-sparse s3a|s3a.ko] [--s6-first s5a|s4] --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
 
 코퍼스 폴더 위치는 전부 인자다 (Windows · M1 Mac 둘 다). 설정(버전·커밋·파일)은 arena/corpus/c-all@v1.json.
 gold가 확정되기 전이라 `run`은 장난감 질의로만 돌린다 — gold 버전 이름에 `toy`를 넣는다.
@@ -116,14 +116,15 @@ def make_strategy(name, args, cfg, policy, embedder, splade=None, docs=None):
         from arena.strategies.s5b_rrf import S5bRRF
         sparse = getattr(args, "s5b_sparse", "s3a")
         first = S3aKo(cv, splade) if sparse == "s3a.ko" else S3aSplade(cv, splade)
-        return S5bRRF(first, s4(), rrf_k=args.rrf_k, chunk_k=args.chunk_k, sparse=sparse)
-    from arena.strategies.s5a_rrf import S5aRRF
-    s5a = S5aRRF(S2BM25(cv, es_url=args.es_url), s4(), rrf_k=args.rrf_k, chunk_k=args.chunk_k)
+        return S5bRRF(first, s4(), rrf_k=getattr(args, "rrf_k", None), chunk_k=args.chunk_k, sparse=sparse)
+    from arena.strategies.s5a_rrf import RRF_K, S5aRRF
+    from arena.strategies.s6_rerank import CrossEncoder, DenseFirstStage, S6Rerank
     if name == "s5a":
-        return s5a
-    from arena.strategies.s6_rerank import CrossEncoder, S6Rerank
+        return S5aRRF(S2BM25(cv, es_url=args.es_url), s4(), rrf_k=args.rrf_k or RRF_K, chunk_k=args.chunk_k)
+    first = (DenseFirstStage(s4(), chunk_k=args.chunk_k) if getattr(args, "s6_first", "s5a") == "s4"
+             else S5aRRF(S2BM25(cv, es_url=args.es_url), s4(), rrf_k=args.rrf_k or RRF_K, chunk_k=args.chunk_k))
     reranker = CrossEncoder(device=args.device, batch_size=args.rerank_batch)
-    return S6Rerank(s5a, reranker, depth=args.rerank_depth)
+    return S6Rerank(first, reranker, depth=args.rerank_depth)
 
 
 def make_embedder(args, cfg, policy, kind="bge"):
@@ -246,16 +247,22 @@ def main(argv=None):
                    help="S5b의 SPLADE 구성요소 — s3a(SPLADE-v3, 기본) · s3a.ko(KURE-Sparse-nano). 선택은 system.json에 기록된다 (dev에서 정한다)")
     p.add_argument("--hnsw-m", type=int, default=16, help="S4(·변형) HNSW m (자리표시 — dev에서 정한다)")
     p.add_argument("--ef-construction", type=int, default=100, help="S4 HNSW ef_construction (자리표시)")
-    p.add_argument("--num-candidates", type=int, default=100, help="S4 kNN num_candidates (자리표시, chunk-k 이상이어야 한다)")
-    p.add_argument("--rrf-k", type=int, default=60, help="S5a·S5b RRF k (자리표시 — dev에서 정한다)")
+    p.add_argument("--num-candidates", type=int, default=200,
+                   help="S4 kNN num_candidates (dev 2026-10-13에 200으로 정함 — chunk-k 이상이어야 한다)")
+    p.add_argument("--rrf-k", type=int, default=None,
+                   help="S5a·S5b·S6(1단계 S5a) RRF k. 생략하면 dev에서 정한 기본값 (2026-10-13) — S5a 60 · S5b(s3a) 10 · S5b(s3a.ko) 60")
     p.add_argument("--rerank-depth", type=int, default=50, help="S6 재정렬할 1단계(S5a) 문서 수 (기본 50)")
     p.add_argument("--rerank-batch", type=int, default=16, help="S6 reranker 배치 크기 (기본 16)")
+    p.add_argument("--s6-first", choices=["s5a", "s4"], default="s5a",
+                   help="S6 1단계 — s5a(BM25+Dense RRF, 기본 · 결과 id S6) · s4(Dense 하나, 결과 id S6.dense). dev 비교용 (이슈 #75)")
     p.add_argument("--results", default=str(HERE / "results"))
     p.add_argument("--es-url", default=None)
     p.set_defaults(fn=cmd_run)
     args = ap.parse_args(argv)
     if getattr(args, "s5b_sparse", "s3a") != "s3a" and args.strategy != "s5b":
         ap.error(f"--s5b-sparse {args.s5b_sparse}는 --strategy s5b에서만 뜻이 있다 (지금 {args.strategy}) — 조용히 무시하지 않는다")
+    if getattr(args, "s6_first", "s5a") != "s5a" and args.strategy != "s6":
+        ap.error(f"--s6-first {args.s6_first}는 --strategy s6에서만 뜻이 있다 (지금 {args.strategy}) — 조용히 무시하지 않는다")
     if getattr(args, "es_url", 1) is None:
         from arena import es
         args.es_url = es.DEFAULT_URL
