@@ -633,6 +633,8 @@ kbd {
   border-left: 1px solid var(--border);
   background: var(--popover);
   box-shadow: var(--shadow-panel);
+  /* 그림자는 왼쪽으로만 — blur가 위로 번져 머리 줄을 덮지 않게 */
+  clip-path: inset(0 0 0 -48px);
   animation: panel-in 0.16s ease-out;
 }
 @keyframes panel-in {
