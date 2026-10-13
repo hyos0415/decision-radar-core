@@ -948,7 +948,7 @@ kbd {
 /* ── Feed (실행 기록) ───────────────────────────────────────── */
 .feed {
   width: min(760px, calc(100% - 2 * var(--gutter)));
-  margin: 16px var(--gutter) 48px;
+  margin: 16px auto 48px;
 }
 .feed-group {
   margin-bottom: 16px;
@@ -980,19 +980,24 @@ kbd {
   cursor: pointer;
   outline: none;
 }
-.run-history-row:hover,
+button.run-history-row:hover,
 .run-history-row:focus-visible,
 .run-history-row.open {
   background: var(--accent);
 }
 .feed-chevron {
   color: var(--muted-foreground);
-  opacity: 0;
-  transition: opacity 0.12s ease;
+  opacity: 0.5;
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
 }
 .run-history-row:hover .feed-chevron,
 .run-history-row.open .feed-chevron {
   opacity: 1;
+}
+.run-history-row.open .feed-chevron {
+  transform: rotate(90deg);
 }
 .run-history-time,
 .run-history-flow {
@@ -1008,7 +1013,10 @@ kbd {
   font-size: 12px;
   white-space: nowrap;
   text-overflow: ellipsis;
-  text-align: right;
+}
+.run-history-tags {
+  display: flex;
+  gap: 4px;
 }
 .run-detail {
   padding: 12px 8px 16px 32px;
@@ -1037,10 +1045,14 @@ kbd {
   color: inherit;
   background: transparent;
   text-align: left;
+  text-decoration: underline dotted;
+  text-decoration-color: var(--muted-foreground);
+  text-underline-offset: 3px;
   cursor: pointer;
 }
 .link-button:hover {
-  text-decoration: underline;
+  text-decoration-style: solid;
+  text-decoration-color: currentColor;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -6,10 +6,17 @@ import { cn } from '@renderer/lib/utils'
 import type { StatusKey } from '@renderer/lib/status'
 import { PageHeader, StatusIcon } from './Status'
 
-const TRIGGER_LABEL: Record<string, string> = {
-  manual: '수동',
-  job: '수동',
-  schedule: '정기'
+// tags only where they tell something: scheduled runs, and demo-mode runs (stub is the default)
+function runTags(r: Pick<RunResult, 'trigger' | 'mode'>): string[] {
+  const tags: string[] = []
+  if (r.trigger === 'schedule') tags.push('정기')
+  if (r.mode === 'demo') tags.push('데모')
+  return tags
+}
+
+// the expanded detail only carries what the row cannot: drafts and revisit alerts
+function hasDetail(r: RunResult): boolean {
+  return r.drafts.length > 0 || r.alerts.length > 0
 }
 
 function runSummary(r: RunResult): string {
@@ -21,7 +28,7 @@ function RunRow({
   status,
   time,
   flow,
-  trigger,
+  tags,
   summary,
   open,
   onToggle
@@ -29,7 +36,7 @@ function RunRow({
   status: StatusKey
   time: string
   flow: string
-  trigger: string
+  tags: string[]
   summary: string
   open?: boolean
   onToggle?: () => void
@@ -39,7 +46,13 @@ function RunRow({
       <StatusIcon status={status} />
       <span className="mono run-history-time">{time}</span>
       <span className="mono run-history-flow">{flow}</span>
-      <span className="tag">{trigger}</span>
+      <span className="run-history-tags">
+        {tags.map((t) => (
+          <span key={t} className="tag">
+            {t}
+          </span>
+        ))}
+      </span>
       <span className="run-history-summary" title={summary}>
         {summary}
       </span>
@@ -70,14 +83,6 @@ function RunDetail({
 }): React.JSX.Element {
   return (
     <div className="run-detail">
-      {r.error && <div>{r.error}</div>}
-      {r.summary.length > 0 && (
-        <ul>
-          {r.summary.map((s, i) => (
-            <li key={i}>{s}</li>
-          ))}
-        </ul>
-      )}
       {r.drafts.length > 0 && (
         <section>
           <h3>초안</h3>
@@ -85,7 +90,7 @@ function RunDetail({
             {r.drafts.map((d) => (
               <li key={d.adr}>
                 <button className="link-button" onClick={() => onOpenDecision(d.adr)}>
-                  <span className="mono text-xs text-muted-foreground">{d.adr}</span> {d.title}
+                  <span className="mono text-xs">{d.adr}</span> {d.title}
                 </button>
               </li>
             ))}
@@ -98,10 +103,7 @@ function RunDetail({
           <ul>
             {r.alerts.map((a, i) => (
               <li key={i}>
-                <button
-                  className="link-button mono text-xs text-muted-foreground"
-                  onClick={() => onOpenDecision(a.adr)}
-                >
+                <button className="link-button mono text-xs" onClick={() => onOpenDecision(a.adr)}>
                   {a.adr}
                 </button>
                 <span className="mono text-xs text-muted-foreground">{a.condition}</span>
@@ -112,7 +114,6 @@ function RunDetail({
           </ul>
         </section>
       )}
-      {r.mode === 'stub' && <span className="tag mono w-fit">스텁</span>}
     </div>
   )
 }
@@ -153,7 +154,7 @@ export function RunsView({
                 status="not_met"
                 time={timeOnly(f.next_slot, true)}
                 flow={f.flow}
-                trigger="정기"
+                tags={['정기']}
                 summary=""
               />
             ))}
@@ -168,7 +169,7 @@ export function RunsView({
                 status="running"
                 time={timeOnly(j.started ?? j.created)}
                 flow={j.kind}
-                trigger="수동"
+                tags={j.mode === 'demo' ? ['데모'] : []}
                 summary={j.message ?? ''}
               />
             ))}
@@ -186,12 +187,16 @@ export function RunsView({
                   status={r.ok ? 'done' : 'failed'}
                   time={timeOnly(r.at)}
                   flow={r.flow}
-                  trigger={TRIGGER_LABEL[r.trigger] ?? r.trigger}
+                  tags={runTags(r)}
                   summary={runSummary(r)}
                   open={openId === r.id}
-                  onToggle={() => setOpenId(openId === r.id ? null : r.id)}
+                  onToggle={
+                    hasDetail(r) ? () => setOpenId(openId === r.id ? null : r.id) : undefined
+                  }
                 />
-                {openId === r.id && <RunDetail r={r} onOpenDecision={onOpenDecision} />}
+                {openId === r.id && hasDetail(r) && (
+                  <RunDetail r={r} onOpenDecision={onOpenDecision} />
+                )}
               </div>
             ))}
           </section>
