@@ -947,30 +947,32 @@ kbd {
 
 /* ── Feed (실행 기록) ───────────────────────────────────────── */
 .feed {
-  width: min(760px, calc(100% - 2 * var(--gutter)));
-  margin: 16px auto 48px;
+  padding-bottom: 48px;
 }
-.feed-group {
-  margin-bottom: 16px;
-}
+/* 날짜 묶음 머리: Decisions 표 머리와 같은 띠, 화면 머리 줄 아래에 붙는다 */
 .feed-group > h2 {
+  position: sticky;
+  top: var(--header-h);
+  z-index: 3;
   height: 32px;
   margin: 0;
-  padding: 0 8px;
+  padding: 0 var(--gutter);
   display: flex;
   align-items: center;
+  border-bottom: 1px solid var(--border);
   color: var(--muted-foreground);
+  background: var(--secondary);
   font-size: 12px;
   font-weight: 500;
 }
 .run-history-row {
   width: 100%;
   min-height: var(--row-h);
-  padding: 0 8px;
+  padding: 0 var(--gutter);
   display: grid;
   grid-template-columns: 14px 64px 56px auto minmax(0, 1fr) 14px;
   align-items: center;
-  gap: 10px;
+  gap: 16px;
   border: 0;
   border-bottom: 1px solid var(--border);
   color: var(--foreground);
@@ -1019,7 +1021,7 @@ button.run-history-row:hover,
   gap: 4px;
 }
 .run-detail {
-  padding: 12px 8px 16px 32px;
+  padding: 12px var(--gutter) 16px calc(var(--gutter) + 30px);
   display: flex;
   flex-direction: column;
   gap: 12px;
