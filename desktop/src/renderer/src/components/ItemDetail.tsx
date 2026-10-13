@@ -9,6 +9,7 @@ import {
   type StaleAnswer
 } from '@renderer/lib/api'
 import { EditDialog } from './EditDialog'
+import { Markdown } from './Markdown'
 import { STATE_LABEL, waitText } from '@renderer/lib/inbox'
 import {
   AlertDialog,
@@ -120,9 +121,7 @@ export function ItemDetail({
           </div>
         )}
 
-        <pre className="mt-4 overflow-x-auto rounded-md border bg-muted p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap">
-          {detail.markdown}
-        </pre>
+        <Markdown className="mt-5 max-w-[72ch]">{detail.markdown}</Markdown>
       </div>
 
       <div className="shrink-0 border-t bg-background px-6 py-3">

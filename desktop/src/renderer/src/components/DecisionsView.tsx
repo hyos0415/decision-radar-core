@@ -6,6 +6,7 @@ import { dateOnly, resultLabel, revisitParts, statusLabel } from '@renderer/lib/
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
+import { Markdown } from './Markdown'
 
 const COLS = 'grid-cols-[44px_minmax(0,1fr)_84px_52px_120px_76px]'
 const FILTERS: { key: string; label: string }[] = [
@@ -110,9 +111,9 @@ function Panel({ id, onClose }: { id: string; onClose: () => void }): React.JSX.
               상태는 ADR 파일에서 사람이 바꾼다
             </span>
           </div>
-          <pre className="overflow-x-auto rounded-md border bg-muted p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap">
+          <Markdown compact className="mt-3">
             {d.markdown}
-          </pre>
+          </Markdown>
         </div>
       )}
     </div>

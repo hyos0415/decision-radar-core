@@ -65,3 +65,131 @@
     overflow: hidden;
   }
 }
+
+/* ADR 마크다운 본문 (components/Markdown.tsx). prose(@tailwindcss/typography)는 쓰지 않는다 — 색·간격을 토큰에 맞춘다 */
+@layer components {
+  .markdown {
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--foreground);
+    overflow-wrap: anywhere;
+  }
+  .markdown > :first-child {
+    margin-top: 0;
+  }
+  .markdown > :last-child {
+    margin-bottom: 0;
+  }
+  .markdown :where(h1, h2, h3, h4) {
+    font-weight: 600;
+    line-height: 1.35;
+    margin: 1.4em 0 0.5em;
+  }
+  .markdown h1 {
+    font-size: 1.25em;
+  }
+  .markdown h2 {
+    font-size: 1.1em;
+    padding-bottom: 0.25em;
+    border-bottom: 1px solid var(--border);
+  }
+  .markdown :where(h3, h4) {
+    font-size: 1em;
+  }
+  .markdown :where(p, ul, ol, table, pre, blockquote) {
+    margin: 0.6em 0;
+  }
+  .markdown :where(ul, ol) {
+    padding-left: 1.4em;
+  }
+  .markdown ul {
+    list-style: disc;
+  }
+  .markdown ol {
+    list-style: decimal;
+  }
+  .markdown li + li {
+    margin-top: 0.2em;
+  }
+  .markdown li > :where(ul, ol) {
+    margin: 0.2em 0;
+  }
+  .markdown li:has(> input[type='checkbox']) {
+    list-style: none;
+  }
+  .markdown li > input[type='checkbox'] {
+    margin: 0 0.4em 0 -1.2em;
+    vertical-align: middle;
+  }
+  .markdown a {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-color: var(--ring);
+  }
+  .markdown a:hover {
+    text-decoration-color: currentColor;
+  }
+  .markdown strong {
+    font-weight: 600;
+  }
+  .markdown :where(code, pre) {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+  }
+  .markdown :not(pre) > code {
+    padding: 0.1em 0.35em;
+    border-radius: var(--radius-sm);
+    background: var(--secondary);
+  }
+  .markdown pre {
+    padding: 0.75em 1em;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--muted);
+    line-height: 1.55;
+  }
+  .markdown pre code {
+    font-size: inherit;
+  }
+  .markdown blockquote {
+    padding-left: 0.9em;
+    border-left: 2px solid var(--border);
+    color: var(--muted-foreground);
+  }
+  .markdown hr {
+    margin: 1.2em 0;
+    border-top: 1px solid var(--border);
+  }
+  .markdown table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: 0.95em;
+  }
+  .markdown :where(th, td) {
+    padding: 0.35em 0.7em;
+    border: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+  }
+  .markdown th {
+    font-weight: 600;
+    background: var(--secondary);
+  }
+  .markdown del {
+    color: var(--muted-foreground);
+  }
+  .markdown img {
+    max-width: 100%;
+  }
+  /* 좁은 패널(Decisions 상세 380px) */
+  .markdown-compact {
+    font-size: 12.5px;
+    line-height: 1.65;
+  }
+  .markdown-compact :where(th, td) {
+    padding: 0.3em 0.5em;
+  }
+}
