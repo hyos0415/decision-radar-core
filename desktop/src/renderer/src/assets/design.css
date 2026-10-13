@@ -946,6 +946,28 @@ kbd {
 .document.compact :where(th, td) {
   padding: 0.3em 0.5em;
 }
+.document .front-matter {
+  margin: 0 0 1em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--muted-foreground);
+}
+.document .front-matter > summary {
+  padding: 0.35em 0.75em;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  user-select: none;
+}
+.document .front-matter[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+.document .front-matter > pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  color: var(--foreground);
+}
 
 /* Decisions */
 .decisions-page {
