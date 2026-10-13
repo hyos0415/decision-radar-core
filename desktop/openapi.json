@@ -1400,6 +1400,101 @@
         }
       }
     },
+    "/notifications": {
+      "get": {
+        "summary": "Notifications",
+        "description": "지난 알림 (HYO-110) — 행동 로그의 notification_shown에 클릭 여부·항목의 지금 상태를 붙인다. 읽기만.",
+        "operationId": "notifications",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "description": "최근 몇 통까지",
+              "default": 100,
+              "title": "Limit"
+            },
+            "description": "최근 몇 통까지"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/events": {
       "post": {
         "summary": "Events",
@@ -2240,7 +2335,8 @@
                 "type": "null"
               }
             ],
-            "title": "Detail"
+            "title": "Detail",
+            "description": "notification_shown·notification_clicked는 GET /notifications가 읽는 칸: kind · title · body(OS 알림 문구) · items(묶은 알림의 항목 id 목록 — 없으면 [item]) · nid(알림 하나의 id — shown·clicked가 같은 값이면 정확히 짝짓는다)"
           }
         },
         "type": "object",
@@ -2901,6 +2997,283 @@
         },
         "type": "object",
         "title": "JobRequest"
+      },
+      "NotificationEntry": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "행동 로그의 줄 번호 기반 id — 같은 데이터 폴더에서 바뀌지 않는다"
+          },
+          "at": {
+            "type": "string",
+            "title": "At",
+            "description": "알림이 뜬 시각"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind",
+            "description": "화면이 보낸 detail.kind 그대로 (예 capture · detect · revisit, 예전 것은 inbox_new · run_drafts · run_alerts)"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title",
+            "description": "OS 알림 제목 (detail.title). 화면이 안 보냈으면 null"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body",
+            "description": "OS 알림 본문 (detail.body). 화면이 안 보냈으면 null"
+          },
+          "clicked": {
+            "type": "boolean",
+            "title": "Clicked",
+            "description": "이 알림을 눌렀나 (notification_clicked — nid가 같거나, 없으면 같은 item·kind의 바로 앞 알림에 짝짓는다)"
+          },
+          "clicked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clicked At"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationItem"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "알림이 가리킨 항목 (묶은 알림이면 여럿, item 없는 알림이면 빈 목록)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "at",
+          "kind",
+          "title",
+          "body",
+          "clicked",
+          "clicked_at",
+          "items"
+        ],
+        "title": "NotificationEntry",
+        "description": "OS 알림 한 통 (notification_shown 한 줄). 「읽음」은 clicked 또는 항목의 opened — 조용히 표시만 한다 (배지 없음)."
+      },
+      "NotificationItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "inbox",
+              "answered",
+              "gone"
+            ],
+            "title": "Status",
+            "description": "inbox: 지금 Inbox에 있다 · answered: 답했다(승인·수정·거부·확인함) · gone: 둘 다 아니다 (예전 알림의 실행 경로 kind — run_drafts·run_alerts — 는 item이 ADR 번호)"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "capture",
+                  "detect",
+                  "pending",
+                  "revisit"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind",
+            "description": "inbox일 때 Inbox 항목 종류"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title",
+            "description": "inbox일 때 Inbox 항목 제목"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "awaiting_approval",
+                  "stale",
+                  "review",
+                  "pending",
+                  "blocked",
+                  "queued",
+                  "running",
+                  "error",
+                  "linked",
+                  "no_draft",
+                  "met",
+                  "not_met",
+                  "undetermined"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State",
+            "description": "inbox일 때 Inbox 상태"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "approve",
+                  "edit",
+                  "reject",
+                  "ack"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer",
+            "description": "answered: 마지막 답"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "written",
+                  "rejected",
+                  "stale",
+                  "edit_errors",
+                  "discarded",
+                  "rejudge",
+                  "blocked",
+                  "recovered",
+                  "acked",
+                  "error"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome",
+            "description": "answered: 마지막 답의 결과"
+          },
+          "answered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answered At"
+          },
+          "adr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adr",
+            "description": "이 항목의 ADR 번호 — revisit 항목, 또는 승인으로 쓴 ADR"
+          },
+          "new_item": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Item",
+            "description": "rejudge(다시 판정)로 새로 생긴 대기 항목"
+          },
+          "opened": {
+            "type": "boolean",
+            "title": "Opened",
+            "description": "이 알림 뒤에 항목을 열어 봤나 (item_opened)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "kind",
+          "title",
+          "state",
+          "answer",
+          "outcome",
+          "answered_at",
+          "adr",
+          "new_item",
+          "opened"
+        ],
+        "title": "NotificationItem",
+        "description": "알림이 가리킨 항목 하나의 지금 상태. 화면은 inbox면 Inbox 항목으로, answered + adr이면 Decisions로 보낸다."
+      },
+      "NotificationList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationEntry"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "최근 것 먼저"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "NotificationList"
       },
       "Ok": {
         "properties": {

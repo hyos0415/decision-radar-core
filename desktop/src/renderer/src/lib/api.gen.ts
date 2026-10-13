@@ -296,6 +296,26 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/notifications': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * Notifications
+     * @description 지난 알림 (HYO-110) — 행동 로그의 notification_shown에 클릭 여부·항목의 지금 상태를 붙인다. 읽기만.
+     */
+    get: operations['notifications']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/events': {
     parameters: {
       query?: never
@@ -564,7 +584,10 @@ export interface components {
       event: string
       /** Item */
       item?: string | null
-      /** Detail */
+      /**
+       * Detail
+       * @description notification_shown·notification_clicked는 GET /notifications가 읽는 칸: kind · title · body(OS 알림 문구) · items(묶은 알림의 항목 id 목록 — 없으면 [item]) · nid(알림 하나의 id — shown·clicked가 같은 값이면 정확히 짝짓는다)
+       */
       detail?: {
         [key: string]: unknown
       } | null
@@ -843,6 +866,142 @@ export interface components {
        * @description capture만 — CaptureRequest.repo와 같다
        */
       repo?: string | null
+    }
+    /**
+     * NotificationEntry
+     * @description OS 알림 한 통 (notification_shown 한 줄). 「읽음」은 clicked 또는 항목의 opened — 조용히 표시만 한다 (배지 없음).
+     */
+    NotificationEntry: {
+      /**
+       * Id
+       * @description 행동 로그의 줄 번호 기반 id — 같은 데이터 폴더에서 바뀌지 않는다
+       */
+      id: string
+      /**
+       * At
+       * @description 알림이 뜬 시각
+       */
+      at: string
+      /**
+       * Kind
+       * @description 화면이 보낸 detail.kind 그대로 (예 capture · detect · revisit, 예전 것은 inbox_new · run_drafts · run_alerts)
+       */
+      kind: string | null
+      /**
+       * Title
+       * @description OS 알림 제목 (detail.title). 화면이 안 보냈으면 null
+       */
+      title: string | null
+      /**
+       * Body
+       * @description OS 알림 본문 (detail.body). 화면이 안 보냈으면 null
+       */
+      body: string | null
+      /**
+       * Clicked
+       * @description 이 알림을 눌렀나 (notification_clicked — nid가 같거나, 없으면 같은 item·kind의 바로 앞 알림에 짝짓는다)
+       */
+      clicked: boolean
+      /** Clicked At */
+      clicked_at: string | null
+      /**
+       * Items
+       * @description 알림이 가리킨 항목 (묶은 알림이면 여럿, item 없는 알림이면 빈 목록)
+       */
+      items: components['schemas']['NotificationItem'][]
+    }
+    /**
+     * NotificationItem
+     * @description 알림이 가리킨 항목 하나의 지금 상태. 화면은 inbox면 Inbox 항목으로, answered + adr이면 Decisions로 보낸다.
+     */
+    NotificationItem: {
+      /** Id */
+      id: string
+      /**
+       * Status
+       * @description inbox: 지금 Inbox에 있다 · answered: 답했다(승인·수정·거부·확인함) · gone: 둘 다 아니다 (예전 알림의 실행 경로 kind — run_drafts·run_alerts — 는 item이 ADR 번호)
+       * @enum {string}
+       */
+      status: 'inbox' | 'answered' | 'gone'
+      /**
+       * Kind
+       * @description inbox일 때 Inbox 항목 종류
+       */
+      kind: ('capture' | 'detect' | 'pending' | 'revisit') | null
+      /**
+       * Title
+       * @description inbox일 때 Inbox 항목 제목
+       */
+      title: string | null
+      /**
+       * State
+       * @description inbox일 때 Inbox 상태
+       */
+      state:
+        | (
+            | 'awaiting_approval'
+            | 'stale'
+            | 'review'
+            | 'pending'
+            | 'blocked'
+            | 'queued'
+            | 'running'
+            | 'error'
+            | 'linked'
+            | 'no_draft'
+            | 'met'
+            | 'not_met'
+            | 'undetermined'
+          )
+        | null
+      /**
+       * Answer
+       * @description answered: 마지막 답
+       */
+      answer: ('approve' | 'edit' | 'reject' | 'ack') | null
+      /**
+       * Outcome
+       * @description answered: 마지막 답의 결과
+       */
+      outcome:
+        | (
+            | 'written'
+            | 'rejected'
+            | 'stale'
+            | 'edit_errors'
+            | 'discarded'
+            | 'rejudge'
+            | 'blocked'
+            | 'recovered'
+            | 'acked'
+            | 'error'
+          )
+        | null
+      /** Answered At */
+      answered_at: string | null
+      /**
+       * Adr
+       * @description 이 항목의 ADR 번호 — revisit 항목, 또는 승인으로 쓴 ADR
+       */
+      adr: string | null
+      /**
+       * New Item
+       * @description rejudge(다시 판정)로 새로 생긴 대기 항목
+       */
+      new_item: string | null
+      /**
+       * Opened
+       * @description 이 알림 뒤에 항목을 열어 봤나 (item_opened)
+       */
+      opened: boolean
+    }
+    /** NotificationList */
+    NotificationList: {
+      /**
+       * Items
+       * @description 최근 것 먼저
+       */
+      items: components['schemas']['NotificationEntry'][]
     }
     /** Ok */
     Ok: {
@@ -2304,6 +2463,83 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  notifications: {
+    parameters: {
+      query?: {
+        /** @description 최근 몇 통까지 */
+        limit?: number
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['NotificationList']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
         }
       }
       /** @description 서비스 오류 — detail 한 줄 */

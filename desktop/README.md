@@ -70,6 +70,7 @@ edit의 `draft`만 모양 검사 없이(dict) 받는다 — 모델로 받으면 
 | `POST /runs/detect` · `/runs/revisit` · `GET /runs` | 흐름을 한 번 돌리고(동기) 요약(`summary`·`drafts`·`alerts`·`excluded`·`usage`) — `excluded`는 detect가 버린 소식마다 `{url, title, reason, why}`(why = 관문이 남긴 이유, HYO-97) — `<data>/runs.jsonl`. detect 입력이 수집 스냅숏에서 왔으면(`funnel.json`) `summary` 첫 줄이 건수(수집 → 레인 A → 관문 남김 → detect 입력). 이 모드의 `flows` 밖이면 409 | `detect` · `revisit` 그래프 (스냅숏 모드 + dry-run) |
 | `GET /schedule` | 정기 실행 칸·지난 실행·차례 여부. 켜기: `RADAR_SCHEDULE=on`(기본 꺼짐) — revisit 월 09:00 · detect 화 18:00(수집 화 16:00 뒤), 앱이 꺼져 있던 동안 지난 칸은 켜질 때 한 번 따라잡는다 | `scheduling.py` |
 | `POST /events` `{event, item?, detail?}` | 화면 행동 로그 (`app_opened` · `item_opened` · `notification_shown` · `notification_clicked` · `capture_opened` · `decision_opened`) | — |
+| `GET /notifications?limit=` | **지난 알림** (HYO-110) — `notification_shown` 한 줄이 한 통, 최근 것 먼저(기본 100통). `{id, at, kind, title, body, clicked, clicked_at, items}` — `items`는 알림이 가리킨 항목마다 지금 상태 `status`(`inbox` 지금 Inbox에 있음 + `kind`·`title`·`state` / `answered` 답함 + `answer`·`outcome`·`answered_at` / `gone`) · `adr` · `new_item` · `opened`(알림 뒤에 `item_opened`). 새로 저장하지 않는다 — 행동 로그를 읽기만 | `<data>/events.jsonl` |
 
 `outcome`: `written` · `rejected` · `stale`(바뀐 점을 보이고 계속·다시 판정·버림을 `stale_answer`로 다시 보낸다) · `edit_errors` · `discarded` · `rejudge`(원래 대화로 capture 1턴을 다시 돌려 새 대기 항목) · `blocked` · `recovered` · `error`.
 detect 초안은 Inbox에서 승인·수정·거부한다 (로컬 내보내기 — 승인은 사본에 `proposed`로 남고 별도 파일에 승인이 적힌다, git 없음). 검토 대기 초안은 아직 「세상」이 아니어서(지문이 보지 않는다) 다른 대기 항목을 낡게 하지 않는다 — 승인하면 낡게 한다.
@@ -108,6 +109,7 @@ detect·revisit는 eval 스냅숏(`<data>/snapshots` — Jev v0.9.0 릴리스로
 
 - `source: backend` — `approve` · `edit` · `reject`(detail에 outcome·stale_answer·adr·errors) · `item_created` · `capture_submitted`(outcome·글자 수·대본) · `run`(flow·초안·알림 수)
 - `source: app` — 화면이 `POST /events`로 보낸 것
+- 알림 이벤트의 detail (`GET /notifications`가 읽는다): `kind` · `title`·`body`(OS 알림 문구 그대로) · `items`(묶은 알림이면 항목 id 목록 — 없으면 `[item]`) · `nid`(알림 하나의 id — `notification_shown`과 `notification_clicked`에 같은 값을 넣으면 클릭을 정확히 짝짓는다. 없으면 같은 item·kind의 바로 앞 알림에 붙인다)
 - **무시**는 기록하지 않고 계산한다: 알림(`notification_shown`)·항목 생성 뒤 답이 없는 항목
 
 ## 마일스톤 2 — 빠른 capture · 알림 · Decisions · 실행 (HYO-51·52)
