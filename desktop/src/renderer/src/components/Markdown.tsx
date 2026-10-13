@@ -16,17 +16,16 @@ const COMPONENTS: Components = {
   )
 }
 
+// 스타일은 assets/design.css의 .document 아래에 있다
 export function Markdown({
   children,
-  compact = false,
-  className
+  compact = false
 }: {
   children: string
   compact?: boolean
-  className?: string
 }): React.JSX.Element {
   return (
-    <div className={cn('markdown', compact && 'markdown-compact', className)}>
+    <div className={cn('document', compact && 'compact')}>
       <ReactMarkdown remarkPlugins={REMARK} components={COMPONENTS}>
         {children}
       </ReactMarkdown>

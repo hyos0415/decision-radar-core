@@ -2,10 +2,12 @@
 @import 'tw-animate-css';
 @import '@fontsource-variable/geist';
 @import '@fontsource-variable/geist-mono';
+@import 'pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css';
+@import './design.css' layer(components);
 
 @theme inline {
-  --font-sans: 'Geist Variable', 'Malgun Gothic', 'Apple SD Gothic Neo', system-ui, sans-serif;
-  --font-mono: 'Geist Mono Variable', 'D2Coding', 'Malgun Gothic', 'Apple SD Gothic Neo', ui-monospace, monospace;
+  --font-sans: var(--font-ui);
+  --font-mono: var(--font-code);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -29,26 +31,99 @@
   --radius-lg: calc(var(--radius) + 2px);
 }
 
+/* 디자인 토큰 (HYO-101) — 무채색 · 시스템 테마를 따른다.
+   header 48 · row 40 · control 28/32 · gutter 16 · panel 24 · radius 4 tag / 6 control / 8 panel */
 :root {
-  --radius: 0.5rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.975 0 0);
-  --muted-foreground: oklch(0.52 0 0);
-  --accent: oklch(0.96 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.205 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --font-ui:
+    'Geist Variable', 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont,
+    'Apple SD Gothic Neo', 'Malgun Gothic', 'Segoe UI', sans-serif;
+  --font-code:
+    'Geist Mono Variable', 'D2Coding', ui-monospace, 'Apple SD Gothic Neo', 'Malgun Gothic',
+    monospace;
+  --font-reading:
+    'Pretendard Variable', Pretendard, -apple-system, 'Apple SD Gothic Neo', 'Malgun Gothic',
+    sans-serif;
+  --header-h: 48px;
+  --row-h: 40px;
+  --control-sm: 28px;
+  --control-md: 32px;
+  --gutter: 16px;
+  --panel-pad: 24px;
+  --radius-tag: 4px;
+  --radius: 6px;
+  --radius-panel: 8px;
+  /* Windows는 창 버튼(titleBarOverlay)이 머리 줄 오른쪽을 덮는다 — 그만큼 비운다 */
+  --caption-reserve: 0px;
+
+  --background: #fafafa;
+  --foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --popover: #ffffff;
+  --popover-foreground: #171717;
+  --primary: #171717;
+  --primary-foreground: #fafafa;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #171717;
+  --muted: #f4f4f5;
+  --muted-foreground: #737373;
+  --accent: #ececec;
+  --accent-foreground: #171717;
+  --accent-active: #e2e2e2;
+  --border: #e5e5e5;
+  --input: #d4d4d4;
+  --ring: #737373;
+  --destructive: #c43d4b;
+  --sidebar: #f5f5f5;
+  --sidebar-foreground: #404040;
+  --success: #178a57;
+  --warning: #a76405;
+  --danger: #c43d4b;
+  --info: #367cc9;
+  --neutral: #737373;
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.18);
+  --shadow-panel: -12px 0 32px rgba(0, 0, 0, 0.14);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #fafafa;
+    --card: #121212;
+    --card-foreground: #fafafa;
+    --popover: #171717;
+    --popover-foreground: #fafafa;
+    --primary: #fafafa;
+    --primary-foreground: #0a0a0a;
+    --secondary: #1a1a1a;
+    --secondary-foreground: #fafafa;
+    --muted: #1a1a1a;
+    --muted-foreground: #a3a3a3;
+    --accent: #262626;
+    --accent-foreground: #fafafa;
+    --accent-active: #303030;
+    --border: #2e2e2e;
+    --input: #404040;
+    --ring: #a3a3a3;
+    --destructive: #e06c75;
+    --sidebar: #050505;
+    --sidebar-foreground: #d4d4d4;
+    --success: #3dbb7c;
+    --warning: #d99a35;
+    --danger: #e06c75;
+    --info: #65a5e8;
+    --neutral: #a3a3a3;
+    --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.45);
+    --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.55);
+    --shadow-panel: -12px 0 32px rgba(0, 0, 0, 0.45);
+    color-scheme: dark;
+  }
+}
+
+html.platform-win32 {
+  --caption-reserve: 138px;
 }
 
 @layer base {
@@ -61,135 +136,9 @@
     height: 100%;
   }
   body {
-    @apply bg-background text-foreground font-sans text-[13px] antialiased;
+    @apply bg-background text-foreground font-sans antialiased;
+    font-size: 14px;
+    font-synthesis: none;
     overflow: hidden;
-  }
-}
-
-/* ADR 마크다운 본문 (components/Markdown.tsx). prose(@tailwindcss/typography)는 쓰지 않는다 — 색·간격을 토큰에 맞춘다 */
-@layer components {
-  .markdown {
-    font-size: 13px;
-    line-height: 1.7;
-    color: var(--foreground);
-    overflow-wrap: anywhere;
-  }
-  .markdown > :first-child {
-    margin-top: 0;
-  }
-  .markdown > :last-child {
-    margin-bottom: 0;
-  }
-  .markdown :where(h1, h2, h3, h4) {
-    font-weight: 600;
-    line-height: 1.35;
-    margin: 1.4em 0 0.5em;
-  }
-  .markdown h1 {
-    font-size: 1.25em;
-  }
-  .markdown h2 {
-    font-size: 1.1em;
-    padding-bottom: 0.25em;
-    border-bottom: 1px solid var(--border);
-  }
-  .markdown :where(h3, h4) {
-    font-size: 1em;
-  }
-  .markdown :where(p, ul, ol, table, pre, blockquote) {
-    margin: 0.6em 0;
-  }
-  .markdown :where(ul, ol) {
-    padding-left: 1.4em;
-  }
-  .markdown ul {
-    list-style: disc;
-  }
-  .markdown ol {
-    list-style: decimal;
-  }
-  .markdown li + li {
-    margin-top: 0.2em;
-  }
-  .markdown li > :where(ul, ol) {
-    margin: 0.2em 0;
-  }
-  .markdown li:has(> input[type='checkbox']) {
-    list-style: none;
-  }
-  .markdown li > input[type='checkbox'] {
-    margin: 0 0.4em 0 -1.2em;
-    vertical-align: middle;
-  }
-  .markdown a {
-    text-decoration: underline;
-    text-underline-offset: 2px;
-    text-decoration-color: var(--ring);
-  }
-  .markdown a:hover {
-    text-decoration-color: currentColor;
-  }
-  .markdown strong {
-    font-weight: 600;
-  }
-  .markdown :where(code, pre) {
-    font-family: var(--font-mono);
-    font-size: 0.92em;
-  }
-  .markdown :not(pre) > code {
-    padding: 0.1em 0.35em;
-    border-radius: var(--radius-sm);
-    background: var(--secondary);
-  }
-  .markdown pre {
-    padding: 0.75em 1em;
-    overflow-x: auto;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--muted);
-    line-height: 1.55;
-  }
-  .markdown pre code {
-    font-size: inherit;
-  }
-  .markdown blockquote {
-    padding-left: 0.9em;
-    border-left: 2px solid var(--border);
-    color: var(--muted-foreground);
-  }
-  .markdown hr {
-    margin: 1.2em 0;
-    border-top: 1px solid var(--border);
-  }
-  .markdown table {
-    display: block;
-    max-width: 100%;
-    overflow-x: auto;
-    border-collapse: collapse;
-    font-size: 0.95em;
-  }
-  .markdown :where(th, td) {
-    padding: 0.35em 0.7em;
-    border: 1px solid var(--border);
-    text-align: left;
-    vertical-align: top;
-  }
-  .markdown th {
-    font-weight: 600;
-    background: var(--secondary);
-  }
-  .markdown del {
-    color: var(--muted-foreground);
-  }
-  .markdown img {
-    max-width: 100%;
-  }
-  /* 좁은 패널(Decisions 상세 380px) */
-  .markdown-compact {
-    font-size: 12.5px;
-    line-height: 1.65;
-  }
-  .markdown-compact :where(th, td) {
-    padding: 0.3em 0.5em;
   }
 }

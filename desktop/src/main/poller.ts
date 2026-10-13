@@ -55,7 +55,8 @@ export async function postRun(flow: 'detect' | 'revisit'): Promise<void> {
   const b = base()
   if (!b) return
   try {
-    await fetch(`${b}/runs/${flow}`, {
+    // job + polling (HYO-85): returns as soon as it is accepted; the poller sees the run when it ends
+    await fetch(`${b}/jobs/${flow}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}'
