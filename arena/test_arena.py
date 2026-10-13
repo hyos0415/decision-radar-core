@@ -1431,7 +1431,7 @@ def _():
     chunks = [{"chunk_id": c, "doc_id": d, "source_type": "repo", "text": "t"} for c, d in chunk_to_doc.items()]
     s3a = FakeComponent("S3a", [("A#1", 9.0), ("B#0", 8.0), ("A#0", 7.0)])
     s4 = FakeComponent("S4", [("C#0", 0.9), ("B#0", 0.8), ("A#0", 0.7)])
-    s = s5b_rrf.S5bRRF(s3a, s4, rrf_k=60, chunk_k=100)
+    s = s5b_rrf.S5bRRF(s3a, s4, rrf_k=60, chunk_k=100, sparse="s3a")      # SPLADE-v3 구성요소 (기본은 s3a.ko — #83)
     assert s.id == "S5b" and s.version == "v1"
     s.index(chunks)
     assert s3a.n_indexed == 4 and s4.n_indexed == 4 and s.n_indexed == 4
@@ -1450,7 +1450,7 @@ def _():
     # 대표 청크 동점(두 구성요소가 같은 순위) → 앞 구성요소(S3a) 쪽 청크
     t1 = FakeComponent("S3a", [("A#0", 2.0), ("B#0", 1.0)])
     t2 = FakeComponent("S4", [("A#1", 2.0), ("B#0", 1.0)])
-    tie = s5b_rrf.S5bRRF(t1, t2)
+    tie = s5b_rrf.S5bRRF(t1, t2, sparse="s3a")
     tie.index(chunks)
     assert dict((chunk_to_doc[c], c) for c, _ in tie.search("q", 100))["A"] == "A#0"
     st = s.settings()
@@ -1481,10 +1481,10 @@ def _():
             return cli.make_strategy(n, args, cfg, {"version": "p@v1"}, emb, splade=spl, docs=S1_DOCS)
         assert type(mk("s1")) is s1_match.S1Match and type(mk("s3a")) is s3a_splade.S3aSplade
         assert type(mk("s4.int8")) is s4_dense.S4Int8 and type(mk("s4.bbq")) is s4_dense.S4BBQ and type(mk("s4")) is s4_dense.S4Dense
-        b = mk("s5b")
+        b = cli.make_strategy("s5b", SimpleNamespace(**vars(args), s5b_sparse="s3a"), cfg, {"version": "p@v1"}, emb, splade=spl)
         assert type(b) is s5b_rrf.S5bRRF and type(b.s3a) is s3a_splade.S3aSplade and type(b.s4) is s4_dense.S4Dense
         assert type(mk("s5a")) is s5a_rrf.S5aRRF
-    for sid in ("S1", "S3a", "S4.int8", "S4.bbq", "S5b"):
+    for sid in ("S1", "S3a", "S4.int8", "S4.bbq", "S5b", "S5b.ko"):
         key = harness.result_key(sid, "v1", "c-all@v1", "toy@v0")
         assert key == f"{sid}.v1__c-all@v1__toy@v0__T0__seed0", key
 
@@ -1700,24 +1700,28 @@ def _():
         assert st["prompts"] == {"query": "[Q] ", "document": "[D] "} and st["max_length"] == 8192
 
 
-@case("S5b: --s5b-sparse 선택 — 기본은 s3a(구성요소 키 s3a · sparse_component s3a)로 옛 동작 그대로 · s3a.ko면 키와 기록이 바뀐다 · 알 수 없는 값은 거부")
+@case("S5b: --s5b-sparse 선택 — 기본은 s3a.ko(dev 2026-10-13, #83) · 구성요소 키·sparse_component·결과 id(S5b / S5b.ko)가 선택을 따른다 · 알 수 없는 값은 거부")
 def _():
     hits3 = [("A#1", 9.0), ("B#0", 8.0)]
     hits4 = [("B#0", 0.9), ("A#1", 0.8)]
-    default = s5b_rrf.S5bRRF(FakeComponent("S3a", hits3), FakeComponent("S4", hits4), rrf_k=60)    # k 기본값은 구성요소마다 달라 맞춘다 (#75)
+    default = s5b_rrf.S5bRRF(FakeComponent("S3a", hits3), FakeComponent("S4", hits4), rrf_k=60, sparse="s3a")    # k 기본값은 구성요소마다 달라 맞춘다 (#75)
+    assert s5b_rrf.S5bRRF(FakeComponent("S3a.ko", []), FakeComponent("S4", [])).sparse == "s3a.ko" == s5b_rrf.DEFAULT_SPARSE
+    import importlib
+    assert s5b_rrf.DEFAULT_SPARSE == importlib.import_module("arena.cli").S5B_DEFAULT_SPARSE        # 두 곳의 기본이 같다
     st = default.settings()
     assert list(st["components"]) == ["s3a", "s4"] and st["sparse_component"] == "s3a" and default.sparse == "s3a"
     ko = s5b_rrf.S5bRRF(FakeComponent("S3a.ko", hits3), FakeComponent("S4", hits4), sparse="s3a.ko")
     sk = ko.settings()
     assert list(sk["components"]) == ["s3a.ko", "s4"] and sk["sparse_component"] == "s3a.ko"
-    assert sk["components"]["s3a.ko"]["marker"] == "S3a.ko" and ko.id == "S5b"
+    assert sk["components"]["s3a.ko"]["marker"] == "S3a.ko" and ko.id == "S5b.ko" and default.id == "S5b"
+    assert harness.result_key(ko.id, ko.version, "c-all@v1", "g") != harness.result_key(default.id, default.version, "c-all@v1", "g")   # 결과 키가 갈린다
     assert raises(ValueError, s5b_rrf.S5bRRF, FakeComponent("x", []), FakeComponent("y", []), sparse="s3b")
     for s in (default, ko):                                              # 순위 · 점수는 구성요소 선택과 무관하게 같은 규칙
         s.index([{"chunk_id": c, "doc_id": c.split("#")[0], "source_type": "repo", "text": c} for c in ("A#1", "B#0")])
     assert default.search("q", 100) == ko.search("q", 100)
 
 
-@case("CLI: s4.kure · s3a.ko가 --strategy에 있다 · make_strategy가 알맞은 객체를 만든다 · s5b는 --s5b-sparse로 SPLADE를 고르고 기본은 s3a · 다른 전략에 쓰면 거부 · 핀 고정")
+@case("CLI: s4.kure · s3a.ko가 --strategy에 있다 · make_strategy가 알맞은 객체를 만든다 · s5b는 --s5b-sparse로 SPLADE를 고르고 기본은 s3a.ko(#83) · 다른 전략에 쓰면 거부 · 핀 고정")
 def _():
     import importlib
     from types import SimpleNamespace
@@ -1738,13 +1742,15 @@ def _():
         a = cli.make_strategy("s4.kure", SimpleNamespace(**base), cfg, {"version": "p@v1"}, kemb)
         assert type(a) is s4_dense.S4Kure and a.embedder is kemb
         assert type(cli.make_strategy("s3a.ko", SimpleNamespace(**base), cfg, {"version": "p@v1"}, None, splade=sko)) is ko.S3aKo
-        d = cli.make_strategy("s5b", SimpleNamespace(**base), cfg, {"version": "p@v1"}, bemb, splade=spl)           # s5b_sparse 인자 없음 = 옛 호출
-        assert type(d.s3a) is s3a_splade.S3aSplade and d.sparse == "s3a" and list(d.settings()["components"]) == ["s3a", "s4"]
+        n = cli.make_strategy("s5b", SimpleNamespace(**base), cfg, {"version": "p@v1"}, bemb, splade=sko)           # s5b_sparse 인자 없음 = 기본 s3a.ko
+        assert type(n.s3a) is ko.S3aKo and n.sparse == "s3a.ko" and n.id == "S5b.ko"
+        d = cli.make_strategy("s5b", SimpleNamespace(**base, s5b_sparse="s3a"), cfg, {"version": "p@v1"}, bemb, splade=spl)
+        assert type(d.s3a) is s3a_splade.S3aSplade and d.sparse == "s3a" and list(d.settings()["components"]) == ["s3a", "s4"] and d.id == "S5b"
         k = cli.make_strategy("s5b", SimpleNamespace(**base, s5b_sparse="s3a.ko"), cfg, {"version": "p@v1"}, bemb, splade=sko)
         assert type(k.s3a) is ko.S3aKo and type(k.s4) is s4_dense.S4Dense and list(k.settings()["components"]) == ["s3a.ko", "s4"]
         assert k.settings()["sparse_component"] == "s3a.ko"
     for args, want in ((SimpleNamespace(strategy="s5b", s5b_sparse="s3a.ko"), "s3a.ko"), (SimpleNamespace(strategy="s5b", s5b_sparse="s3a"), "s3a"),
-                       (SimpleNamespace(strategy="s5b"), "s3a"), (SimpleNamespace(strategy="s3a.ko"), "s3a.ko"),
+                       (SimpleNamespace(strategy="s5b"), "s3a.ko"), (SimpleNamespace(strategy="s5b", s5b_sparse=None), "s3a.ko"), (SimpleNamespace(strategy="s3a.ko"), "s3a.ko"),
                        (SimpleNamespace(strategy="s3a"), "s3a"), (SimpleNamespace(strategy="s4.kure"), None), (SimpleNamespace(strategy="s2"), None)):
         assert cli.sparse_kind(args) == want, (args, want)
     for sid in ("S4.kure", "S3a.ko"):
@@ -1764,7 +1770,8 @@ def _():
     from types import SimpleNamespace
     from arena.strategies import s3a_ko_kure_sparse as ko
     cli = importlib.import_module("arena.cli")
-    assert s5b_rrf.S5bRRF(FakeComponent("S3a", []), FakeComponent("S4", [])).rrf_k == 10
+    assert s5b_rrf.S5bRRF(FakeComponent("S3a", []), FakeComponent("S4", []), sparse="s3a").rrf_k == 10
+    assert s5b_rrf.S5bRRF(FakeComponent("S3a.ko", []), FakeComponent("S4", [])).rrf_k == 60          # 기본 s3a.ko (#83)
     assert s5b_rrf.S5bRRF(FakeComponent("S3a.ko", []), FakeComponent("S4", []), sparse="s3a.ko").rrf_k == 60
     assert s5a_rrf.S5aRRF(FakeComponent("S2", []), FakeComponent("S4", [])).rrf_k == 60
     base = dict(es_url="http://x", hnsw_m=16, ef_construction=100, num_candidates=200, rrf_k=None, chunk_k=100)
@@ -1777,10 +1784,39 @@ def _():
         def k_of(name, splade=None, **kw):
             s = cli.make_strategy(name, SimpleNamespace(**{**base, **kw}), cfg, {"version": "p@v1"}, bemb, splade=splade)
             return s.settings()["fusion"]["params"]["k"], s
-        assert k_of("s5a")[0] == 60 and k_of("s5b", spl)[0] == 10 and k_of("s5b", sko, s5b_sparse="s3a.ko")[0] == 60
-        assert k_of("s5b", spl, rrf_k=60)[0] == 60 and k_of("s5a", rrf_k=10)[0] == 10          # 명시하면 그 값
-        k, s = k_of("s5b", spl)
+        assert k_of("s5a")[0] == 60 and k_of("s5b", spl, s5b_sparse="s3a")[0] == 10 and k_of("s5b", sko, s5b_sparse="s3a.ko")[0] == 60
+        assert k_of("s5b", sko)[0] == 60                                                      # 기본 s3a.ko (#83)
+        assert k_of("s5b", spl, rrf_k=60, s5b_sparse="s3a")[0] == 60 and k_of("s5a", rrf_k=10)[0] == 10          # 명시하면 그 값
+        k, s = k_of("s5b", spl, s5b_sparse="s3a")
         assert "dev에서 정함" in s.settings()["fusion"]["status"] and s.s4.num_candidates == 200
+
+
+@case("§6 진단 변형 (이슈 #83): flat · int8_flat · bbq_flat — 색인 본문에 m·ef_construction이 없다 · 인덱스 이름이 따로 · bbq_flat만 재채점 · CLI 선택지(격자 밖)")
+def _():
+    import importlib
+    from types import SimpleNamespace
+    cli = importlib.import_module("arena.cli")
+    with tempfile.TemporaryDirectory() as tmp:
+        emb = embed.Embedder(FakeEncoder(), "c-all@v1", "p@v1", cache_root=tmp)
+        want = {s4_dense.S4Flat: ("S4.flat", "flat", "arena-c-all-v1-s4-flat", None, None),
+                s4_dense.S4Int8Flat: ("S4.int8flat", "int8_flat", "arena-c-all-v1-s4-int8flat", "int8", None),
+                s4_dense.S4BBQFlat: ("S4.bbqflat", "bbq_flat", "arena-c-all-v1-s4-bbqflat", "bbq", 3.0)}
+        for cls, (sid, typ, index, quant, over) in want.items():
+            s = cls("c-all@v1", emb, m=24, ef_construction=150)
+            f = s._body()["mappings"]["properties"]["embedding"]
+            assert f["index_options"] == {"type": typ}, f                 # 그래프 파라미터를 넣으면 ES가 거부한다
+            st = s.settings()
+            assert st["dense_vector"]["index_options"] == {"type": typ} and st["quantization"] == quant
+            assert (s.id, s.index_name, s.oversample) == (sid, index, over)
+            assert ("rescore_vector" in st["query"]) == (over is not None)
+        hnsw = s4_dense.S4Dense("c-all@v1", emb, m=24, ef_construction=150)._body()["mappings"]["properties"]["embedding"]
+        assert hnsw["index_options"] == {"type": "hnsw", "m": 24, "ef_construction": 150}      # hnsw 계열은 그대로
+        args = SimpleNamespace(es_url="http://x", hnsw_m=16, ef_construction=100, num_candidates=200, rrf_k=None, chunk_k=100)
+        for name, cls in (("s4.flat", s4_dense.S4Flat), ("s4.int8flat", s4_dense.S4Int8Flat), ("s4.bbqflat", s4_dense.S4BBQFlat)):
+            assert type(cli.make_strategy(name, args, {"version": "c-all@v1"}, {"version": "p@v1"}, emb)) is cls
+    assert cli.DIAG_STRATEGIES == ["s4.flat", "s4.int8flat", "s4.bbqflat"]
+    assert not set(cli.DIAG_STRATEGIES) & set(cli.STRATEGY_CHOICES)          # 격자 전략 목록에는 넣지 않는다
+    assert set(cli.DIAG_STRATEGIES) <= set(cli.BGE_STRATEGIES) <= set(cli.EMBEDDING_STRATEGIES)
 
 
 if FAILS:
