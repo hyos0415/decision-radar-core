@@ -8,7 +8,7 @@ export const STATE_LABEL: Partial<Record<ItemState, string>> = {
 }
 
 // 목록 행의 상태 아이콘. 표시 글자가 없는 상태(승인 대기 등)도 아이콘은 있다.
-const STATE_ICON: Record<ItemState, StatusKey> = {
+export const STATE_ICON: Record<ItemState, StatusKey> = {
   awaiting_approval: 'awaiting',
   stale: 'stale',
   review: 'review',
@@ -22,10 +22,6 @@ const STATE_ICON: Record<ItemState, StatusKey> = {
   met: 'met',
   not_met: 'not_met',
   undetermined: 'undetermined'
-}
-
-export function stateIcon(state: ItemState): StatusKey {
-  return STATE_ICON[state]
 }
 
 export function waitText(days: number): string {

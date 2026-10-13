@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import type { InboxItem } from '@renderer/lib/api'
-import { firstAffected, stateIcon, waitText } from '@renderer/lib/inbox'
+import { firstAffected, STATE_ICON, waitText } from '@renderer/lib/inbox'
 import { cn } from '@renderer/lib/utils'
 import { StatusIcon } from './Status'
 
@@ -37,7 +37,7 @@ export function InboxList({
           className={cn('inbox-row', it.id === selectedId && 'selected')}
         >
           <span className="row-icon">
-            <StatusIcon status={stateIcon(it.state)} />
+            <StatusIcon status={STATE_ICON[it.state]} />
           </span>
           <span className="row-title" title={it.title}>
             {it.title}

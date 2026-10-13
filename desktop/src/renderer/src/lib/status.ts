@@ -22,26 +22,20 @@ export type StatusKey =
   | 'done'
   | 'failed'
 
-const ADR_STATUS: Record<string, StatusKey> = {
-  proposed: 'proposed',
-  adopted: 'adopted',
-  accepted: 'adopted',
-  hold: 'hold',
-  rejected: 'rejected',
-  revisit: 'revisit',
-  superseded: 'superseded'
-}
+const ADR_KEYS: readonly string[] = [
+  'proposed',
+  'adopted',
+  'hold',
+  'rejected',
+  'revisit',
+  'superseded'
+]
 
 export function adrStatusKey(s: string | null | undefined): StatusKey {
-  return ADR_STATUS[s ?? ''] ?? 'proposed'
-}
-
-const RESULT: Record<string, StatusKey> = {
-  met: 'met',
-  not_met: 'not_met',
-  undetermined: 'undetermined'
+  if (s === 'accepted') return 'adopted' // 스킬 schema.md 이전 값
+  return s && ADR_KEYS.includes(s) ? (s as StatusKey) : 'proposed'
 }
 
 export function resultKey(r: string | null | undefined): StatusKey {
-  return RESULT[r ?? ''] ?? 'unchecked'
+  return r === 'met' || r === 'not_met' || r === 'undetermined' ? r : 'unchecked'
 }

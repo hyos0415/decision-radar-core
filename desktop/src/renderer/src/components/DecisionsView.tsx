@@ -147,7 +147,7 @@ export function DecisionsView({
   useEffect(() => {
     if (!selectedId) return
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onSelect(null)
+      if (e.key === 'Escape' && !e.defaultPrevented) onSelect(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

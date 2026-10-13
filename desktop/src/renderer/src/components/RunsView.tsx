@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import { ChevronRight } from 'lucide-react'
-import { api, type Job, type RunResult, type Schedule } from '@renderer/lib/api'
+import type { Job, RunResult, Schedule } from '@renderer/lib/api'
 import { dayLabel, resultLabel, timeOnly } from '@renderer/lib/format'
 import { cn } from '@renderer/lib/utils'
 import type { StatusKey } from '@renderer/lib/status'
@@ -26,7 +26,7 @@ function RunRow({
   open,
   onToggle
 }: {
-  status: StatusKey | 'scheduled'
+  status: StatusKey
   time: string
   flow: string
   trigger: string
@@ -36,11 +36,7 @@ function RunRow({
 }): React.JSX.Element {
   const content = (
     <>
-      {status === 'scheduled' ? (
-        <span className="status-icon tone-neutral" />
-      ) : (
-        <StatusIcon status={status} />
-      )}
+      <StatusIcon status={status} />
       <span className="mono run-history-time">{time}</span>
       <span className="mono run-history-flow">{flow}</span>
       <span className="tag">{trigger}</span>
@@ -122,39 +118,22 @@ function RunDetail({
 }
 
 export function RunsView({
-  refreshKey,
-  jobs,
+  runs,
+  error,
+  schedule,
+  active,
   onOpenDecision
 }: {
-  refreshKey: number
-  jobs: Job[]
+  runs: RunResult[] | null // newest first
+  error: string | null
+  schedule: Schedule | null
+  active: Job[] // detect · revisit jobs queued or running
   onOpenDecision: (id: string) => void
 }): React.JSX.Element {
-  const [runs, setRuns] = useState<RunResult[] | null>(null)
-  const [schedule, setSchedule] = useState<Schedule | null>(null)
-  const [err, setErr] = useState<string | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
 
-  const load = useCallback(() => {
-    api
-      .runs()
-      .then((r) => setRuns(r))
-      .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
-    api
-      .schedule()
-      .then(setSchedule)
-      .catch(() => setSchedule(null))
-  }, [])
-
-  useEffect(load, [load, refreshKey])
-
-  const active = jobs.filter(
-    (j) => j.kind !== 'capture' && (j.state === 'queued' || j.state === 'running')
-  )
-
-  // newest first, grouped by local day
   const groups: { label: string; items: RunResult[] }[] = []
-  for (const r of [...(runs ?? [])].sort((a, b) => b.at.localeCompare(a.at))) {
+  for (const r of runs ?? []) {
     const label = dayLabel(r.at)
     const last = groups[groups.length - 1]
     if (last && last.label === label) last.items.push(r)
@@ -171,7 +150,7 @@ export function RunsView({
             {schedule.flows.map((f) => (
               <RunRow
                 key={f.flow}
-                status="scheduled"
+                status="not_met"
                 time={timeOnly(f.next_slot, true)}
                 flow={f.flow}
                 trigger="정기"
@@ -195,8 +174,8 @@ export function RunsView({
             ))}
           </section>
         )}
-        {err && <div className="empty-state">{err}</div>}
-        {!runs && !err && <div className="empty-state">불러오는 중…</div>}
+        {error && <div className="empty-state">{error}</div>}
+        {!runs && !error && <div className="empty-state">불러오는 중…</div>}
         {runs && runs.length === 0 && <div className="empty-state">아직 실행한 적이 없다</div>}
         {groups.map((g) => (
           <section key={g.label} className="feed-group">

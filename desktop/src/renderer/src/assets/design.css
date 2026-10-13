@@ -109,9 +109,6 @@ html.platform-darwin .sidebar-header {
   color: var(--foreground);
   background: var(--accent);
 }
-.nav-item.active {
-  font-weight: 500;
-}
 .nav-item.active::before {
   content: '';
   position: absolute;
@@ -120,6 +117,9 @@ html.platform-darwin .sidebar-header {
   height: 16px;
   border-radius: 2px;
   background: var(--foreground);
+}
+.nav-item.active {
+  font-weight: 500;
 }
 .nav-item.active svg {
   color: var(--foreground);
@@ -156,6 +156,7 @@ html.platform-darwin .sidebar-header {
   background: transparent;
   text-align: left;
   font-size: 13px;
+  overflow: hidden; /* 카드 폭(232px 사이드바)을 넘지 않게 — 넘치면 이름이 줄어든다 */
   white-space: nowrap;
   cursor: pointer;
   outline: none;
@@ -181,14 +182,6 @@ html.platform-darwin .sidebar-header {
   flex: 0 0 auto;
   color: var(--muted-foreground);
 }
-.sidebar-action kbd,
-.run-row-status {
-  margin-left: auto;
-}
-/* 카드 폭(232px 사이드바)을 넘지 않게 — 넘치면 이름이 줄어든다 */
-.sidebar-action {
-  overflow: hidden;
-}
 .sidebar-action > span:not(.run-row-status) {
   min-width: 0;
   overflow: hidden;
@@ -196,6 +189,7 @@ html.platform-darwin .sidebar-header {
 }
 .run-row-status {
   min-width: 0;
+  margin-left: auto;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -204,14 +198,6 @@ html.platform-darwin .sidebar-header {
   color: var(--muted-foreground);
   font-size: 12px;
   white-space: nowrap;
-}
-.run-result-dot {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 6px;
-  display: inline-block;
-  border-radius: 50%;
-  background: var(--foreground);
 }
 .sidebar-environment {
   min-height: var(--control-sm);

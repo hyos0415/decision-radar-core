@@ -10,7 +10,7 @@ import {
   type StaleAnswer
 } from '@renderer/lib/api'
 import { EditDialog } from './EditDialog'
-import { STATE_LABEL, stateIcon, waitText } from '@renderer/lib/inbox'
+import { STATE_ICON, STATE_LABEL, waitText } from '@renderer/lib/inbox'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -95,7 +95,7 @@ export function ItemDetail({
   }
 
   return (
-    <section className="overlay-panel" aria-label="Inbox 항목 상세">
+    <>
       <div className="panel-head">
         <span className="eyebrow">INBOX</span>
         <button
@@ -127,7 +127,7 @@ export function ItemDetail({
           <h2 className="panel-title">{detail.title}</h2>
           <div className="detail-meta">
             <span className="tag mono">{detail.kind}</span>
-            {stateLabel && <Status status={stateIcon(detail.state)} label={stateLabel} />}
+            {stateLabel && <Status status={STATE_ICON[detail.state]} label={stateLabel} />}
             <span className="mono">{detail.technology}</span>
             {detail.affected.length > 0 && (
               <span className="mono">
@@ -229,6 +229,6 @@ export function ItemDetail({
           </div>
         </AlertDialogContent>
       </AlertDialog>
-    </section>
+    </>
   )
 }

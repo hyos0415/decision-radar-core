@@ -111,7 +111,6 @@ export const api = {
   decision: (id: string) =>
     unwrap(client.GET('/decisions/{adr_id}', { params: { path: { adr_id: id } } })),
   runs: () => unwrap(client.GET('/runs')).then((r) => r.items),
-  run: (flow: Flow) => unwrap(client.POST('/runs/{flow}', { params: { path: { flow } } })),
   submitJob: (kind: JobKind, conversation?: string) =>
     unwrap(
       client.POST('/jobs/{kind}', {

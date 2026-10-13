@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Inbox as InboxIcon } from 'lucide-react'
 import { toast, Toaster } from 'sonner'
-import { api, setBaseUrl, type Flow, type InboxDetail, type InboxItem, type Job } from './lib/api'
+import {
+  api,
+  setBaseUrl,
+  type Flow,
+  type InboxDetail,
+  type InboxItem,
+  type Job,
+  type RunResult,
+  type Schedule
+} from './lib/api'
 import { InboxList } from './components/InboxList'
 import { ItemDetail } from './components/ItemDetail'
 import { DecisionsView } from './components/DecisionsView'
@@ -36,8 +45,9 @@ function App(): React.JSX.Element {
   const [flows, setFlows] = useState<Flow[]>([])
   const [info, setInfo] = useState<RadarInfo | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
-  const [lastFailed, setLastFailed] = useState(false)
-  const [nextSlot, setNextSlot] = useState<string | null>(null)
+  const [runs, setRuns] = useState<RunResult[] | null>(null)
+  const [runsError, setRunsError] = useState<string | null>(null)
+  const [schedule, setSchedule] = useState<Schedule | null>(null)
   const sentOpened = useRef(false)
   const selectedRef = useRef<string | null>(null)
 
@@ -85,32 +95,31 @@ function App(): React.JSX.Element {
     []
   )
 
+  // runs + schedule feed both the sidebar run row and the runs view (newest run first)
   const refreshRunInfo = useCallback((): void => {
     api
       .runs()
-      .then((runs) => {
-        const latest = [...runs].sort((a, b) => b.at.localeCompare(a.at))[0]
-        setLastFailed(!!latest && !latest.ok)
+      .then((r) => {
+        setRuns([...r].sort((a, b) => b.at.localeCompare(a.at)))
+        setRunsError(null)
       })
-      .catch(() => {})
+      .catch((e) => setRunsError(e instanceof Error ? e.message : String(e)))
     api
       .schedule()
-      .then((s) => {
-        const slots = s.enabled ? s.flows.map((f) => f.next_slot).sort() : []
-        setNextSlot(slots[0] ?? null)
-      })
-      .catch(() => setNextSlot(null))
+      .then(setSchedule)
+      .catch(() => setSchedule(null))
   }, [])
 
+  // null when /jobs failed — the caller must not read that as "the job ended"
   const loadJobs = useCallback(
-    (): Promise<Job[]> =>
+    (): Promise<Job[] | null> =>
       api
         .jobs()
         .then((list) => {
           setJobs(list)
           return list
         })
-        .catch(() => []),
+        .catch(() => null),
     []
   )
 
@@ -176,13 +185,15 @@ function App(): React.JSX.Element {
   }, [ready, refresh, refreshRunInfo, loadJobs])
 
   // while a detect · revisit job is queued or running, poll until it ends, then reload everything
-  const activeJob = jobs.find(isActive) ?? null
+  const activeJobs = jobs.filter(isActive)
+  const activeJob = activeJobs[0] ?? null
+  const activeId = activeJob?.id ?? null
   useEffect(() => {
-    if (!ready || !activeJob) return
-    const id = activeJob.id
+    if (!ready || !activeId) return
     const timer = setInterval(() => {
       void loadJobs().then((list) => {
-        const j = list.find((x) => x.id === id)
+        if (!list) return // backend did not answer — try again next tick
+        const j = list.find((x) => x.id === activeId)
         if (j && isActive(j)) return
         if (j?.state === 'error') toast(j.error ?? `${j.kind} 실행이 실패했다.`)
         void refresh()
@@ -191,7 +202,11 @@ function App(): React.JSX.Element {
       })
     }, JOB_POLL_MS)
     return () => clearInterval(timer)
-  }, [ready, activeJob, loadJobs, refresh, refreshRunInfo])
+  }, [ready, activeId, loadJobs, refresh, refreshRunInfo])
+
+  useEffect(() => {
+    if (ready && view === 'runs') refreshRunInfo()
+  }, [ready, view, refreshRunInfo])
 
   async function startRun(flow: Flow): Promise<void> {
     try {
@@ -238,8 +253,8 @@ function App(): React.JSX.Element {
   }, [view, selectedId, closeItem])
 
   function onResolved(): void {
+    // the answered detail stays (inert) until the next one loads; refresh clears it if none is left
     const idx = items ? items.findIndex((i) => i.id === selectedId) : 0
-    setDetail(null)
     void refresh(Math.max(idx, 0))
   }
 
@@ -255,8 +270,10 @@ function App(): React.JSX.Element {
   } else if (ready && view === 'runs') {
     body = (
       <RunsView
-        refreshKey={tick}
-        jobs={jobs}
+        runs={runs}
+        error={runsError}
+        schedule={schedule}
+        active={activeJobs}
         onOpenDecision={(id) => {
           setDecisionId(id)
           setView('decisions')
@@ -280,7 +297,10 @@ function App(): React.JSX.Element {
   } else if (!ready) {
     body = <Centered>백엔드 기동 중…</Centered>
   } else {
-    const open = !!(detail && detail.id === selectedId)
+    // The panel stays mounted while moving between items (no slide-in replay); until the next
+    // detail arrives the previous one stays visible but inert, so nothing can act on it.
+    const open = !!selectedId
+    const loading = !detail || detail.id !== selectedId
     body = (
       <div className={`inbox-workspace ${open ? 'is-open' : ''}`}>
         <PageHeader title="Inbox" count={items?.length} />
@@ -300,15 +320,26 @@ function App(): React.JSX.Element {
             onSelect={(id) => (id === selectedId ? closeItem() : setSelectedId(id))}
           />
         )}
-        {open && detail && (
-          <ItemDetail
-            key={detail.id}
-            detail={detail}
-            onResolved={onResolved}
-            onClose={closeItem}
-            onPrev={step(-1)}
-            onNext={step(1)}
-          />
+        {open && (
+          <section
+            className="overlay-panel"
+            aria-label="Inbox 항목 상세"
+            aria-busy={loading}
+            inert={loading}
+          >
+            {detail ? (
+              <ItemDetail
+                key={detail.id}
+                detail={detail}
+                onResolved={onResolved}
+                onClose={closeItem}
+                onPrev={step(-1)}
+                onNext={step(1)}
+              />
+            ) : (
+              <div className="empty-state">불러오는 중…</div>
+            )}
+          </section>
         )}
       </div>
     )
@@ -323,7 +354,15 @@ function App(): React.JSX.Element {
         stub={mode === 'stub'}
         profile={profile}
         info={info}
-        run={{ active: activeJob, lastFailed, nextSlot } satisfies RunState}
+        run={
+          {
+            active: activeJob,
+            lastFailed: !!runs?.[0] && !runs[0].ok,
+            nextSlot: schedule?.enabled
+              ? (schedule.flows.map((f) => f.next_slot).sort()[0] ?? null)
+              : null
+          } satisfies RunState
+        }
         flows={flows}
         onRun={(flow) => void startRun(flow)}
       />
