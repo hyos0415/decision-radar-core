@@ -272,6 +272,22 @@ def _(t):
     assert lc["c1"]["result"] == "met"
 
 
+@case("decide stdin 한국어 reason + python -I: Windows cp949에서도 UTF-8로 읽는다 (HYO-28 Haiku 실측)")
+def _(t):
+    # -I는 PYTHONUTF8·PYTHONIOENCODING을 무시한다 → Windows에서 stdin이 cp949+surrogateescape로 읽혀
+    # 깨진 reason을 ADR에 쓴 뒤 출력에서 죽었다. 환경 변수로 가리지 않게 일부러 뺀다
+    reason = "github.example/leann/releases 접근 실패(403)"
+    res = results({("0004", "c1"): ("undetermined", [], None)})
+    next(r for r in res if r["adr"] == "0004" and r["condition_id"] == "c1")["reason"] = reason
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    p = subprocess.run([sys.executable, "-I", JHS, "decide", os.path.join(t, "adr"), "-", "--now", NOW, "--apply"],
+                       input=json.dumps(res, ensure_ascii=False).encode("utf-8"), capture_output=True, env=env)
+    assert p.returncode == 0, p.stderr.decode("utf-8", "replace")[-300:]
+    d = json.loads(p.stdout.decode("utf-8"))
+    assert result_of(d, "0004/c1")["reason"] == reason
+    assert reason in open(os.path.join(t, "adr", "0004-leann-index.md"), encoding="utf-8").read()
+
+
 @case("numeric: 모델이 result=undetermined/null + observed_value → 스크립트가 계산 (배치 실측 F2)")
 def _(t):
     res = results()
