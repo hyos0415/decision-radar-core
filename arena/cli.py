@@ -1,6 +1,7 @@
 """Arena CLI.
 
   python arena/cli.py stats --snapshots <radar-snapshots> --adr <adr> --repo decision-radar=<경로> ... [--out stats.json]
+  python arena/cli.py nodes-check --queries q.jsonl <같은 코퍼스 인자>   # 노드 어휘 nodes@v1 확인 (HYO-34)
   python arena/cli.py run   --strategy s1|s2|s3a|s3a.ko|s3b|s4|s4.int8|s4.bbq|s4.kure|s5a|s5b|s6 [--s5b-sparse s3a|s3a.ko] [--s6-first s5a|s4] --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
 
 코퍼스 폴더 위치는 전부 인자다 (Windows · M1 Mac 둘 다). 설정(버전·커밋·파일)은 arena/corpus/c-all@v1.json.
@@ -18,8 +19,10 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")      # Windows 파이프(cp949)에서도 한글 출력이 안 죽게
 sys.path.insert(0, str(HERE.parent))
 
-from arena import chunking, corpus, harness   # noqa: E402
-from arena.tokens import HFTokenCounter        # noqa: E402
+from arena import chunking, corpus, harness, jhs_metrics   # noqa: E402
+from arena.tokens import HFTokenCounter                    # noqa: E402
+
+NODES_DEFAULT = HERE.parent / "eval" / "arena" / "nodes@v1.json"
 
 
 def _kv(items, what):
@@ -155,11 +158,55 @@ def make_splade_embedder(args, cfg, policy, kind="s3a"):
     return s3a_splade.SpladeEmbedder(encoder, cfg["version"], policy["version"], use_cache=not args.no_cache)
 
 
+def build_cost(system, embedders, strat):
+    """구축 비용 (retrieval-arena §5 변경 2026-10-13). 구축 시간은 캐시 없이 처음 인코딩한 실행만 보고한다 —
+    캐시를 하나라도 쓴 실행은 인코딩 시간이 빠져 cold_build_seconds가 None이다. 보고 기준 기기는 M1."""
+    enc = [{k: e.info().get(k) for k in ("model_id", "chunks", "cache_hits", "encoded", "chunk_encode_seconds", "device")}
+           for e in embedders]
+    cold = all(not x["cache_hits"] for x in enc)
+    return {
+        "cold_build": cold,
+        "cold_build_seconds": system["index_build_seconds"] if cold else None,
+        "note": "" if cold else "임베딩 캐시를 쓴 실행 — 인코딩 시간 모름. 구축 시간은 캐시 없이(--no-cache) 처음 돈 실행만 보고한다",
+        "encoding": enc,
+        "build_llm_cost_usd": getattr(strat, "build_llm_cost_usd", 0.0),
+        "memory": harness.peak_memory(),
+    }
+
+
+def cmd_nodes_check(args):
+    """nodes@v1 확인 — 별칭이 출처 문서에 글자 그대로 있나 · gold 질의 노드가 어휘에 연결되나.
+    test 질의는 연결 안 된 수만 센다(이름을 보고 별칭을 고치지 않는다 — §5 변경 2026-10-13)."""
+    _, _, _, docs, _, _, _ = build(args)
+    nodes = jhs_metrics.load_nodes(args.nodes)
+    bad = jhs_metrics.check_nodes(nodes, {d["doc_id"]: d["title"] + "\n" + d["text"] for d in docs})
+    print(f"{nodes.version}: 기술 {len(nodes.tech)} · 별칭 {len(nodes.alias)} · component {len(nodes.components)}")
+    for b in bad:
+        print("  출처 문제:", b)
+    by_split = {}
+    for q in harness.load_queries(args.queries):
+        if q["type"] == "B":
+            continue                                   # B의 nodes는 범주 — Seed Recall에서 뺀다
+        ids, missing = nodes.query_node_ids(q)
+        s = by_split.setdefault(q.get("split", "?"), {"queries": 0, "nodes": 0, "not_in_graph": 0, "names": []})
+        s["queries"] += 1
+        s["nodes"] += len(ids) + len(missing)
+        s["not_in_graph"] += len(missing)
+        if q.get("split") != "test":
+            s["names"] += [f"{q['qid']}:{m}" for m in missing]
+    for split, s in sorted(by_split.items()):
+        names = "" if split == "test" else f" — {', '.join(s['names']) or '없음'}"
+        print(f"  {split}: 질의 {s['queries']} · 노드 {s['nodes']} · 그래프에 없음 {s['not_in_graph']}{names}")
+    if bad:
+        raise SystemExit(1)
+
+
 def cmd_run(args):
     cfg, policy, policy_path, docs, chunks, counter, chunk_secs = build(args)
     queries = harness.load_queries(args.queries)
     qrels = harness.load_qrels(args.qrels)
     harness.check_gold(queries, qrels, [d["doc_id"] for d in docs])
+    nodes = jhs_metrics.load_nodes(args.nodes)                 # 색인을 만들기 전에 — 어휘 파일이 깨졌으면 먼저 멈춘다
     if args.strategy == "s1":                         # S1은 질의의 nodes를 쓴다 — 없는 질의가 섞이면 시작 전에 알린다
         no_nodes = [q["qid"] for q in queries if not q.get("nodes")]
         if no_nodes:
@@ -178,8 +225,11 @@ def cmd_run(args):
     build_secs = time.perf_counter() - t0
 
     chunk_to_doc = {c["chunk_id"]: c["doc_id"] for c in chunks}
-    run, lat = harness.run_queries(strat, queries, chunk_to_doc, k_docs=args.k, chunk_k=args.chunk_k)
+    rep_chunks = {}
+    run, lat = harness.run_queries(strat, queries, chunk_to_doc, k_docs=args.k, chunk_k=args.chunk_k, rep_chunks=rep_chunks)
     metrics = harness.compute_metrics(run, qrels, queries, {d["doc_id"]: d["source_type"] for d in docs})
+    stack_text = {c["chunk_id"]: c["text"] for c in chunks if c["doc_id"].startswith("stack:")}
+    metrics["jhs"] = jhs_metrics.compute(run, rep_chunks, qrels, queries, docs, stack_text, nodes)
     system = {
         "index_build_seconds": round(build_secs, 3),
         "chunking_seconds": round(chunk_secs, 3),
@@ -219,8 +269,9 @@ def cmd_run(args):
         extra["embedding"] = {k: info[k] for k in ("model_id", "revision", "dtype", "max_length", "device", "libraries")}
         if "reranker" in system:
             extra["reranker"] = {k: system["reranker"][k] for k in ("model_id", "revision", "dtype", "max_length", "device", "libraries")}
+    system["build_cost"] = build_cost(system, [x for x in (embedder, splade) if x], strat)
     env = harness.env_info(extra)
-    out = harness.save_results(args.results, key, run, metrics, system, env)
+    out = harness.save_results(args.results, key, run, metrics, system, env, extra={"rep_chunks.json": rep_chunks})
     print(f"결과: {out}")
     print(json.dumps({"overall": metrics["overall"], "latency_ms": system["query_latency_ms"]}, ensure_ascii=False))
 
@@ -261,7 +312,13 @@ def main(argv=None):
                    help="S6 1단계 — s5a(BM25+Dense RRF, 기본 · 결과 id S6) · s4(Dense 하나, 결과 id S6.dense). dev 비교용 (이슈 #75)")
     p.add_argument("--results", default=str(HERE / "results"))
     p.add_argument("--es-url", default=None)
+    p.add_argument("--nodes", default=str(NODES_DEFAULT), help="노드 어휘 (JHS 지표 — component 근거의 별칭)")
     p.set_defaults(fn=cmd_run)
+    p = sub.add_parser("nodes-check", help="노드 어휘 nodes@v1 확인 — 별칭 출처 · gold 질의 노드 연결")
+    add_corpus_args(p)
+    p.add_argument("--nodes", default=str(NODES_DEFAULT))
+    p.add_argument("--queries", required=True)
+    p.set_defaults(fn=cmd_nodes_check)
     args = ap.parse_args(argv)
     if getattr(args, "s5b_sparse", None) is not None and args.strategy != "s5b":
         ap.error(f"--s5b-sparse {args.s5b_sparse}는 --strategy s5b에서만 뜻이 있다 (지금 {args.strategy}) — 조용히 무시하지 않는다")
