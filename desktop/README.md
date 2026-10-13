@@ -9,7 +9,7 @@ Electron main (src/main)      트레이 · 창 · 백엔드 자식 프로세스 
   ▼
 FastAPI 백엔드 (backend/)     product/radar의 capture_turn2·hitl을 함수로 부른다 — 코어 동작은 바꾸지 않는다
   ▲  fetch http://127.0.0.1:P (JSON만)
-Renderer (src/renderer)       React + TS + Tailwind + shadcn/ui(neutral) · Geist
+Renderer (src/renderer)       React + TS + Tailwind + shadcn/ui(neutral) · Geist + Pretendard · 다크 기준·시스템 테마
 ```
 
 ## 실행
