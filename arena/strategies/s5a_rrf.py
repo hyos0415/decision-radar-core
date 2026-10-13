@@ -7,7 +7,7 @@
    하네스의 rollup은 문서당 하나뿐인 목록을 그대로 통과시킨다.
 
 `--strategy s5a`는 S2와 S4를 **같은 실행 안에서** 새로 색인·검색한다 — 저장된 옛 결과를 재사용하지 않는다.
-RRF k=60은 자리표시 기본값이다 (이슈 #58: RRF k는 dev에서 정한다).
+RRF k=60 — dev에서 정했다 (2026-10-13, 사용자 결정: k=10~100 스윕에서 차이가 잡음 범위라 그대로 둔다).
 """
 import time
 from importlib import metadata
@@ -15,6 +15,7 @@ from importlib import metadata
 from .. import harness
 
 RRF_K = 60
+RRF_STATUS = "기본값은 dev에서 정함 (2026-10-13, eval/arena/dev-tuning-2026-10-13.md) — S5a 60 · S5b(SPLADE-v3) 10 · S5b(KURE-Sparse) 60"
 CHUNK_K = 100
 PLACEHOLDER = "ph_empty"                 # 고정 폭 8자 (번호 id와 같은 폭)
 
@@ -84,7 +85,7 @@ class TwoWayRRF:
         return {
             "fusion": {"library": "ranx", "ranx_version": ranx_version, "method": "rrf", "params": {"k": self.rrf_k},
                        "level": "document (청크→문서 rollup 뒤 융합 · 문서마다 최고 순위 청크)", "norm": "max (RRF는 순위만 쓴다)",
-                       "status": "자리표시 기본값 — RRF k는 dev에서 정한다 (이슈 #58)"},
+                       "status": RRF_STATUS},
             "component_chunk_k": self.chunk_k,
             "components": {n: {"id": c.id, "version": c.version, **c.settings()} for n, c in zip(self.names, self.components)},
             "reuse_of_saved_results": False,

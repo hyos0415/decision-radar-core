@@ -10,6 +10,10 @@
 모델 `BAAI/bge-reranker-v2-m3` (cross-encoder, 로컬) · FlagEmbedding `FlagReranker` · **fp32** · 기기 cuda > mps > cpu ·
 `max_length=1024`(질의+청크 쌍, 특수 토큰 포함). **조용히 잘리지 않게** 채점 전에 쌍마다 길이를 세어 넘으면 실패한다.
 점수는 **원시 logit**이다 (sigmoid 정규화 없음 — 순위만 쓴다).
+
+**S6.dense** (이슈 #75, dev 비교용 선택지) — 1단계만 **S4 Dense 하나**로 바꾼다 (`DenseFirstStage`). 나머지(깊이 · 문서 점수 ·
+동점 규칙 · 모델)는 S6과 같다. 후보 청크 = 그 문서의 청크 중 S4 상위 `chunk_k` 목록에 나온 것 전부 (S4 순위 순서),
+문서 순서 = 최고 순위 청크 기준 (하네스 rollup과 같다). dev에서 Dense 단독(0.704)이 S5a(0.623)보다 높아 1단계를 비교한다.
 """
 import time
 from importlib import metadata
@@ -108,14 +112,68 @@ class CrossEncoder:
         }
 
 
+class DenseFirstStage:
+    """S6.dense의 1단계 — S4 하나의 상위 chunk_k 청크. `first_stage_candidates`는 S5a와 같은 꼴 [(doc, [후보 chunk_id])]"""
+
+    def __init__(self, dense, chunk_k):
+        if isinstance(chunk_k, bool) or not isinstance(chunk_k, int) or chunk_k < 1:
+            raise ValueError(f"chunk_k={chunk_k!r} — 1 이상의 정수여야 한다")
+        self.dense, self.chunk_k = dense, chunk_k
+        self.id, self.version = dense.id, dense.version
+        self.chunk_to_doc = {}
+        self.n_indexed = 0
+
+    @property
+    def took_ms(self):
+        return self.dense.took_ms
+
+    def settings(self):
+        return {"order": "S4 청크 순위 → 문서 (문서마다 최고 순위 청크 — 하네스 rollup과 같다)",
+                "component_chunk_k": self.chunk_k,
+                "components": {"s4": {"id": self.dense.id, "version": self.dense.version, **self.dense.settings()}}}
+
+    def index(self, chunks):
+        self.chunk_to_doc = {c["chunk_id"]: c["doc_id"] for c in chunks}
+        self.dense.index(chunks)
+        self.n_indexed = self.dense.n_indexed
+
+    def first_stage_candidates(self, query):
+        """문서 순서 = 최고 순위 청크 순서 · 후보 = 그 문서의 청크 중 S4 상위 chunk_k 목록에 나온 것 전부 (순위 순서)"""
+        seen = {}
+        for cid, _ in self.dense.search(query, self.chunk_k):
+            if cid not in self.chunk_to_doc:                 # rollup과 같게 모르는 청크 id는 실패
+                raise KeyError(f"전략이 모르는 청크 id를 돌려줬다: {cid}")
+            lst = seen.setdefault(self.chunk_to_doc[cid], [])
+            if cid not in lst:
+                lst.append(cid)
+        return list(seen.items())
+
+    def index_size_bytes(self):
+        return self.dense.index_size_bytes()
+
+    def size_breakdown(self):
+        return {"s4": self.dense.index_size_bytes()}
+
+    def server_version(self):
+        return self.dense.server_version()
+
+    def drop(self):
+        self.dense.drop()
+
+
+S6_ID_BY_FIRST = {"S5a": "S6", "S4": "S6.dense"}      # 1단계가 다르면 결과 키가 달라야 한다 (덮어쓰기 거부가 섞임을 막는다)
+
+
 class S6Rerank:
-    id = "S6"
     version = "v1"
 
     def __init__(self, first_stage, reranker, depth=DEPTH):
-        """first_stage = S5aRRF (`first_stage_candidates(query)`를 가진 것) · reranker = CrossEncoder 꼴(`score(pairs)`)"""
+        """first_stage = S5aRRF 또는 DenseFirstStage (`first_stage_candidates(query)`를 가진 것) · reranker = CrossEncoder 꼴(`score(pairs)`)"""
         if isinstance(depth, bool) or not isinstance(depth, int) or depth < 1:
             raise ValueError(f"rerank depth={depth!r} — 1 이상의 정수여야 한다")
+        if first_stage.id not in S6_ID_BY_FIRST:
+            raise ValueError(f"S6 1단계는 {sorted(S6_ID_BY_FIRST)} 중 하나여야 한다 — {first_stage.id}")
+        self.id = S6_ID_BY_FIRST[first_stage.id]
         self.first, self.reranker, self.depth = first_stage, reranker, depth
         self.chunk_text = {}
         self.n_indexed = 0
@@ -137,7 +195,9 @@ class S6Rerank:
             "dtype": "float32", "max_length": r.max_length, "batch_size": r.batch_size,
             "score": "raw logit (sigmoid 정규화 없음)",
             "rerank_depth": self.depth,
-            "candidates": f"1단계(S5a) 융합 상위 {self.depth} 문서 × 각 문서의 청크 중 S2·S4 상위 chunk_k 목록에 나온 것 전부",
+            "candidates": (f"1단계(S5a) 융합 상위 {self.depth} 문서 × 각 문서의 청크 중 S2·S4 상위 chunk_k 목록에 나온 것 전부"
+                           if self.first.id == "S5a" else
+                           f"1단계(S4) 상위 {self.depth} 문서 × 각 문서의 청크 중 S4 상위 chunk_k 목록에 나온 것 전부"),
             "document_score": "청크 점수의 최댓값 (대표 청크 = 최고 점수 청크)",
             "ties": "1단계 문서 순서 → 후보 청크 순서",
             "first_stage": {"id": self.first.id, "version": self.first.version, **self.first.settings()},
@@ -151,7 +211,7 @@ class S6Rerank:
 
     def search(self, query, k):
         if k != self.chunk_k:
-            raise ValueError(f"S6의 1단계(S5a)는 구성요소마다 같은 상위 N 청크(chunk_k={self.chunk_k})를 쓴다 — 요청 k={k}와 달라 거부한다")
+            raise ValueError(f"{self.id}의 1단계({self.first.id})는 구성요소마다 같은 상위 N 청크(chunk_k={self.chunk_k})를 쓴다 — 요청 k={k}와 달라 거부한다")
         cand = self.first.first_stage_candidates(query)[:self.depth]        # [(doc, [chunk_id, ...])] 융합 순서
         pairs, owner = [], []
         for di, (_, chunk_ids) in enumerate(cand):
