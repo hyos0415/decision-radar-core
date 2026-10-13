@@ -1,21 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Toaster } from 'sonner'
-import { api, setBaseUrl, type InboxDetail, type InboxItem } from './lib/api'
+import { Inbox as InboxIcon } from 'lucide-react'
+import { toast, Toaster } from 'sonner'
+import {
+  api,
+  setBaseUrl,
+  type Flow,
+  type InboxDetail,
+  type InboxItem,
+  type Job,
+  type RunResult,
+  type Schedule
+} from './lib/api'
 import { InboxList } from './components/InboxList'
 import { ItemDetail } from './components/ItemDetail'
 import { DecisionsView } from './components/DecisionsView'
 import { RunsView } from './components/RunsView'
-import { Sidebar, type View } from './components/Sidebar'
+import { PageHeader } from './components/Status'
+import { Sidebar, type RunState, type View } from './components/Sidebar'
 import type { NavTarget, RadarInfo } from '../../shared'
 
 type Backend = Awaited<ReturnType<typeof window.radar.getBackend>>
 
+const JOB_POLL_MS = 1500
+
 function Centered({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return (
-    <div className="flex h-full flex-1 items-center justify-center p-8 text-center text-[13px] text-muted-foreground">
-      {children}
-    </div>
-  )
+  return <div className="empty-state h-full">{children}</div>
+}
+
+function isActive(j: Job): boolean {
+  return j.kind !== 'capture' && (j.state === 'queued' || j.state === 'running')
 }
 
 function App(): React.JSX.Element {
@@ -29,7 +42,12 @@ function App(): React.JSX.Element {
   const [tick, setTick] = useState(0)
   const [mode, setMode] = useState<string | null>(null)
   const [profile, setProfile] = useState<string | null>(null)
+  const [flows, setFlows] = useState<Flow[]>([])
   const [info, setInfo] = useState<RadarInfo | null>(null)
+  const [jobs, setJobs] = useState<Job[]>([])
+  const [runs, setRuns] = useState<RunResult[] | null>(null)
+  const [runsError, setRunsError] = useState<string | null>(null)
+  const [schedule, setSchedule] = useState<Schedule | null>(null)
   const sentOpened = useRef(false)
   const selectedRef = useRef<string | null>(null)
 
@@ -50,7 +68,8 @@ function App(): React.JSX.Element {
   const ready = backend.status === 'ready' && !!backend.baseUrl
   if (ready) setBaseUrl(backend.baseUrl!)
 
-  // preferred: id to select if still present; otherwise keep current, else first
+  // preferIndex: after answering, open the item that took its place (closes when the list is empty).
+  // preferId: open this id if present. Otherwise the open item stays open while it still exists.
   const refresh = useCallback(
     (preferIndex?: number, preferId?: string): Promise<void> =>
       api
@@ -65,9 +84,9 @@ function App(): React.JSX.Element {
             const next = list[Math.min(preferIndex, list.length - 1)]
             setSelectedId(next ? next.id : null)
             if (!next) setDetail(null)
-          } else if (!cur || !list.some((i) => i.id === cur)) {
-            setSelectedId(list[0]?.id ?? null)
-            if (!list[0]) setDetail(null)
+          } else if (cur && !list.some((i) => i.id === cur)) {
+            setSelectedId(null)
+            setDetail(null)
           }
         })
         .catch((e) => {
@@ -76,8 +95,39 @@ function App(): React.JSX.Element {
     []
   )
 
+  // runs + schedule feed both the sidebar run row and the runs view (newest run first)
+  const refreshRunInfo = useCallback((): void => {
+    api
+      .runs()
+      .then((r) => {
+        setRuns([...r].sort((a, b) => b.at.localeCompare(a.at)))
+        setRunsError(null)
+      })
+      .catch((e) => setRunsError(e instanceof Error ? e.message : String(e)))
+    api
+      .schedule()
+      .then(setSchedule)
+      .catch(() => setSchedule(null))
+  }, [])
+
+  // null when /jobs failed — the caller must not read that as "the job ended"
+  const loadJobs = useCallback(
+    (): Promise<Job[] | null> =>
+      api
+        .jobs()
+        .then((list) => {
+          setJobs(list)
+          return list
+        })
+        .catch(() => null),
+    []
+  )
+
   useEffect(() => {
-    window.radar.getInfo().then(setInfo)
+    window.radar.getInfo().then((i) => {
+      setInfo(i)
+      document.documentElement.classList.add(`platform-${i.platform}`)
+    })
   }, [])
 
   useEffect(() => {
@@ -87,6 +137,7 @@ function App(): React.JSX.Element {
       .then((h) => {
         setMode(h.mode)
         setProfile(h.profile)
+        setFlows(h.flows)
       })
       .catch(() => {})
   }, [ready])
@@ -105,13 +156,15 @@ function App(): React.JSX.Element {
     })
     const offData = window.radar.onDataChanged(() => {
       void refresh()
+      refreshRunInfo()
+      void loadJobs()
       setTick((n) => n + 1)
     })
     return () => {
       offNav()
       offData()
     }
-  }, [refresh])
+  }, [refresh, refreshRunInfo, loadJobs])
 
   useEffect(() => {
     if (!ready) return
@@ -120,13 +173,49 @@ function App(): React.JSX.Element {
       api.event('app_opened')
     }
     void refresh()
+    refreshRunInfo()
+    void loadJobs()
     const onFocus = (): void => {
       void refresh()
+      refreshRunInfo()
       setTick((n) => n + 1)
     }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
-  }, [ready, refresh])
+  }, [ready, refresh, refreshRunInfo, loadJobs])
+
+  // while a detect · revisit job is queued or running, poll until it ends, then reload everything
+  const activeJobs = jobs.filter(isActive)
+  const activeJob = activeJobs[0] ?? null
+  const activeId = activeJob?.id ?? null
+  useEffect(() => {
+    if (!ready || !activeId) return
+    const timer = setInterval(() => {
+      void loadJobs().then((list) => {
+        if (!list) return // backend did not answer — try again next tick
+        const j = list.find((x) => x.id === activeId)
+        if (j && isActive(j)) return
+        if (j?.state === 'error') toast(j.error ?? `${j.kind} 실행이 실패했다.`)
+        void refresh()
+        refreshRunInfo()
+        setTick((n) => n + 1)
+      })
+    }, JOB_POLL_MS)
+    return () => clearInterval(timer)
+  }, [ready, activeId, loadJobs, refresh, refreshRunInfo])
+
+  useEffect(() => {
+    if (ready && view === 'runs') refreshRunInfo()
+  }, [ready, view, refreshRunInfo])
+
+  async function startRun(flow: Flow): Promise<void> {
+    try {
+      await api.submitJob(flow)
+      await loadJobs()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   useEffect(() => {
     if (!ready || !selectedId) return
@@ -146,10 +235,33 @@ function App(): React.JSX.Element {
     }
   }, [ready, selectedId])
 
-  function onResolved(): void {
-    const idx = items ? items.findIndex((i) => i.id === selectedId) : 0
+  const closeItem = useCallback((): void => {
+    setSelectedId(null)
     setDetail(null)
+  }, [])
+
+  // Esc closes the Inbox panel — not while the edit · reject dialog is open (it closes first)
+  useEffect(() => {
+    if (view !== 'inbox' || !selectedId) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return
+      closeItem()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [view, selectedId, closeItem])
+
+  function onResolved(): void {
+    // the answered detail stays (inert) until the next one loads; refresh clears it if none is left
+    const idx = items ? items.findIndex((i) => i.id === selectedId) : 0
     void refresh(Math.max(idx, 0))
+  }
+
+  const index = items && selectedId ? items.findIndex((i) => i.id === selectedId) : -1
+  const step = (d: -1 | 1): (() => void) | null => {
+    const next = items?.[index + d]
+    return index >= 0 && next ? () => setSelectedId(next.id) : null
   }
 
   let body: React.ReactNode
@@ -158,12 +270,14 @@ function App(): React.JSX.Element {
   } else if (ready && view === 'runs') {
     body = (
       <RunsView
-        refreshKey={tick}
+        runs={runs}
+        error={runsError}
+        schedule={schedule}
+        active={activeJobs}
         onOpenDecision={(id) => {
           setDecisionId(id)
           setView('decisions')
         }}
-        onChanged={() => void refresh()}
       />
     )
   } else if (backend.status === 'failed') {
@@ -182,27 +296,57 @@ function App(): React.JSX.Element {
     )
   } else if (!ready) {
     body = <Centered>백엔드 기동 중…</Centered>
-  } else if (loadError && !items) {
-    body = <Centered>{loadError}</Centered>
-  } else if (!items) {
-    body = <Centered>불러오는 중…</Centered>
-  } else if (items.length === 0) {
-    body = <Centered>대기 중인 항목이 없다</Centered>
   } else {
+    // The panel stays mounted while moving between items (no slide-in replay); until the next
+    // detail arrives the previous one stays visible but inert, so nothing can act on it.
+    const open = !!selectedId
+    const loading = !detail || detail.id !== selectedId
     body = (
-      <>
-        <InboxList items={items} selectedId={selectedId} onSelect={setSelectedId} />
-        {detail && detail.id === selectedId ? (
-          <ItemDetail key={detail.id} detail={detail} onResolved={onResolved} />
+      <div className={`inbox-workspace ${open ? 'is-open' : ''}`}>
+        <PageHeader title="Inbox" count={items?.length} />
+        {loadError && !items ? (
+          <Centered>{loadError}</Centered>
+        ) : !items ? (
+          <Centered>불러오는 중…</Centered>
+        ) : items.length === 0 ? (
+          <Centered>
+            <InboxIcon size={22} />
+            <strong>대기 중인 항목이 없다</strong>
+          </Centered>
         ) : (
-          <Centered>{loadError ?? '항목을 고르면 여기에 보인다'}</Centered>
+          <InboxList
+            items={items}
+            selectedId={selectedId}
+            onSelect={(id) => (id === selectedId ? closeItem() : setSelectedId(id))}
+          />
         )}
-      </>
+        {open && (
+          <section
+            className="overlay-panel"
+            aria-label="Inbox 항목 상세"
+            aria-busy={loading}
+            inert={loading}
+          >
+            {detail ? (
+              <ItemDetail
+                key={detail.id}
+                detail={detail}
+                onResolved={onResolved}
+                onClose={closeItem}
+                onPrev={step(-1)}
+                onNext={step(1)}
+              />
+            ) : (
+              <div className="empty-state">불러오는 중…</div>
+            )}
+          </section>
+        )}
+      </div>
     )
   }
 
   return (
-    <div className="flex h-full">
+    <div className="desktop-window">
       <Sidebar
         view={view}
         onView={setView}
@@ -210,9 +354,22 @@ function App(): React.JSX.Element {
         stub={mode === 'stub'}
         profile={profile}
         info={info}
+        run={
+          {
+            active: activeJob,
+            lastFailed: !!runs?.[0] && !runs[0].ok,
+            nextSlot: schedule?.enabled
+              ? (schedule.flows.map((f) => f.next_slot).sort()[0] ?? null)
+              : null
+          } satisfies RunState
+        }
+        flows={flows}
+        onRun={(flow) => void startRun(flow)}
       />
-      <main className="flex min-w-0 flex-1">{body}</main>
-      <Toaster theme="light" position="bottom-right" />
+      <main className="main">
+        <div className="view-area">{body}</div>
+      </main>
+      <Toaster theme="system" position="bottom-right" />
     </div>
   )
 }

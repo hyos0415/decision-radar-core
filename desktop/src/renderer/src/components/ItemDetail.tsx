@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { AlertTriangle, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   api,
@@ -9,7 +10,7 @@ import {
   type StaleAnswer
 } from '@renderer/lib/api'
 import { EditDialog } from './EditDialog'
-import { STATE_LABEL, waitText } from '@renderer/lib/inbox'
+import { STATE_ICON, STATE_LABEL, waitText } from '@renderer/lib/inbox'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,8 +19,8 @@ import {
   AlertDialogDescription,
   AlertDialogTitle
 } from './ui/alert-dialog'
-import { Badge } from './ui/badge'
 import { Button } from './ui/button'
+import { Status } from './Status'
 
 type StaleState = { kind: 'approve' | 'edit'; draft?: AdrDraft; changes: string[] }
 
@@ -35,10 +36,16 @@ const STALE_BUTTONS: {
 
 export function ItemDetail({
   detail,
-  onResolved
+  onResolved,
+  onClose,
+  onPrev,
+  onNext
 }: {
   detail: InboxDetail
   onResolved: () => void
+  onClose: () => void
+  onPrev: (() => void) | null
+  onNext: (() => void) | null
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -88,55 +95,73 @@ export function ItemDetail({
   }
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col">
-      <div className="flex-1 overflow-y-auto px-6 py-5">
-        <h1 className="text-base leading-snug font-semibold">{detail.title}</h1>
-        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-muted-foreground">
-          <Badge variant="outline">{detail.kind}</Badge>
-          {stateLabel && <Badge variant="secondary">{stateLabel}</Badge>}
-          <span className="font-mono">{detail.technology}</span>
-          {detail.affected.length > 0 && (
-            <>
-              <span>·</span>
-              <span className="font-mono">
-                {detail.affected.map((a) => `${a.repo}/${a.component}`).join(', ')}
-              </span>
-            </>
-          )}
-          <span>·</span>
-          <span>{waitText(detail.waiting_days)}</span>
-          <span>·</span>
-          <span>{detail.number_note || '번호는 저장할 때 정해짐'}</span>
-        </div>
-
-        {detail.changes.length > 0 && (
-          <div className="mt-4 rounded-md border p-3">
-            <div className="mb-1.5 text-xs font-medium">대기 중 바뀐 점</div>
-            <ul className="list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
-              {detail.changes.map((c, i) => (
-                <li key={i}>{c}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        <pre className="mt-4 overflow-x-auto rounded-md border bg-muted p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap">
-          {detail.markdown}
-        </pre>
+    <>
+      <div className="panel-head">
+        <span className="eyebrow">INBOX</span>
+        <button
+          className="icon-button"
+          onClick={onPrev ?? undefined}
+          disabled={!onPrev}
+          aria-label="이전 항목"
+        >
+          <ChevronUp size={15} />
+        </button>
+        <button
+          className="icon-button"
+          onClick={onNext ?? undefined}
+          disabled={!onNext}
+          aria-label="다음 항목"
+        >
+          <ChevronDown size={15} />
+        </button>
+        <span className="detail-close-wrap">
+          <span className="esc-hint">Esc</span>
+          <button className="icon-button" onClick={onClose} aria-label="상세 닫기">
+            <X size={16} />
+          </button>
+        </span>
       </div>
 
-      <div className="shrink-0 border-t bg-background px-6 py-3">
-        {stale && (
-          <div className="mb-3 rounded-md border p-3" role="alert">
-            <div className="text-xs font-medium">대기하는 동안 기록이 바뀌었다. 어떻게 할까?</div>
-            {stale.changes.length > 0 && (
-              <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
-                {stale.changes.map((c, i) => (
+      <div className="panel-scroll">
+        <header className="detail-header">
+          <h2 className="panel-title">{detail.title}</h2>
+          <div className="detail-meta">
+            <span className="tag mono">{detail.kind}</span>
+            {stateLabel && <Status status={STATE_ICON[detail.state]} label={stateLabel} />}
+            <span className="mono">{detail.technology}</span>
+            {detail.affected.length > 0 && (
+              <span className="mono">
+                {detail.affected.map((a) => `${a.repo}/${a.component}`).join(', ')}
+              </span>
+            )}
+            <span>{waitText(detail.waiting_days)}</span>
+            <span>{detail.number_note || '번호는 저장할 때 정해짐'}</span>
+          </div>
+        </header>
+
+        {detail.changes.length > 0 && (
+          <div className="callout">
+            <AlertTriangle size={16} />
+            <div>
+              <strong>대기 중 바뀐 점</strong>
+              <ul>
+                {detail.changes.map((c, i) => (
                   <li key={i}>{c}</li>
                 ))}
               </ul>
-            )}
-            <div className="mt-2.5 flex gap-2">
+            </div>
+          </div>
+        )}
+
+        <div className="document">{detail.markdown}</div>
+      </div>
+
+      <div className="action-bar">
+        {stale && (
+          <div className="inline-confirm" role="alert">
+            <AlertTriangle size={17} />
+            <span>대기하는 동안 기록이 바뀌었다. 어떻게 할까?</span>
+            <div className="action-buttons">
               {STALE_BUTTONS.map((b) => (
                 <Button
                   key={b.answer}
@@ -149,30 +174,39 @@ export function ItemDetail({
                 </Button>
               ))}
             </div>
+            {stale.changes.length > 0 && (
+              <ul className="w-full list-disc pl-5 text-xs text-muted-foreground">
+                {stale.changes.map((c, i) => (
+                  <li key={i}>{c}</li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
         {notice && (
-          <div className="mb-3 rounded-md border bg-muted px-3 py-2 text-xs" role="status">
+          <div className="inline-notice" role="status">
             {notice}
           </div>
         )}
-        <div className="flex items-center gap-2">
-          {has('approve') && (
-            <Button disabled={busy} onClick={() => run('approve')}>
-              승인
-            </Button>
-          )}
-          {has('edit') && (
-            <Button variant="outline" disabled={busy} onClick={() => setEditOpen(true)}>
-              고쳐서 승인
-            </Button>
-          )}
-          {has('reject') && (
-            <Button variant="ghost" disabled={busy} onClick={() => setRejectOpen(true)}>
-              거부
-            </Button>
-          )}
-        </div>
+        {!stale && (
+          <div className="action-buttons right">
+            {has('approve') && (
+              <Button disabled={busy} onClick={() => run('approve')}>
+                승인
+              </Button>
+            )}
+            {has('edit') && (
+              <Button variant="outline" disabled={busy} onClick={() => setEditOpen(true)}>
+                고쳐서 승인
+              </Button>
+            )}
+            {has('reject') && (
+              <Button variant="ghost" disabled={busy} onClick={() => setRejectOpen(true)}>
+                거부
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       {editOpen && (
@@ -195,6 +229,6 @@ export function ItemDetail({
           </div>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   )
 }
