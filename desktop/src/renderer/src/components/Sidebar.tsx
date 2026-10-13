@@ -201,10 +201,13 @@ export function Sidebar({
       </nav>
       <div className="sidebar-bottom">
         <div className="sidebar-action-card" ref={card}>
-          <button className="sidebar-action" onClick={() => void window.radar.openCapture()}>
+          <button
+            className="sidebar-action"
+            onClick={() => void window.radar.openCapture()}
+            title={info?.shortcutOk ? shortcutText(info.shortcut) : undefined}
+          >
             <Zap size={15} />
             <span>빠른 capture</span>
-            {info?.shortcutOk && <kbd>{shortcutText(info.shortcut)}</kbd>}
           </button>
           <button
             className={cn('sidebar-action', menuOpen && 'active')}
@@ -233,7 +236,19 @@ export function Sidebar({
             />
           )}
         </div>
-        {info && !info.shortcutOk && <div className="sidebar-environment">단축키 등록 실패</div>}
+        {/* the Windows shortcut text does not fit beside the label in a 232px sidebar — own line */}
+        {info && (
+          <div className="sidebar-environment">
+            {info.shortcutOk ? (
+              <>
+                <span>capture</span>
+                <kbd>{shortcutText(info.shortcut)}</kbd>
+              </>
+            ) : (
+              '단축키 등록 실패'
+            )}
+          </div>
+        )}
         {stub && (
           <div className="sidebar-environment">
             <span className="tag mono">

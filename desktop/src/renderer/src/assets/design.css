@@ -185,6 +185,15 @@ html.platform-darwin .sidebar-header {
 .run-row-status {
   margin-left: auto;
 }
+/* 카드 폭(232px 사이드바)을 넘지 않게 — 넘치면 이름이 줄어든다 */
+.sidebar-action {
+  overflow: hidden;
+}
+.sidebar-action > span:not(.run-row-status) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .run-row-status {
   min-width: 0;
   display: flex;
