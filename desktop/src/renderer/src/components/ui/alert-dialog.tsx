@@ -40,8 +40,8 @@ export function AlertDialogAction(
   props: React.ComponentProps<typeof AlertPrimitive.Action>
 ): React.JSX.Element {
   return (
-    <AlertPrimitive.Action asChild {...props}>
-      <Button />
+    <AlertPrimitive.Action asChild>
+      <Button {...props} />
     </AlertPrimitive.Action>
   )
 }
@@ -50,8 +50,8 @@ export function AlertDialogCancel(
   props: React.ComponentProps<typeof AlertPrimitive.Cancel>
 ): React.JSX.Element {
   return (
-    <AlertPrimitive.Cancel asChild {...props}>
-      <Button variant="outline" />
+    <AlertPrimitive.Cancel asChild>
+      <Button variant="outline" {...props} />
     </AlertPrimitive.Cancel>
   )
 }
