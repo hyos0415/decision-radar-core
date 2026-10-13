@@ -618,6 +618,15 @@ kbd {
   opacity: 1;
   transform: translateX(0);
 }
+/* 처리 버튼 안의 단축키 힌트 (a · e · r · 1 · 2 · 3) — Esc 힌트와 같은 모양, 버튼 글자색을 따른다 */
+.key-hint {
+  padding: 2px 4px;
+  border-color: currentColor;
+  color: inherit;
+  background: transparent;
+  font-size: 10px;
+  opacity: 0.55;
+}
 
 /* 패널은 목록 위에 겹친다 — 목록·머리 줄은 움직이지 않는다. --keep: 왼쪽에 남기는 폭 */
 .overlay-panel {
@@ -636,6 +645,10 @@ kbd {
   /* 그림자는 왼쪽으로만 — blur가 위로 번져 머리 줄을 덮지 않게 */
   clip-path: inset(0 0 0 -48px);
   animation: panel-in 0.16s ease-out;
+}
+/* 처리 뒤 다음 항목으로 포커스만 옮긴다 (키 입력을 받으려고) — 패널 전체에 테두리는 그리지 않는다 */
+.overlay-panel:focus {
+  outline: none;
 }
 @keyframes panel-in {
   from {

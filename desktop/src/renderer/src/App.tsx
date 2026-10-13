@@ -50,6 +50,9 @@ function App(): React.JSX.Element {
   const [schedule, setSchedule] = useState<Schedule | null>(null)
   const sentOpened = useRef(false)
   const selectedRef = useRef<string | null>(null)
+  const panelRef = useRef<HTMLElement | null>(null)
+  // set when an item is answered: once the next detail is in, focus moves to the panel
+  const focusNext = useRef(false)
 
   useEffect(() => {
     selectedRef.current = selectedId
@@ -255,8 +258,16 @@ function App(): React.JSX.Element {
   function onResolved(): void {
     // the answered detail stays (inert) until the next one loads; refresh clears it if none is left
     const idx = items ? items.findIndex((i) => i.id === selectedId) : 0
+    focusNext.current = true
     void refresh(Math.max(idx, 0))
   }
+
+  // the panel is inert until the next detail arrives, so focus it only then
+  useEffect(() => {
+    if (!focusNext.current || !detail || detail.id !== selectedId) return
+    focusNext.current = false
+    panelRef.current?.focus()
+  }, [detail, selectedId])
 
   const index = items && selectedId ? items.findIndex((i) => i.id === selectedId) : -1
   const step = (d: -1 | 1): (() => void) | null => {
@@ -322,6 +333,8 @@ function App(): React.JSX.Element {
         )}
         {open && (
           <section
+            ref={panelRef}
+            tabIndex={-1}
             className="overlay-panel"
             aria-label="Inbox 항목 상세"
             aria-busy={loading}
@@ -335,6 +348,7 @@ function App(): React.JSX.Element {
                 onClose={closeItem}
                 onPrev={step(-1)}
                 onNext={step(1)}
+                active={!loading}
               />
             ) : (
               <div className="empty-state">불러오는 중…</div>
