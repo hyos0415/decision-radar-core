@@ -132,6 +132,14 @@ export const COPY = {
     alerts: '재검토 알림'
   },
 
+  // 지난 알림 패널 (components/NotificationsPanel.tsx)
+  notifications: {
+    title: '지난 알림',
+    empty: '지난 알림이 없어요',
+    gone: '이 항목은 거부되었어요',
+    fallbackTitle: '알림'
+  },
+
   // 사이드바 — 영어로 쓴다
   sidebar: {
     flowHint: { revisit: 'Check revisit conditions', detect: 'Find new releases' },
@@ -146,7 +154,8 @@ export const COPY = {
     shortcutFailed: 'Shortcut unavailable',
     stub: 'stub',
     stubProfile: (profile: string) => `stub · ${profile}`,
-    noModel: 'No real model'
+    noModel: 'No real model',
+    notifications: 'Notifications'
   },
 
   // 빠른 capture 창 (CaptureApp.tsx)

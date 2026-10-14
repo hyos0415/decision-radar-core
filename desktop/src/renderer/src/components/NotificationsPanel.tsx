@@ -4,6 +4,7 @@ import { api, type NotificationEntry } from '@renderer/lib/api'
 import { dayLabel, timeOnly } from '@renderer/lib/format'
 import { cn } from '@renderer/lib/utils'
 import type { NavTarget } from '../../../shared'
+import { COPY } from '../../../copy'
 
 // Where a row leads (HYO-113): the Inbox item while it waits; once answered, the item a rejudge
 // left in the Inbox (new_item — only while it is still there), else the ADR it was answered with.
@@ -91,17 +92,17 @@ export function NotificationsPanel({
 
   let body: React.ReactNode
   if (error) body = <div className="empty-state">{error}</div>
-  else if (!list) body = <div className="empty-state">불러오는 중…</div>
+  else if (!list) body = <div className="empty-state">{COPY.term.loading}</div>
   else if (list.length === 0)
     body = (
       <div className="empty-state">
         <BellOff size={20} />
-        지난 알림이 없다
+        {COPY.notifications.empty}
       </div>
     )
   else
     body = (
-      <div className="notif-items" role="list" aria-label="지난 알림">
+      <div className="notif-items" role="list" aria-label={COPY.notifications.title}>
         {list.map((n) => {
           const t = target(n, inboxIds)
           const read = n.clicked || n.items.some((i) => i.opened)
@@ -111,7 +112,7 @@ export function NotificationsPanel({
               role="listitem"
               className={cn('notif-row', read && 'is-read')}
               disabled={!t}
-              title={t ? undefined : '이 항목은 이제 Inbox에도 Decisions에도 없다'}
+              title={t ? undefined : COPY.notifications.gone}
               onClick={() => {
                 if (t) {
                   onNavigate(t)
@@ -119,7 +120,9 @@ export function NotificationsPanel({
                 }
               }}
             >
-              <span className="notif-title">{n.title ?? n.kind ?? '알림'}</span>
+              <span className="notif-title">
+                {n.title ?? n.kind ?? COPY.notifications.fallbackTitle}
+              </span>
               <span className="notif-body" title={n.body ?? undefined}>
                 {n.body}
               </span>
@@ -133,9 +136,9 @@ export function NotificationsPanel({
     )
 
   return (
-    <section ref={ref} tabIndex={-1} className="notif-panel" aria-label="지난 알림">
+    <section ref={ref} tabIndex={-1} className="notif-panel" aria-label={COPY.notifications.title}>
       <header className="notif-header">
-        <h2>지난 알림</h2>
+        <h2>{COPY.notifications.title}</h2>
         <kbd>Esc</kbd>
       </header>
       {body}

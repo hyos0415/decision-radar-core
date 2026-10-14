@@ -225,9 +225,9 @@ export function Sidebar({
         <button
           className={cn('icon-button sidebar-bell', notificationsOpen && 'active')}
           onClick={onNotifications}
-          aria-label="지난 알림"
+          aria-label={COPY.sidebar.notifications}
           aria-expanded={notificationsOpen}
-          title="지난 알림"
+          title={COPY.sidebar.notifications}
           data-notifications-toggle
         >
           <Bell size={15} />
