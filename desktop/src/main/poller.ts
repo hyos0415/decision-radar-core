@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import { Notification } from 'electron'
 import { getStatus } from './backend'
 import type { NavTarget } from '../shared'
@@ -88,12 +89,17 @@ function notify(title: string, items: InboxItem[]): void {
   if (!Notification.isSupported() || !deps) return
   const first = items[0]
   const kinds = [...new Set(items.map((i) => i.kind))]
+  const body = items.length > 1 ? `${first.title} 외 ${items.length - 1}건` : first.title
+  // title · body: the OS text as shown, read back by the past-notifications list (GET /notifications).
+  // nid: one id per notification, the same on shown and clicked so the backend pairs them exactly (HYO-113).
   const detail = {
     kind: kinds.length === 1 ? kinds[0] : 'mixed',
     count: items.length,
-    items: items.map((i) => i.id)
+    items: items.map((i) => i.id),
+    title,
+    body,
+    nid: randomUUID()
   }
-  const body = items.length > 1 ? `${first.title} 외 ${items.length - 1}건` : first.title
   const n = new Notification({ title, body })
   live.add(n)
   n.on('show', () => postEvent('notification_shown', first.id, detail))
