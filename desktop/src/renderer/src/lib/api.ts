@@ -40,6 +40,9 @@ export type DecisionDetail = S['DecisionDetail']
 export type RunResult = S['RunResult']
 export type Flow = RunResult['flow']
 
+/** 지난 알림 (HYO-110·113) — OS 알림 한 통과, 그 알림이 가리킨 항목의 지금 상태 */
+export type NotificationEntry = S['NotificationEntry']
+
 export type Health = S['Health']
 export type Mode = Health['mode']
 
@@ -111,6 +114,9 @@ export const api = {
   decision: (id: string) =>
     unwrap(client.GET('/decisions/{adr_id}', { params: { path: { adr_id: id } } })),
   runs: () => unwrap(client.GET('/runs')).then((r) => r.items),
+  /** 지난 알림, 최근 것 먼저 — 행동 로그를 읽기만 한다 */
+  notifications: (limit = 100) =>
+    unwrap(client.GET('/notifications', { params: { query: { limit } } })).then((r) => r.items),
   submitJob: (kind: JobKind, conversation?: string) =>
     unwrap(
       client.POST('/jobs/{kind}', {

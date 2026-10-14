@@ -280,6 +280,110 @@ html.platform-darwin .sidebar-header {
   font-size: 11px;
 }
 
+/* ── 지난 알림 (HYO-113) — 사이드바 벨 · 메인 영역 왼쪽에 겹치는 패널 ─ */
+.sidebar-bell {
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+}
+.sidebar-bell.active {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.notif-panel {
+  position: absolute;
+  z-index: 7;
+  /* 화면 머리 줄(창 끌기 영역) 아래에서 시작한다 — .overlay-panel과 같다 */
+  top: var(--header-h);
+  left: 0;
+  width: min(440px, 100%);
+  height: calc(100% - var(--header-h));
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--popover);
+  box-shadow: 12px 0 32px rgba(0, 0, 0, 0.14);
+  clip-path: inset(0 -48px 0 0);
+  animation: notif-in 0.16s ease-out;
+}
+.notif-panel:focus {
+  outline: none;
+}
+@keyframes notif-in {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+.notif-header {
+  height: var(--row-h);
+  flex: 0 0 auto;
+  padding: 0 var(--gutter);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+.notif-header h2 {
+  font-size: 13px;
+  font-weight: 500;
+}
+.notif-header kbd {
+  font-size: 10px;
+}
+.notif-items {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+.notif-row {
+  width: 100%;
+  height: var(--row-h);
+  padding: 0 var(--gutter);
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--foreground);
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+}
+.notif-row:hover:not(:disabled),
+.notif-row:focus-visible {
+  background: var(--accent);
+}
+.notif-title,
+.notif-body {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.notif-title {
+  max-width: 180px;
+}
+.notif-body {
+  color: var(--muted-foreground);
+}
+/* 읽은 알림은 흐리게만 — 배지·굵은 글씨로 재촉하지 않는다 (HYO-110) */
+.notif-row.is-read .notif-title {
+  color: var(--muted-foreground);
+}
+.notif-row.is-read .notif-body,
+.notif-row.is-read .notif-at {
+  opacity: 0.7;
+}
+.notif-row:disabled {
+  cursor: default;
+}
+.notif-row:disabled > span {
+  opacity: 0.45;
+}
+
 /* ── Shared primitives ──────────────────────────────────────── */
 kbd {
   padding: 3px 5px;
@@ -1222,6 +1326,7 @@ button.run-history-row:hover,
 
 @media (prefers-reduced-motion: reduce) {
   .overlay-panel,
+  .notif-panel,
   .esc-hint,
   .feed-chevron {
     animation: none;
