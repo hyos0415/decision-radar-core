@@ -105,8 +105,12 @@ function RunMenu({
           </button>
         )
       })}
-      <div className="run-menu-separator" />
-      {stub && <span className="run-menu-label">{COPY.sidebar.stubNote}</span>}
+      {stub && (
+        <>
+          <div className="run-menu-separator" />
+          <span className="run-menu-label">{COPY.sidebar.stubNote}</span>
+        </>
+      )}
     </div>
   )
 }
