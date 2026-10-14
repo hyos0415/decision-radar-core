@@ -398,7 +398,7 @@ class RadarService:
 
     # ── 접수된 capture (화면 설계 ①) · revisit 충족 알림 (화면 설계 ③) — 답은 「확인함」뿐 ──────
 
-    PENDING_MSG = {"queued": "접수됨 — 차례를 기다린다", "running": "처리 중", "error": None, "linked": None, "no_draft": None}
+    PENDING_MSG = {"queued": "접수했어요 — 차례를 기다리고 있어요", "running": "처리하고 있어요", "error": None, "linked": None, "no_draft": None}
 
     def _pending_row(self, j):
         st = j["pending_state"]
@@ -460,10 +460,10 @@ class RadarService:
             if a is not None:
                 a.update(acked=True, acked_at=now_iso())
                 self._save_alerts(alerts)
-                res = {"outcome": "acked", "message": f"확인함 — ADR {a['adr']}은 그대로다 (status는 ADR 파일에서 사람이 바꾼다)", "adr": a["adr"]}
+                res = {"outcome": "acked", "message": f"확인했어요 — ADR {a['adr']}은 그대로예요 (status는 ADR 파일에서 사람이 바꿔요)", "adr": a["adr"]}
             elif self.jobs and any(j["id"] == item_id for j in self.jobs.pending()):
                 self.jobs.ack(item_id)
-                res = {"outcome": "acked", "message": "확인함 — 접수 기록을 치웠다"}
+                res = {"outcome": "acked", "message": "확인했어요 — 접수 기록을 치웠어요"}
             elif any(r["id"] == item_id for r in self.inbox()):
                 raise ServiceError(409, f"{item_id}: 초안은 승인·수정·거부로 답한다 — 확인함은 접수·재검토 알림만")
             else:
@@ -486,7 +486,7 @@ class RadarService:
                 out = {**row, "draft": d, "markdown": text, "changes": (q["export"].get("changes") or []),
                        "number_note": f"ADR {q.get('adr')} (로컬 초안)", "affected_errors": hitl.affected_errors(ctx, d) if d else []}
                 if not row["actions"]:
-                    out["note"] = "내보내기가 꺼져 있어 답할 수 없다"
+                    out["note"] = "내보내기가 꺼져 있어서 답할 수 없어요"
                 return out
         for r in self.inbox():
             if r["id"] == item_id and r["kind"] in ("pending", "revisit"):
@@ -534,7 +534,7 @@ class RadarService:
             if decision == "edit":
                 d, errs = hitl.check_edit(ctx, draft)
                 if errs:
-                    return {"outcome": "edit_errors", "message": "고친 초안이 검사를 통과하지 못했다 — 아무것도 쓰지 않았다", "errors": errs}
+                    return {"outcome": "edit_errors", "message": "고친 초안이 검사를 통과하지 못했어요 — 아무것도 쓰지 않았어요", "errors": errs}
                 werrs = hitl.rewrite_adr(ctx, item_id, adr, d)
                 if werrs and str(werrs[0]).startswith("blocked"):
                     return {"outcome": "blocked", "message": werrs[0]}
@@ -544,20 +544,20 @@ class RadarService:
             return {"outcome": "error", "message": str(e)}
         st, oc = r.get("state"), r.get("outcome")
         if oc == "reject":
-            return {"outcome": "rejected", "message": f"거부했다 — ADR {adr} 초안을 지웠다", "adr": adr}
+            return {"outcome": "rejected", "message": f"거부했어요 — ADR {adr} 초안을 지웠어요", "adr": adr}
         if oc == "discard":
-            return {"outcome": "discarded", "message": f"버렸다 — ADR {adr} 초안을 지웠다", "adr": adr}
+            return {"outcome": "discarded", "message": f"버렸어요 — ADR {adr} 초안을 지웠어요", "adr": adr}
         if oc == "rejudge":
-            return {"outcome": "rejudge", "message": f"ADR {adr} 초안을 지웠다 — 다시 판정하려면 detect를 다시 돌린다", "adr": adr}
+            return {"outcome": "rejudge", "message": f"ADR {adr} 초안을 지웠어요 — 다시 판정하려면 detect를 다시 돌려 주세요", "adr": adr}
         if st == "stale":
-            return {"outcome": "stale", "message": "검토 대기 중 ADR repo가 바뀌었다 — 계속·다시 판정·버림 중에 고른다",
+            return {"outcome": "stale", "message": "검토하는 동안 ADR repo가 바뀌었어요 — 계속·다시 판정·버림 중에 골라 주세요",
                     "changes": r.get("changes") or [], "answers": list(hitl.STALE_ANSWERS)}
         if st == "exported":
             wi = (hitl.read_item(ctx, item_id) or {}).get("write_intent") or {}
             errs = wi.get("validate_errors") or []
-            return {"outcome": "written", "message": f"ADR {adr} 승인됨 (proposed로 사본에 남았다)" + (f" — validate 오류 {len(errs)}개" if errs else ""),
+            return {"outcome": "written", "message": f"ADR {adr} 승인했어요 (proposed로 사본에 남았어요)" + (f" — validate 오류 {len(errs)}개" if errs else ""),
                     "adr": adr, "path": wi.get("path"), "validate_errors": errs}
-        return {"outcome": "blocked", "message": f"막혔다: {r.get('reason') or st}", "blocked": r}
+        return {"outcome": "blocked", "message": f"막혔어요: {r.get('reason') or st}", "blocked": r}
 
     def _done(self, item_id, decision, stale_answer, res):
         detail = {"outcome": res["outcome"]}
@@ -572,7 +572,7 @@ class RadarService:
     def _outcome(self, ctx, item_id, decision, rep):
         h = rep.get("hitl") or {}
         if h.get("edit_errors"):
-            return {"outcome": "edit_errors", "message": rep.get("note") or "고친 초안이 검사를 통과하지 못했다", "errors": h["edit_errors"]}
+            return {"outcome": "edit_errors", "message": rep.get("note") or "고친 초안이 검사를 통과하지 못했어요", "errors": h["edit_errors"]}
         if h.get("stale"):
             return {"outcome": "stale", "message": rep.get("note"), "changes": h["stale"]["changes"], "answers": h["stale"]["answers"]}
         if h.get("outcome") == "discard":
@@ -584,21 +584,21 @@ class RadarService:
         if h.get("recovery"):
             return {"outcome": "recovered", "message": rep.get("note"), "validate_errors": h.get("validate_errors") or []}
         if decision == "reject":
-            return {"outcome": "rejected", "message": "거부했다 — 아무것도 쓰지 않았다"}
+            return {"outcome": "rejected", "message": "거부했어요 — 아무것도 쓰지 않았어요"}
         wi = (hitl.read_item(ctx, item_id) or {}).get("write_intent") or {}
         if wi.get("state") == "done":
             errs = wi.get("validate_errors") or []
-            msg = f"ADR {wi['adr']} 저장됨" + (f" — validate 오류 {len(errs)}개 (파일은 남았다)" if errs else "")
+            msg = f"ADR {wi['adr']} 저장했어요" + (f" — validate 오류 {len(errs)}개 (파일은 남았어요)" if errs else "")
             return {"outcome": "written", "message": msg, "adr": wi["adr"], "path": wi["path"], "validate_errors": errs}
-        return {"outcome": "error", "message": f"예상하지 못한 결과: {rep.get('note')}"}
+        return {"outcome": "error", "message": f"예상하지 못한 결과예요: {rep.get('note')}"}
 
     def _rejudge(self, item_id, res):
         """「다시 판정」 — 코어는 항목을 닫고 호출자에게 capture_turn1을 다시 부르라고 한다. 원래 대화가 있으면 그렇게 한다."""
         m = self._meta().get("items", {}).get(item_id) or {}
         if not m.get("conversation"):
-            return {**res, "message": "다시 판정하려면 대화를 다시 넣어 달라 (원래 대화가 앱에 없다)"}
+            return {**res, "message": "다시 판정하려면 대화를 다시 넣어 주세요 (원래 대화가 앱에 없어요)"}
         new_id, _ = self.capture(m["conversation"], stub=m.get("stub"), repo=m.get("repo"))
-        return {**res, "message": f"새 세상에서 다시 판정했다 → {new_id}", "new_item": new_id}
+        return {**res, "message": f"바뀐 ADR repo로 다시 판정했어요 → {new_id}", "new_item": new_id}
 
     # ── capture (1턴) ────────────────────────────────────────────
 
@@ -641,14 +641,14 @@ class RadarService:
         stub, matched = pick_stub(conversation, self._stubs(), self.default_stub) if self.mode == "stub" else (None, True)
         item_id, rep = self.capture(conversation, stub=stub, repo=repo)
         tech = self.capture_script(self.default_stub)["match"]["technology"]
-        note = "" if matched else f" — 스텁: 대화와 맞는 대본이 없어 기본 대본({tech})으로 만들었다 (내용은 대화와 무관)"
+        note = "" if matched else f" — 스텁: 대화와 맞는 대본이 없어서 기본 대본({tech})으로 만들었어요 (내용은 대화와 상관없어요)"
         if item_id:
-            res = {"outcome": "awaiting", "item": item_id, "message": "Inbox에 추가됨 — 승인 대기" + note, "link_candidates": []}
+            res = {"outcome": "awaiting", "item": item_id, "message": "Inbox에 추가했어요 — 승인을 기다리고 있어요" + note, "link_candidates": []}
         elif rep.get("link_candidates"):
             res = {"outcome": "linked", "item": None, "link_candidates": list(rep["link_candidates"]),
-                   "message": "이미 같은 결정이 있다: " + ", ".join(rep["link_candidates"]) + " — 새 초안을 만들지 않았다"}
+                   "message": "이미 같은 결정이 있어요: " + ", ".join(rep["link_candidates"]) + " — 새 초안을 만들지 않았어요"}
         else:
-            res = {"outcome": "no_draft", "item": None, "link_candidates": [], "message": rep.get("note") or "초안이 나오지 않았다"}
+            res = {"outcome": "no_draft", "item": None, "link_candidates": [], "message": rep.get("note") or "초안이 나오지 않았어요"}
         res["usage"] = rep.get("usage")
         self.log("capture_submitted", res["item"], outcome=res["outcome"], chars=len(conversation), stub=stub, usage=res["usage"], repo=repo,
                  **({"link_candidates": res["link_candidates"]} if res["link_candidates"] else {}))
