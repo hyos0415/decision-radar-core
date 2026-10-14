@@ -21,7 +21,7 @@ function hasDetail(r: RunResult): boolean {
 }
 
 function runSummary(r: RunResult): string {
-  if (!r.ok) return r.error ?? COPY.term.failed
+  if (!r.ok) return r.error ?? COPY.runs.failed
   return r.summary.join(' · ') || '—'
 }
 

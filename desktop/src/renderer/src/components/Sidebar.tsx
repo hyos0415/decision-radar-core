@@ -39,7 +39,7 @@ function RunStatusText({ run }: { run: RunState }): React.JSX.Element | null {
     return (
       <span className="run-row-status">
         <AlertTriangle className="tone-warning" size={13} />
-        {COPY.term.failed}
+        {COPY.sidebar.failed}
       </span>
     )
   if (run.nextSlot)
@@ -270,14 +270,14 @@ export function Sidebar({
         </div>
         <ThemeSwitch />
         {info && !info.shortcutOk && (
-          <div className="sidebar-environment">{COPY.term.shortcutFailed}</div>
+          <div className="sidebar-environment">{COPY.sidebar.shortcutFailed}</div>
         )}
         {stub && (
           <div className="sidebar-environment">
             <span className="tag mono">
               {profile && profile !== 'default'
                 ? COPY.sidebar.stubProfile(profile)
-                : COPY.term.stub}
+                : COPY.sidebar.stub}
             </span>
             <span>{COPY.sidebar.noModel}</span>
           </div>
