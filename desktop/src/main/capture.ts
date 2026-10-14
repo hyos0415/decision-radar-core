@@ -2,6 +2,7 @@ import { BrowserWindow, globalShortcut, screen } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { postEvent } from './poller'
+import { COPY } from '../copy'
 
 export const DEFAULT_SHORTCUT = 'CommandOrControl+Shift+Space'
 export const shortcut = process.env.RADAR_CAPTURE_SHORTCUT || DEFAULT_SHORTCUT
@@ -33,7 +34,7 @@ export function createCaptureWindow(): void {
     fullscreenable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
-    title: '빠른 capture',
+    title: COPY.term.capture,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

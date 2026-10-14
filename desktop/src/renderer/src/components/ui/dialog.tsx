@@ -2,6 +2,7 @@ import * as React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
+import { COPY } from '../../../../copy'
 
 export const Dialog = DialogPrimitive.Root
 
@@ -23,7 +24,7 @@ export function DialogContent({
         {children}
         <DialogPrimitive.Close className="absolute top-3 right-3 rounded-md p-1 text-muted-foreground hover:bg-accent">
           <X className="size-4" />
-          <span className="sr-only">닫기</span>
+          <span className="sr-only">{COPY.term.close}</span>
         </DialogPrimitive.Close>
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>

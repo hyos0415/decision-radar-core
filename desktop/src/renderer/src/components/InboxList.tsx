@@ -4,6 +4,7 @@ import { firstAffected, STATE_ICON, waitText } from '@renderer/lib/inbox'
 import { shortcutKey } from '@renderer/lib/shortcuts'
 import { cn } from '@renderer/lib/utils'
 import { StatusIcon } from './Status'
+import { COPY } from '../../../copy'
 
 export function InboxList({
   items,
@@ -46,7 +47,7 @@ export function InboxList({
   }
 
   return (
-    <div className="inbox-items" role="list" aria-label="Inbox 항목">
+    <div className="inbox-items" role="list" aria-label={COPY.inbox.listLabel}>
       {items.map((it, index) => (
         <button
           key={it.id}

@@ -1,6 +1,7 @@
 import { Notification } from 'electron'
 import { getStatus } from './backend'
 import type { NavTarget } from '../shared'
+import { COPY } from '../copy'
 
 // Everything here talks only to the local backend (127.0.0.1) over fetch.
 
@@ -18,12 +19,7 @@ const POLL_MS = Math.max(1000, Number(process.env.RADAR_POLL_MS) || 5000)
 const MAX_NOTIFY_PER_POLL = 3
 
 // Notification title per Inbox item kind (HYO-111) — revisit/pending are not awaiting approval.
-const KIND_TITLE: Record<InboxKind, string> = {
-  capture: '승인 대기 초안',
-  detect: '검토 대기 detect 초안',
-  pending: '접수한 capture',
-  revisit: '재검토 조건 충족'
-}
+const KIND_TITLE: Record<InboxKind, string> = COPY.notify.title
 
 function base(): string | null {
   const s = getStatus()
@@ -93,7 +89,7 @@ function notify(title: string, items: InboxItem[]): void {
     count: items.length,
     items: items.map((i) => i.id)
   }
-  const body = items.length > 1 ? `${first.title} 외 ${items.length - 1}건` : first.title
+  const body = items.length > 1 ? COPY.notify.more(first.title, items.length - 1) : first.title
   const n = new Notification({ title, body })
   live.add(n)
   n.on('show', () => postEvent('notification_shown', first.id, detail))
@@ -110,7 +106,7 @@ function notifyNew(items: InboxItem[]): void {
   const shown = items.length > MAX_NOTIFY_PER_POLL ? items.slice(0, MAX_NOTIFY_PER_POLL - 1) : items
   for (const it of shown) notify(KIND_TITLE[it.kind], [it])
   const rest = items.slice(shown.length)
-  if (rest.length > 0) notify(`새 Inbox 항목 ${rest.length}건`, rest)
+  if (rest.length > 0) notify(COPY.notify.batch(rest.length), rest)
 }
 
 export async function pollNow(): Promise<void> {

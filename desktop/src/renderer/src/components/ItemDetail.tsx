@@ -23,6 +23,7 @@ import {
 } from './ui/alert-dialog'
 import { Button } from './ui/button'
 import { Status } from './Status'
+import { COPY } from '../../../copy'
 
 type StaleState = { kind: 'approve' | 'edit'; draft?: AdrDraft; changes: string[] }
 
@@ -32,9 +33,9 @@ const STALE_BUTTONS: {
   key: string
   variant: 'default' | 'outline' | 'ghost'
 }[] = [
-  { answer: 'continue', label: '계속', key: '1', variant: 'default' },
-  { answer: 'rejudge', label: '다시 판정', key: '2', variant: 'outline' },
-  { answer: 'discard', label: '버림', key: '3', variant: 'ghost' }
+  { answer: 'continue', label: COPY.item.stale.continue, key: '1', variant: 'default' },
+  { answer: 'rejudge', label: COPY.item.stale.rejudge, key: '2', variant: 'outline' },
+  { answer: 'discard', label: COPY.item.stale.discard, key: '3', variant: 'ghost' }
 ]
 
 export function ItemDetail({
@@ -81,7 +82,7 @@ export function ItemDetail({
             ? await api.edit(detail.id, draft as AdrDraft, answer)
             : await api.reject(detail.id)
       if (SUCCESS_OUTCOMES.includes(res.outcome)) {
-        toast(res.message ?? '처리했다.')
+        toast(res.message ?? COPY.item.done)
         setEditOpen(false)
         onResolved()
       } else if (res.outcome === 'stale') {
@@ -94,7 +95,7 @@ export function ItemDetail({
       } else if (res.outcome === 'edit_errors') {
         if (!editOpen) setCheckErrors(res)
       } else {
-        setNotice(res.message ?? (res.outcome === 'blocked' ? '막혔다.' : '오류가 났다.'))
+        setNotice(res.message ?? (res.outcome === 'blocked' ? COPY.item.blocked : COPY.item.error))
       }
       return res
     } catch (e) {
@@ -139,8 +140,8 @@ export function ItemDetail({
           className="icon-button"
           onClick={onPrev ?? undefined}
           disabled={!onPrev}
-          aria-label="이전 항목"
-          title="이전 항목 (k)"
+          aria-label={COPY.item.prev}
+          title={COPY.item.prevHint}
         >
           <ChevronUp size={15} />
         </button>
@@ -148,14 +149,14 @@ export function ItemDetail({
           className="icon-button"
           onClick={onNext ?? undefined}
           disabled={!onNext}
-          aria-label="다음 항목"
-          title="다음 항목 (j)"
+          aria-label={COPY.item.next}
+          title={COPY.item.nextHint}
         >
           <ChevronDown size={15} />
         </button>
         <span className="detail-close-wrap">
           <span className="esc-hint">Esc</span>
-          <button className="icon-button" onClick={onClose} aria-label="상세 닫기">
+          <button className="icon-button" onClick={onClose} aria-label={COPY.item.close}>
             <X size={16} />
           </button>
         </span>
@@ -174,7 +175,7 @@ export function ItemDetail({
               </span>
             )}
             <span>{waitText(detail.waiting_days)}</span>
-            <span>{detail.number_note || '번호는 저장할 때 정해짐'}</span>
+            <span>{detail.number_note || COPY.item.numberNote}</span>
           </div>
         </header>
 
@@ -182,7 +183,7 @@ export function ItemDetail({
           <div className="callout">
             <AlertTriangle size={16} />
             <div>
-              <strong>대기 중 바뀐 점</strong>
+              <strong>{COPY.item.changes}</strong>
               <ul>
                 {detail.changes.map((c, i) => (
                   <li key={i}>{c}</li>
@@ -199,7 +200,7 @@ export function ItemDetail({
         {stale && (
           <div className="inline-confirm" role="alert">
             <AlertTriangle size={17} />
-            <span>대기하는 동안 기록이 바뀌었다. 어떻게 할까?</span>
+            <span>{COPY.item.stale.prompt}</span>
             <div className="action-buttons">
               {STALE_BUTTONS.map((b) => (
                 <Button
@@ -232,7 +233,7 @@ export function ItemDetail({
         )}
         {checkErrors && (
           <div role="alert" className="w-full rounded-md border bg-muted p-3 text-xs">
-            <div className="mb-1 font-medium">{checkErrors.message ?? '저장하지 않았다.'}</div>
+            <div className="mb-1 font-medium">{checkErrors.message ?? COPY.item.notSaved}</div>
             <ul className="list-disc pl-4">
               {checkErrors.errors?.map((e, i) => (
                 <li key={i} className="font-mono">
@@ -246,7 +247,7 @@ export function ItemDetail({
           <div className="action-buttons right">
             {has('approve') && (
               <Button disabled={busy} onClick={() => run('approve')}>
-                승인
+                {COPY.term.approve}
                 <kbd className="key-hint" aria-hidden>
                   A
                 </kbd>
@@ -254,7 +255,7 @@ export function ItemDetail({
             )}
             {has('edit') && (
               <Button variant="outline" disabled={busy} onClick={() => setEditOpen(true)}>
-                고쳐서 승인
+                {COPY.term.edit}
                 <kbd className="key-hint" aria-hidden>
                   E
                 </kbd>
@@ -262,7 +263,7 @@ export function ItemDetail({
             )}
             {has('reject') && (
               <Button variant="ghost" disabled={busy} onClick={() => setRejectOpen(true)}>
-                거부
+                {COPY.term.reject}
                 <kbd className="key-hint" aria-hidden>
                   R
                 </kbd>
@@ -284,11 +285,11 @@ export function ItemDetail({
 
       <AlertDialog open={rejectOpen} onOpenChange={setRejectOpen}>
         <AlertDialogContent>
-          <AlertDialogTitle>이 항목을 거부할까?</AlertDialogTitle>
-          <AlertDialogDescription>거부하면 목록에서 빠진다.</AlertDialogDescription>
+          <AlertDialogTitle>{COPY.item.rejectConfirm.title}</AlertDialogTitle>
+          <AlertDialogDescription>{COPY.item.rejectConfirm.body}</AlertDialogDescription>
           <div className="flex justify-end gap-2">
-            <AlertDialogCancel>취소</AlertDialogCancel>
-            <AlertDialogAction onClick={() => run('reject')}>거부</AlertDialogAction>
+            <AlertDialogCancel>{COPY.term.cancel}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => run('reject')}>{COPY.term.reject}</AlertDialogAction>
           </div>
         </AlertDialogContent>
       </AlertDialog>

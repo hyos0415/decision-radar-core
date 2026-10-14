@@ -1,4 +1,5 @@
 import { Menu, Tray, nativeImage, type BrowserWindow } from 'electron'
+import { COPY } from '../copy'
 
 // 32x32 ring drawn as a BGRA bitmap (2x scale => 16pt). Black on transparent so macOS can template it.
 function ringIcon(): Electron.NativeImage {
@@ -40,19 +41,19 @@ function show(): void {
 function rebuild(): void {
   if (!tray || !actions) return
   const a = actions
-  tray.setToolTip(pending > 0 ? `Decision Radar — 대기 ${pending}` : 'Decision Radar')
+  tray.setToolTip(COPY.tray.tooltip(pending))
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: '열기', click: show },
+      { label: COPY.tray.open, click: show },
       {
-        label: shortcutOk ? '빠른 capture' : '빠른 capture (단축키 등록 실패)',
+        label: shortcutOk ? COPY.term.capture : COPY.tray.captureFailed,
         click: a.onCapture
       },
       { type: 'separator' },
-      { label: 'detect 실행 (스텁)', click: () => a.onRun('detect') },
-      { label: 'revisit 실행 (스텁)', click: () => a.onRun('revisit') },
+      { label: COPY.tray.run('detect'), click: () => a.onRun('detect') },
+      { label: COPY.tray.run('revisit'), click: () => a.onRun('revisit') },
       { type: 'separator' },
-      { label: '종료', click: a.onQuit }
+      { label: COPY.tray.quit, click: a.onQuit }
     ])
   )
 }

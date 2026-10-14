@@ -1,38 +1,24 @@
 import type { RevisitSummary } from './api'
-
-export const STATUS_LABEL: Record<string, string> = {
-  proposed: '제안',
-  adopted: '채택', // 스킬 schema.md의 값
-  accepted: '채택',
-  revisit: '재검토',
-  rejected: '기각',
-  hold: '보류',
-  superseded: '대체됨'
-}
+import { COPY } from '../../../copy'
 
 export function statusLabel(s: string): string {
-  return STATUS_LABEL[s] ?? s
-}
-
-export const RESULT_LABEL: Record<string, string> = {
-  met: '충족',
-  not_met: '미충족',
-  undetermined: '판단불가'
+  return COPY.adrStatus[s] ?? s
 }
 
 export function resultLabel(r: string | null | undefined): string {
-  if (!r) return '미확인'
-  return RESULT_LABEL[r] ?? r
+  if (!r) return COPY.revisitUnchecked
+  return COPY.revisitResult[r] ?? r
 }
 
 // "조건 충족 N" is the only emphasized part (met > 0).
 export function revisitParts(s: RevisitSummary): { text: string; strong: boolean }[] {
+  const L = COPY.revisitResult
   const rest: string[] = []
-  if (s.not_met > 0) rest.push(`미충족 ${s.not_met}`)
-  if (s.undetermined > 0) rest.push(`판단불가 ${s.undetermined}`)
-  if (s.unchecked > 0) rest.push(`미확인 ${s.unchecked}`)
+  if (s.not_met > 0) rest.push(`${L.not_met} ${s.not_met}`)
+  if (s.undetermined > 0) rest.push(`${L.undetermined} ${s.undetermined}`)
+  if (s.unchecked > 0) rest.push(`${COPY.revisitUnchecked} ${s.unchecked}`)
   const out: { text: string; strong: boolean }[] = []
-  if (s.met > 0) out.push({ text: `조건 충족 ${s.met}`, strong: true })
+  if (s.met > 0) out.push({ text: COPY.revisitMetCount(s.met), strong: true })
   if (rest.length > 0) out.push({ text: rest.join(' · '), strong: false })
   if (out.length === 0) out.push({ text: '—', strong: false })
   return out
@@ -46,7 +32,7 @@ export function dateTime(iso: string): string {
   return iso.slice(0, 16).replace('T', ' ')
 }
 
-const WEEKDAY = ['일', '월', '화', '수', '목', '금', '토']
+const WEEKDAY = COPY.date.weekdays
 
 function localDay(d: Date): string {
   return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
@@ -58,9 +44,9 @@ export function dayLabel(iso: string, now: Date = new Date()): string {
   if (Number.isNaN(d.getTime())) return iso.slice(0, 10)
   const yesterday = new Date(now)
   yesterday.setDate(now.getDate() - 1)
-  if (localDay(d) === localDay(now)) return '오늘'
-  if (localDay(d) === localDay(yesterday)) return '어제'
-  return `${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEKDAY[d.getDay()]})`
+  if (localDay(d) === localDay(now)) return COPY.date.today
+  if (localDay(d) === localDay(yesterday)) return COPY.date.yesterday
+  return COPY.date.monthDay(d.getMonth() + 1, d.getDate(), WEEKDAY[d.getDay()])
 }
 
 // 14:05 · 정기 실행 칸은 "월 09:00"

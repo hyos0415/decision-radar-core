@@ -18,6 +18,7 @@ import { RunsView } from './components/RunsView'
 import { PageHeader } from './components/Status'
 import { Sidebar, type RunState, type View } from './components/Sidebar'
 import type { NavTarget, RadarInfo } from '../../shared'
+import { COPY } from '../../copy'
 
 type Backend = Awaited<ReturnType<typeof window.radar.getBackend>>
 
@@ -198,7 +199,7 @@ function App(): React.JSX.Element {
         if (!list) return // backend did not answer — try again next tick
         const j = list.find((x) => x.id === activeId)
         if (j && isActive(j)) return
-        if (j?.state === 'error') toast(j.error ?? `${j.kind} 실행이 실패했다.`)
+        if (j?.state === 'error') toast(j.error ?? COPY.app.jobFailed(j.kind))
         void refresh()
         refreshRunInfo()
         setTick((n) => n + 1)
@@ -295,7 +296,7 @@ function App(): React.JSX.Element {
     body = (
       <Centered>
         <div className="max-w-xl">
-          <div className="mb-2 text-foreground">백엔드를 시작하지 못했다.</div>
+          <div className="mb-2 text-foreground">{COPY.app.backendFailed}</div>
           <div className="mb-3">{backend.error}</div>
           {backend.logs && backend.logs.length > 0 && (
             <pre className="max-h-64 overflow-auto rounded-md border bg-muted p-3 text-left font-mono text-[11px] whitespace-pre-wrap">
@@ -306,7 +307,7 @@ function App(): React.JSX.Element {
       </Centered>
     )
   } else if (!ready) {
-    body = <Centered>백엔드 기동 중…</Centered>
+    body = <Centered>{COPY.app.backendStarting}</Centered>
   } else {
     // The panel stays mounted while moving between items (no slide-in replay); until the next
     // detail arrives the previous one stays visible but inert, so nothing can act on it.
@@ -314,15 +315,15 @@ function App(): React.JSX.Element {
     const loading = !detail || detail.id !== selectedId
     body = (
       <div className={`inbox-workspace ${open ? 'is-open' : ''}`}>
-        <PageHeader title="Inbox" count={items?.length} />
+        <PageHeader title={COPY.term.inbox} count={items?.length} />
         {loadError && !items ? (
           <Centered>{loadError}</Centered>
         ) : !items ? (
-          <Centered>불러오는 중…</Centered>
+          <Centered>{COPY.term.loading}</Centered>
         ) : items.length === 0 ? (
           <Centered>
             <InboxIcon size={22} />
-            <strong>대기 중인 항목이 없다</strong>
+            <strong>{COPY.inbox.empty}</strong>
           </Centered>
         ) : (
           <InboxList
@@ -336,7 +337,7 @@ function App(): React.JSX.Element {
             ref={panelRef}
             tabIndex={-1}
             className="overlay-panel"
-            aria-label="Inbox 항목 상세"
+            aria-label={COPY.inbox.detailLabel}
             aria-busy={loading}
             inert={loading}
           >
@@ -351,7 +352,7 @@ function App(): React.JSX.Element {
                 active={!loading}
               />
             ) : (
-              <div className="empty-state">불러오는 중…</div>
+              <div className="empty-state">{COPY.term.loading}</div>
             )}
           </section>
         )}

@@ -5,12 +5,13 @@ import { dayLabel, resultLabel, timeOnly } from '@renderer/lib/format'
 import { cn } from '@renderer/lib/utils'
 import type { StatusKey } from '@renderer/lib/status'
 import { PageHeader, StatusIcon } from './Status'
+import { COPY } from '../../../copy'
 
 // tags only where they tell something: scheduled runs, and demo-mode runs (stub is the default)
 function runTags(r: Pick<RunResult, 'trigger' | 'mode'>): string[] {
   const tags: string[] = []
-  if (r.trigger === 'schedule') tags.push('정기')
-  if (r.mode === 'demo') tags.push('데모')
+  if (r.trigger === 'schedule') tags.push(COPY.term.scheduled)
+  if (r.mode === 'demo') tags.push(COPY.term.demo)
   return tags
 }
 
@@ -20,7 +21,7 @@ function hasDetail(r: RunResult): boolean {
 }
 
 function runSummary(r: RunResult): string {
-  if (!r.ok) return r.error ?? '실패'
+  if (!r.ok) return r.error ?? COPY.term.failed
   return r.summary.join(' · ') || '—'
 }
 
@@ -85,7 +86,7 @@ function RunDetail({
     <div className="run-detail">
       {r.drafts.length > 0 && (
         <section>
-          <h3>초안</h3>
+          <h3>{COPY.runs.drafts}</h3>
           <ul>
             {r.drafts.map((d) => (
               <li key={d.adr}>
@@ -99,7 +100,7 @@ function RunDetail({
       )}
       {r.alerts.length > 0 && (
         <section>
-          <h3>재검토 알림</h3>
+          <h3>{COPY.runs.alerts}</h3>
           <ul>
             {r.alerts.map((a, i) => (
               <li key={i}>
@@ -143,18 +144,18 @@ export function RunsView({
 
   return (
     <div className="page">
-      <PageHeader title="실행 기록" />
+      <PageHeader title={COPY.term.runs} />
       <div className="feed">
         {schedule?.enabled && schedule.flows.length > 0 && (
           <section className="feed-group">
-            <h2>예정</h2>
+            <h2>{COPY.runs.upcoming}</h2>
             {schedule.flows.map((f) => (
               <RunRow
                 key={f.flow}
                 status="not_met"
                 time={timeOnly(f.next_slot, true)}
                 flow={f.flow}
-                tags={['정기']}
+                tags={[COPY.term.scheduled]}
                 summary=""
               />
             ))}
@@ -162,22 +163,22 @@ export function RunsView({
         )}
         {active.length > 0 && (
           <section className="feed-group">
-            <h2>실행 중</h2>
+            <h2>{COPY.runs.running}</h2>
             {active.map((j) => (
               <RunRow
                 key={j.id}
                 status="running"
                 time={timeOnly(j.started ?? j.created)}
                 flow={j.kind}
-                tags={j.mode === 'demo' ? ['데모'] : []}
+                tags={j.mode === 'demo' ? [COPY.term.demo] : []}
                 summary={j.message ?? ''}
               />
             ))}
           </section>
         )}
         {error && <div className="empty-state">{error}</div>}
-        {!runs && !error && <div className="empty-state">불러오는 중…</div>}
-        {runs && runs.length === 0 && <div className="empty-state">아직 실행한 적이 없다</div>}
+        {!runs && !error && <div className="empty-state">{COPY.term.loading}</div>}
+        {runs && runs.length === 0 && <div className="empty-state">{COPY.runs.empty}</div>}
         {groups.map((g) => (
           <section key={g.label} className="feed-group">
             <h2>{g.label}</h2>

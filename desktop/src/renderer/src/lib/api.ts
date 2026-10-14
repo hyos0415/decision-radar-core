@@ -4,6 +4,7 @@
 // 여기서는 화면 코드가 쓰던 이름으로 별칭만 준다.
 import createClient from 'openapi-fetch'
 import type { components, paths } from './api.gen'
+import { COPY } from '../../../copy'
 
 type S = components['schemas']
 
@@ -71,7 +72,7 @@ async function unwrap<T>(
         ? d
         : Array.isArray(d) && typeof d[0]?.msg === 'string'
           ? d[0].msg
-          : `요청 실패 (${response.status})`
+          : COPY.app.requestFailed(response.status)
     throw new Error(msg)
   }
   return data
