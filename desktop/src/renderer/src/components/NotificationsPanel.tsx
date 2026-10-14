@@ -7,12 +7,14 @@ import type { NavTarget } from '../../../shared'
 
 // Where a row leads (HYO-113): the Inbox item while it waits; once answered, the item a rejudge
 // left in the Inbox (new_item — only while it is still there), else the ADR it was answered with.
+// A rejected item has no ADR to open — the backend still returns the discarded draft's number.
 // A bundled notification (「새 Inbox 항목 N건」) goes to its first item. null → not clickable.
 function target(n: NotificationEntry, inboxIds: string[]): NavTarget | null {
   const it = n.items[0]
   if (!it) return null
   if (it.status === 'inbox') return { view: 'inbox', id: it.id }
   if (it.new_item && inboxIds.includes(it.new_item)) return { view: 'inbox', id: it.new_item }
+  if (it.answer === 'reject') return null
   return it.adr ? { view: 'decisions', id: it.adr } : null
 }
 
