@@ -136,7 +136,7 @@ export const COPY = {
   notifications: {
     title: '지난 알림',
     empty: '지난 알림이 없어요',
-    gone: '이 항목은 거부되었어요',
+    gone: '이 항목은 더 이상 열 수 없어요',
     fallbackTitle: '알림'
   },
 
