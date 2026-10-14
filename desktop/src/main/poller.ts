@@ -4,13 +4,9 @@ import type { NavTarget } from '../shared'
 
 // Everything here talks only to the local backend (127.0.0.1) over fetch.
 
-type InboxItem = { id: string; title: string }
-type RunResult = {
-  id: string
-  flow: string
-  drafts?: { adr: string; title: string }[]
-  alerts?: { adr: string }[]
-}
+type InboxKind = 'capture' | 'detect' | 'pending' | 'revisit'
+type InboxItem = { id: string; kind: InboxKind; title: string }
+type RunResult = { id: string }
 
 type PollerDeps = {
   onClick: (t: NavTarget) => void // show + focus main window and route it
@@ -20,6 +16,14 @@ type PollerDeps = {
 
 const POLL_MS = Math.max(1000, Number(process.env.RADAR_POLL_MS) || 5000)
 const MAX_NOTIFY_PER_POLL = 3
+
+// Notification title per Inbox item kind (HYO-111) — revisit/pending are not awaiting approval.
+const KIND_TITLE: Record<InboxKind, string> = {
+  capture: '승인 대기 초안',
+  detect: '검토 대기 detect 초안',
+  pending: '접수한 capture',
+  revisit: '재검토 조건 충족'
+}
 
 function base(): string | null {
   const s = getStatus()
@@ -79,23 +83,34 @@ export function markKnown(id: string): void {
   knownInbox.add(id)
 }
 
-function notify(
-  body: string,
-  title: string,
-  kind: string,
-  item: string | undefined,
-  target: NavTarget
-): void {
+// One OS notification for one or more new Inbox items; the click opens the first one.
+function notify(title: string, items: InboxItem[]): void {
   if (!Notification.isSupported() || !deps) return
+  const first = items[0]
+  const kinds = [...new Set(items.map((i) => i.kind))]
+  const detail = {
+    kind: kinds.length === 1 ? kinds[0] : 'mixed',
+    count: items.length,
+    items: items.map((i) => i.id)
+  }
+  const body = items.length > 1 ? `${first.title} 외 ${items.length - 1}건` : first.title
   const n = new Notification({ title, body })
   live.add(n)
-  n.on('show', () => postEvent('notification_shown', item, { kind }))
+  n.on('show', () => postEvent('notification_shown', first.id, detail))
   n.on('click', () => {
-    postEvent('notification_clicked', item, { kind })
-    deps?.onClick(target)
+    postEvent('notification_clicked', first.id, detail)
+    deps?.onClick({ view: 'inbox', id: first.id })
   })
   n.on('close', () => live.delete(n))
   n.show()
+}
+
+// One notification per new item. Past the limit the rest share one 「외 N건」 instead of being dropped.
+function notifyNew(items: InboxItem[]): void {
+  const shown = items.length > MAX_NOTIFY_PER_POLL ? items.slice(0, MAX_NOTIFY_PER_POLL - 1) : items
+  for (const it of shown) notify(KIND_TITLE[it.kind], [it])
+  const rest = items.slice(shown.length)
+  if (rest.length > 0) notify(`새 Inbox 항목 ${rest.length}건`, rest)
 }
 
 export async function pollNow(): Promise<void> {
@@ -106,46 +121,21 @@ export async function pollNow(): Promise<void> {
     const inbox = await getJson<{ items: InboxItem[] }>('/inbox')
     const runs = await getJson<{ items: RunResult[] }>('/runs')
     let changed = false
-    let left = MAX_NOTIFY_PER_POLL
 
+    // Notifications come only from the Inbox (HYO-111): detect drafts and revisit alerts are
+    // Inbox items too, so a new run only refreshes the window.
     if (inbox) {
       deps.onPending(inbox.items.length)
-      for (const it of inbox.items) {
-        if (knownInbox.has(it.id)) continue
-        knownInbox.add(it.id)
-        changed = true
-        if (baseline && left > 0) {
-          left--
-          notify(it.title, '승인 대기 새 항목', 'inbox_new', it.id, { view: 'inbox', id: it.id })
-        }
-      }
+      const fresh = inbox.items.filter((it) => !knownInbox.has(it.id))
+      for (const it of fresh) knownInbox.add(it.id)
+      if (fresh.length > 0) changed = true
+      if (baseline) notifyNew(fresh)
     }
     if (runs) {
-      // oldest first so notifications come in order
-      for (const r of [...runs.items].reverse()) {
+      for (const r of runs.items) {
         if (knownRuns.has(r.id)) continue
         knownRuns.add(r.id)
         changed = true
-        if (!baseline) continue
-        const drafts = r.drafts ?? []
-        const alerts = r.alerts ?? []
-        if (drafts.length > 0 && left > 0) {
-          left--
-          notify(`detect 초안 ${drafts.length}건`, 'Decision Radar', 'run_drafts', drafts[0].adr, {
-            view: 'decisions',
-            id: drafts[0].adr
-          })
-        }
-        if (alerts.length > 0 && left > 0) {
-          left--
-          notify(
-            `재검토 조건 충족 ${alerts.length}건`,
-            'Decision Radar',
-            'run_alerts',
-            alerts[0].adr,
-            { view: 'decisions', id: alerts[0].adr }
-          )
-        }
       }
     }
     if (inbox && runs) baseline = true // the first complete poll is only a baseline
