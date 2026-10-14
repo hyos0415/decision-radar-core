@@ -306,7 +306,7 @@ class NotificationItem(BaseModel):
     answer: Optional[Action] = Field(description="answered: 마지막 답")
     outcome: Optional[Outcome] = Field(description="answered: 마지막 답의 결과")
     answered_at: Optional[str]
-    adr: Optional[str] = Field(description="이 항목의 ADR 번호 — revisit 항목, 또는 승인으로 쓴 ADR")
+    adr: Optional[str] = Field(description="이 항목의 ADR 번호 — revisit 항목, 또는 승인으로 쓴 ADR. 거부·버림·다시 판정으로 지운 초안은 없음")
     new_item: Optional[str] = Field(description="rejudge(다시 판정)로 새로 생긴 대기 항목")
     opened: bool = Field(description="이 알림 뒤에 항목을 열어 봤나 (item_opened)")
 

@@ -15,6 +15,7 @@ import { InboxList } from './components/InboxList'
 import { ItemDetail } from './components/ItemDetail'
 import { DecisionsView } from './components/DecisionsView'
 import { RunsView } from './components/RunsView'
+import { NotificationsPanel } from './components/NotificationsPanel'
 import { PageHeader } from './components/Status'
 import { Sidebar, type RunState, type View } from './components/Sidebar'
 import type { NavTarget, RadarInfo } from '../../shared'
@@ -49,6 +50,7 @@ function App(): React.JSX.Element {
   const [runs, setRuns] = useState<RunResult[] | null>(null)
   const [runsError, setRunsError] = useState<string | null>(null)
   const [schedule, setSchedule] = useState<Schedule | null>(null)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
   const sentOpened = useRef(false)
   const selectedRef = useRef<string | null>(null)
   const panelRef = useRef<HTMLElement | null>(null)
@@ -146,9 +148,9 @@ function App(): React.JSX.Element {
       .catch(() => {})
   }, [ready])
 
-  // main -> renderer: navigate (notification click, capture window) and data-changed pushes
-  useEffect(() => {
-    const offNav = window.radar.onNavigate((t: NavTarget) => {
+  // notification click, capture window, past-notifications list (HYO-113)
+  const navigate = useCallback(
+    (t: NavTarget): void => {
       setView(t.view)
       if (t.view === 'inbox') {
         if (t.id) setSelectedId(t.id)
@@ -157,7 +159,14 @@ function App(): React.JSX.Element {
         setDecisionId(t.id ?? null)
       }
       setTick((n) => n + 1)
-    })
+    },
+    [refresh]
+  )
+  const closeNotifications = useCallback(() => setNotificationsOpen(false), [])
+
+  // main -> renderer: navigate and data-changed pushes
+  useEffect(() => {
+    const offNav = window.radar.onNavigate(navigate)
     const offData = window.radar.onDataChanged(() => {
       void refresh()
       refreshRunInfo()
@@ -168,7 +177,7 @@ function App(): React.JSX.Element {
       offNav()
       offData()
     }
-  }, [refresh, refreshRunInfo, loadJobs])
+  }, [navigate, refresh, refreshRunInfo, loadJobs])
 
   useEffect(() => {
     if (!ready) return
@@ -380,9 +389,18 @@ function App(): React.JSX.Element {
         }
         flows={flows}
         onRun={(flow) => void startRun(flow)}
+        notificationsOpen={notificationsOpen}
+        onNotifications={() => setNotificationsOpen((o) => !o)}
       />
       <main className="main">
         <div className="view-area">{body}</div>
+        {ready && notificationsOpen && (
+          <NotificationsPanel
+            inboxIds={items?.map((i) => i.id) ?? []}
+            onNavigate={navigate}
+            onClose={closeNotifications}
+          />
+        )}
       </main>
       <Toaster theme="system" position="bottom-right" />
     </div>

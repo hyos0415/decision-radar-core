@@ -277,6 +277,7 @@ class RadarService:
     # ── 지난 알림 (HYO-110) — notification_shown을 읽기만 한다. 따로 저장하지 않는다 ─────
 
     ANSWERS = ("approve", "edit", "reject", "ack")
+    ADR_KEPT = ("written", "acked")  # 답한 뒤에도 ADR 파일이 남는 결과 — 승인으로 씀 · revisit 확인함
 
     def notifications(self, limit=100):
         """지난 OS 알림 — notification_shown 한 줄이 한 통. 클릭(notification_clicked) · 항목 열어 봄(item_opened) · 항목의 지금 상태를 붙인다.
@@ -317,8 +318,10 @@ class RadarService:
             it.update(status="inbox", kind=row["kind"], title=row["title"], state=row["state"], adr=row.get("adr"))
         elif ans is not None:
             ad = ans.get("detail") or {}
-            it.update(status="answered", answer=ans["event"], outcome=ad.get("outcome") or ("acked" if ans["event"] == "ack" else None),
-                      answered_at=ans.get("at"), adr=ad.get("adr"), new_item=ad.get("new_item"))
+            outcome = ad.get("outcome") or ("acked" if ans["event"] == "ack" else None)
+            # 남아 있는 ADR만 — 거부·버림·다시 판정은 초안을 지웠으니 번호를 넘기지 않는다 (화면이 없는 ADR로 보내지 않게)
+            it.update(status="answered", answer=ans["event"], outcome=outcome, answered_at=ans.get("at"),
+                      adr=ad.get("adr") if outcome in self.ADR_KEPT else None, new_item=ad.get("new_item"))
         return it
 
     # ── Inbox ────────────────────────────────────────────────────

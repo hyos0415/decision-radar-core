@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
+  Bell,
   Inbox as InboxIcon,
   Library,
   Loader2,
@@ -186,7 +187,9 @@ export function Sidebar({
   info,
   run,
   flows,
-  onRun
+  onRun,
+  notificationsOpen,
+  onNotifications
 }: {
   view: View
   onView: (v: View) => void
@@ -197,6 +200,8 @@ export function Sidebar({
   run: RunState
   flows: Flow[]
   onRun: (flow: Flow) => void
+  notificationsOpen: boolean
+  onNotifications: () => void
 }): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const card = useRef<HTMLDivElement>(null)
@@ -215,6 +220,17 @@ export function Sidebar({
       <div className="sidebar-header">
         <button className="wordmark" onClick={() => onView('inbox')}>
           Decision Radar
+        </button>
+        {/* past notifications (HYO-113) — no unread badge (HYO-110) */}
+        <button
+          className={cn('icon-button sidebar-bell', notificationsOpen && 'active')}
+          onClick={onNotifications}
+          aria-label="지난 알림"
+          aria-expanded={notificationsOpen}
+          title="지난 알림"
+          data-notifications-toggle
+        >
+          <Bell size={15} />
         </button>
       </div>
       <nav className="nav">
