@@ -136,9 +136,7 @@ export const COPY = {
     flowHint: { revisit: '재검토 조건 확인', detect: '새 릴리스 찾기' },
     running: '실행 중',
     next: (time: string) => `다음 ${time}`,
-    runFlow: '실행', // 「revisit 실행」의 뒷말
     unavailable: '이 모드에서는 쓸 수 없다',
-    history: '실행 기록 보기',
     stubNote: '스텁 모델 — 과금 없음',
     run: 'run',
     theme: '테마',
