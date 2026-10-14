@@ -61,9 +61,8 @@ export function isMac(): boolean {
   return navigator.platform.toLowerCase().includes('mac')
 }
 
-// CommandOrControl+Shift+Space -> "Ctrl+Shift+Space" / "⌘⇧Space"
-export function shortcutText(acc: string): string {
-  const mac = isMac()
+// CommandOrControl+Shift+Space -> "Ctrl+Shift+Space" / "⌘+⇧+space". mac=true: macOS 기호로 (사이드바 — 폭이 좁다)
+export function shortcutText(acc: string, mac = isMac()): string {
   return acc
     .split('+')
     .map((p) => {
@@ -73,7 +72,7 @@ export function shortcutText(acc: string): string {
       if (k === 'control' || k === 'ctrl') return mac ? '⌃' : 'Ctrl'
       if (k === 'shift') return mac ? '⇧' : 'Shift'
       if (k === 'alt' || k === 'option') return mac ? '⌥' : 'Alt'
-      return p
+      return mac ? k : p
     })
-    .join(mac ? '' : '+')
+    .join('+')
 }

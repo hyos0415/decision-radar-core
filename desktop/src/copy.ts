@@ -5,8 +5,8 @@
 const term = {
   inbox: 'Inbox',
   decisions: 'Decisions',
-  runs: '실행 기록',
-  capture: '빠른 capture',
+  runs: 'log',
+  capture: 'capture',
   stub: '스텁',
   demo: '데모',
   scheduled: '정기',
@@ -140,10 +140,9 @@ export const COPY = {
     unavailable: '이 모드에서는 쓸 수 없다',
     history: '실행 기록 보기',
     stubNote: '스텁 모델 — 과금 없음',
-    run: '실행',
+    run: 'run',
     theme: '테마',
     themes: { system: '시스템', light: '라이트', dark: '다크' },
-    captureShortcut: 'capture',
     stubProfile: (profile: string) => `스텁 · ${profile}`,
     noModel: '실제 모델 없음'
   },
@@ -168,7 +167,7 @@ export const COPY = {
       pending > 0 ? `Decision Radar — 대기 ${pending}` : 'Decision Radar',
     open: '열기',
     captureFailed: `${term.capture} (${term.shortcutFailed})`,
-    run: (flow: string) => `${flow} 실행 (${term.stub})`,
+    run: (flow: string) => `${flow}`,
     quit: '종료'
   },
 

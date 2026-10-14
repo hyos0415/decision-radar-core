@@ -52,14 +52,12 @@ function RunMenu({
   flows,
   stub,
   onRun,
-  onHistory,
   onClose
 }: {
   run: RunState
   flows: Flow[]
   stub: boolean
   onRun: (flow: Flow) => void
-  onHistory: () => void
   onClose: () => void
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
@@ -99,7 +97,7 @@ function RunMenu({
           >
             <span>
               <strong>
-                <span className="mono">{flow}</span> {COPY.sidebar.runFlow}
+                <span className="mono">{flow}</span>
               </strong>
               <small>{available ? FLOW_HINT[flow] : COPY.sidebar.unavailable}</small>
             </span>
@@ -108,10 +106,6 @@ function RunMenu({
         )
       })}
       <div className="run-menu-separator" />
-      <button className="run-menu-item" role="menuitem" onClick={onHistory}>
-        <ScrollText size={14} className="text-muted-foreground" />
-        {COPY.sidebar.history}
-      </button>
       {stub && <span className="run-menu-label">{COPY.sidebar.stubNote}</span>}
     </div>
   )
@@ -249,6 +243,7 @@ export function Sidebar({
           >
             <Zap size={15} />
             <span>{COPY.term.capture}</span>
+            {info?.shortcutOk && <kbd>{shortcutText(info.shortcut, true)}</kbd>}
           </button>
           <button
             className={cn('sidebar-action', menuOpen && 'active')}
@@ -270,26 +265,12 @@ export function Sidebar({
                 setMenuOpen(false)
                 onRun(flow)
               }}
-              onHistory={() => {
-                setMenuOpen(false)
-                onView('runs')
-              }}
             />
           )}
         </div>
         <ThemeSwitch />
-        {/* the Windows shortcut text does not fit beside the label in a 232px sidebar — own line */}
-        {info && (
-          <div className="sidebar-environment">
-            {info.shortcutOk ? (
-              <>
-                <span>{COPY.sidebar.captureShortcut}</span>
-                <kbd>{shortcutText(info.shortcut)}</kbd>
-              </>
-            ) : (
-              COPY.term.shortcutFailed
-            )}
-          </div>
+        {info && !info.shortcutOk && (
+          <div className="sidebar-environment">{COPY.term.shortcutFailed}</div>
         )}
         {stub && (
           <div className="sidebar-environment">
