@@ -717,10 +717,26 @@ def scenario_hyo110(tmp):
     x = notes()[0]["items"][0]
     check("확인함 뒤: answered · ack · acked · ADR 번호", (x["status"], x["answer"], x["outcome"], x["adr"]) == ("answered", "ack", "acked", "0001"), x)
 
+    # detect 초안: 승인하면 쓴 ADR · 거부하면 초안을 지웠으니 번호 없음 (지운 ADR로 보내지 않게)
+    r = c.post("/runs/detect", json={}).json()
+    rows = [i for i in c.get("/inbox").json()["items"] if i["kind"] == "detect"]
+    ok_id, no_id = rows[0]["id"], rows[1]["id"]
+    for x in (ok_id, no_id):
+        ev("notification_shown", x, kind="detect", nid=f"n-{x}")
+    xs = {x["id"]: x for nn in notes()[:2] for x in nn["items"]}
+    check("detect 초안: inbox", all(xs[x]["status"] == "inbox" for x in (ok_id, no_id)), xs)
+    ap, rj = c.post(f"/inbox/{ok_id}/approve", json={}).json(), c.post(f"/inbox/{no_id}/reject").json()
+    xs = {x["id"]: x for nn in notes()[:2] for x in nn["items"]}
+    check("detect 승인 → ADR 번호 · 그 ADR이 있다", ap["outcome"] == "written" and xs[ok_id]["adr"] == ap["adr"]
+          and c.get(f"/decisions/{ap['adr']}").status_code == 200, xs[ok_id])
+    check("detect 거부 → answered · rejected · ADR 번호 없음 (초안을 지웠다)", rj["outcome"] == "rejected" and rj["adr"]
+          and (xs[no_id]["status"], xs[no_id]["outcome"], xs[no_id]["adr"]) == ("answered", "rejected", None)
+          and c.get(f"/decisions/{rj['adr']}").status_code == 404, (rj, xs[no_id]))
+
     # 깨진 줄(쓰는 중 읽힌 마지막 줄 등)은 건너뛴다
     with open(svc.events_path, "a", encoding="utf-8") as f:
         f.write('{"at": "2026-10-13T00:00:00+09:00", "event": "notification_sh')
-    check("깨진 줄은 건너뜀", len(notes()) == 7)
+    check("깨진 줄은 건너뜀", len(notes()) == 9)
 
 if __name__ == "__main__":
     sys.exit(main())

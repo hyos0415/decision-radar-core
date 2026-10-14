@@ -981,7 +981,7 @@ export interface components {
       answered_at: string | null
       /**
        * Adr
-       * @description 이 항목의 ADR 번호 — revisit 항목, 또는 승인으로 쓴 ADR
+       * @description 이 항목의 ADR 번호 — revisit 항목, 또는 승인으로 쓴 ADR. 거부·버림·다시 판정으로 지운 초안은 없음
        */
       adr: string | null
       /**
