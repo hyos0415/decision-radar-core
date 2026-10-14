@@ -4,6 +4,7 @@ import { existsSync } from 'fs'
 import { createServer } from 'net'
 import { dirname, join, resolve } from 'path'
 import type { BackendStatus } from '../shared'
+import { COPY } from '../copy'
 
 const MAX_LOG_LINES = 50
 const HEALTH_TIMEOUT_MS = 30_000
@@ -59,7 +60,7 @@ function freePort(): Promise<number> {
 // 개발 데이터 프로필 — RADAR_DEVDATA=<이름> (비우면 default). 프로필마다 데이터 폴더가 따로다 (desktop/backend/devprofiles.py)
 export function devProfile(): string {
   const name = (process.env.RADAR_DEVDATA ?? '').trim().toLowerCase() || 'default'
-  if (!/^[a-z0-9][a-z0-9_-]*$/.test(name)) throw new Error(`RADAR_DEVDATA가 올바르지 않다: ${name}`)
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(name)) throw new Error(COPY.backend.badDevData(name))
   return name
 }
 
@@ -92,16 +93,14 @@ export function resolvePython(root: string): string {
     const alt = venvPython(main)
     if (existsSync(alt)) return alt
   }
-  throw new Error(
-    `Python을 찾지 못했다. RADAR_PYTHON을 지정하거나 ${local} 를 만든다 (메인 worktree도 확인함).`
-  )
+  throw new Error(COPY.backend.noPython(local))
 }
 
 async function waitHealthy(baseUrl: string): Promise<void> {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS
   while (Date.now() < deadline) {
     if (stopping) return
-    if (child && child.exitCode !== null) throw new Error('백엔드가 먼저 종료됐다.')
+    if (child && child.exitCode !== null) throw new Error(COPY.backend.exitedEarly)
     try {
       const res = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(1500) })
       if (res.ok) return
@@ -110,7 +109,7 @@ async function waitHealthy(baseUrl: string): Promise<void> {
     }
     await new Promise((r) => setTimeout(r, HEALTH_INTERVAL_MS))
   }
-  throw new Error('30초 안에 백엔드가 응답하지 않았다.')
+  throw new Error(COPY.backend.timeout)
 }
 
 export async function startBackend(): Promise<void> {
@@ -151,7 +150,7 @@ export async function startBackend(): Promise<void> {
       child.on('exit', (code, sig) => {
         pushLog(`exited code=${code} signal=${sig}`)
         if (!stopping && state.status !== 'failed') {
-          setState({ status: 'failed', error: '백엔드가 종료됐다.' })
+          setState({ status: 'failed', error: COPY.backend.exited })
         }
       })
       baseUrl = `http://127.0.0.1:${port}`

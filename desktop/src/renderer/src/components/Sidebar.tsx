@@ -16,6 +16,7 @@ import type { Flow, Job } from '@renderer/lib/api'
 import { cn } from '@renderer/lib/utils'
 import { shortcutText, timeOnly } from '@renderer/lib/format'
 import type { RadarInfo, ThemeSource } from '../../../shared'
+import { COPY } from '../../../copy'
 
 export type View = 'inbox' | 'decisions' | 'runs'
 
@@ -25,28 +26,25 @@ export type RunState = {
   nextSlot: string | null // 정기 실행 다음 시각 (ISO)
 }
 
-const FLOW_HINT: Record<Flow, string> = {
-  revisit: '재검토 조건 확인',
-  detect: '새 릴리스 찾기'
-}
+const FLOW_HINT: Record<Flow, string> = COPY.sidebar.flowHint
 
 function RunStatusText({ run }: { run: RunState }): React.JSX.Element | null {
   if (run.active)
     return (
       <span className="run-row-status">
         <Loader2 className="spin" size={12} />
-        <span className="mono">{run.active.kind}</span> 실행 중
+        <span className="mono">{run.active.kind}</span> {COPY.sidebar.running}
       </span>
     )
   if (run.lastFailed)
     return (
       <span className="run-row-status">
         <AlertTriangle className="tone-warning" size={13} />
-        실패
+        {COPY.sidebar.failed}
       </span>
     )
   if (run.nextSlot)
-    return <span className="run-row-status">다음 {timeOnly(run.nextSlot, true)}</span>
+    return <span className="run-row-status">{COPY.sidebar.next(timeOnly(run.nextSlot, true))}</span>
   return null
 }
 
@@ -55,14 +53,12 @@ function RunMenu({
   flows,
   stub,
   onRun,
-  onHistory,
   onClose
 }: {
   run: RunState
   flows: Flow[]
   stub: boolean
   onRun: (flow: Flow) => void
-  onHistory: () => void
   onClose: () => void
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
@@ -102,28 +98,28 @@ function RunMenu({
           >
             <span>
               <strong>
-                <span className="mono">{flow}</span> 실행
+                <span className="mono">{flow}</span>
               </strong>
-              <small>{available ? FLOW_HINT[flow] : '이 모드에서는 쓸 수 없다'}</small>
+              <small>{available ? FLOW_HINT[flow] : COPY.sidebar.unavailable}</small>
             </span>
             {run.active?.kind === flow && <Loader2 className="spin" size={13} />}
           </button>
         )
       })}
-      <div className="run-menu-separator" />
-      <button className="run-menu-item" role="menuitem" onClick={onHistory}>
-        <ScrollText size={14} className="text-muted-foreground" />
-        실행 기록 보기
-      </button>
-      {stub && <span className="run-menu-label">스텁 모델 — 과금 없음</span>}
+      {stub && (
+        <>
+          <div className="run-menu-separator" />
+          <span className="run-menu-label">{COPY.sidebar.stubNote}</span>
+        </>
+      )}
     </div>
   )
 }
 
 const THEMES: { value: ThemeSource; label: string; icon: React.ReactNode }[] = [
-  { value: 'system', label: '시스템', icon: <Monitor size={13} /> },
-  { value: 'light', label: '라이트', icon: <Sun size={13} /> },
-  { value: 'dark', label: '다크', icon: <Moon size={13} /> }
+  { value: 'system', label: COPY.sidebar.themes.system, icon: <Monitor size={13} /> },
+  { value: 'light', label: COPY.sidebar.themes.light, icon: <Sun size={13} /> },
+  { value: 'dark', label: COPY.sidebar.themes.dark, icon: <Moon size={13} /> }
 ]
 
 // main switches nativeTheme.themeSource — main.css tokens and the window colors follow (HYO-104)
@@ -141,8 +137,8 @@ function ThemeSwitch(): React.JSX.Element {
 
   return (
     <div className="sidebar-environment">
-      <span>테마</span>
-      <div className="segmented segmented-sm" role="group" aria-label="테마">
+      <span>{COPY.sidebar.theme}</span>
+      <div className="segmented segmented-sm" role="group" aria-label={COPY.sidebar.theme}>
         {THEMES.map((t) => (
           <button
             key={t.value}
@@ -229,9 +225,9 @@ export function Sidebar({
         <button
           className={cn('icon-button sidebar-bell', notificationsOpen && 'active')}
           onClick={onNotifications}
-          aria-label="지난 알림"
+          aria-label={COPY.sidebar.notifications}
           aria-expanded={notificationsOpen}
-          title="지난 알림"
+          title={COPY.sidebar.notifications}
           data-notifications-toggle
         >
           <Bell size={15} />
@@ -241,20 +237,20 @@ export function Sidebar({
         <NavItem
           active={view === 'inbox'}
           icon={<InboxIcon size={16} />}
-          label="Inbox"
+          label={COPY.term.inbox}
           count={pending}
           onClick={() => onView('inbox')}
         />
         <NavItem
           active={view === 'decisions'}
           icon={<Library size={16} />}
-          label="Decisions"
+          label={COPY.term.decisions}
           onClick={() => onView('decisions')}
         />
         <NavItem
           active={view === 'runs'}
           icon={<ScrollText size={16} />}
-          label="실행 기록"
+          label={COPY.term.runs}
           onClick={() => onView('runs')}
         />
       </nav>
@@ -266,7 +262,8 @@ export function Sidebar({
             title={info?.shortcutOk ? shortcutText(info.shortcut) : undefined}
           >
             <Zap size={15} />
-            <span>빠른 capture</span>
+            <span>{COPY.term.capture}</span>
+            {info?.shortcutOk && <kbd>{shortcutText(info.shortcut, true)}</kbd>}
           </button>
           <button
             className={cn('sidebar-action', menuOpen && 'active')}
@@ -275,7 +272,7 @@ export function Sidebar({
             aria-expanded={menuOpen}
           >
             <Play size={15} />
-            <span>실행</span>
+            <span>{COPY.sidebar.run}</span>
             <RunStatusText run={run} />
           </button>
           {menuOpen && (
@@ -288,33 +285,21 @@ export function Sidebar({
                 setMenuOpen(false)
                 onRun(flow)
               }}
-              onHistory={() => {
-                setMenuOpen(false)
-                onView('runs')
-              }}
             />
           )}
         </div>
         <ThemeSwitch />
-        {/* the Windows shortcut text does not fit beside the label in a 232px sidebar — own line */}
-        {info && (
-          <div className="sidebar-environment">
-            {info.shortcutOk ? (
-              <>
-                <span>capture</span>
-                <kbd>{shortcutText(info.shortcut)}</kbd>
-              </>
-            ) : (
-              '단축키 등록 실패'
-            )}
-          </div>
+        {info && !info.shortcutOk && (
+          <div className="sidebar-environment">{COPY.sidebar.shortcutFailed}</div>
         )}
         {stub && (
           <div className="sidebar-environment">
             <span className="tag mono">
-              {profile && profile !== 'default' ? `스텁 · ${profile}` : '스텁'}
+              {profile && profile !== 'default'
+                ? COPY.sidebar.stubProfile(profile)
+                : COPY.sidebar.stub}
             </span>
-            <span>실제 모델 없음</span>
+            <span>{COPY.sidebar.noModel}</span>
           </div>
         )}
       </div>

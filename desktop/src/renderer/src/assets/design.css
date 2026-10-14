@@ -187,6 +187,11 @@ html.platform-darwin .sidebar-header {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* capture 단축키 — 버튼 오른쪽 끝 */
+.sidebar-action > kbd {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
 .run-row-status {
   min-width: 0;
   margin-left: auto;

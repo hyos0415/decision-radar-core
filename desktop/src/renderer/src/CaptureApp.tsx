@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, setBaseUrl, type CaptureResult } from './lib/api'
 import { isMac } from './lib/format'
 import { Button } from './components/ui/button'
+import { COPY } from '../../copy'
 
 type Backend = Awaited<ReturnType<typeof window.radar.getBackend>>
 const drag = { WebkitAppRegion: 'drag' } as React.CSSProperties
@@ -72,7 +73,7 @@ export function CaptureApp(): React.JSX.Element {
     <div className="h-full p-3">
       <div className="flex h-full flex-col overflow-hidden rounded-xl border bg-background shadow-[0_8px_30px_rgba(0,0,0,0.14)]">
         <div className="shrink-0 px-5 pt-4 pb-2 text-[13px] font-medium" style={drag}>
-          대화 붙여넣기 → 결정 기록 초안
+          {COPY.capture.heading}
         </div>
         <textarea
           ref={ta}
@@ -86,16 +87,16 @@ export function CaptureApp(): React.JSX.Element {
               void submit()
             }
           }}
-          placeholder="조사 대화를 붙여 넣는다…"
+          placeholder={COPY.capture.placeholder}
           spellCheck={false}
           className="mx-5 min-h-0 flex-1 resize-none rounded-md border bg-muted/40 p-3 font-mono text-xs leading-relaxed outline-none placeholder:text-muted-foreground focus-visible:border-ring disabled:opacity-60"
         />
         <div className="flex min-h-5 shrink-0 items-center gap-2 px-5 pt-2 text-xs">
-          {busy && <span className="text-muted-foreground">초안 만드는 중…</span>}
+          {busy && <span className="text-muted-foreground">{COPY.capture.working}</span>}
           {!busy && error && <span>{error}</span>}
           {!busy && result?.outcome === 'awaiting' && (
             <>
-              <span>{result.message ?? 'Inbox에 추가됨'}</span>
+              <span>{result.message ?? COPY.capture.added}</span>
               <Button
                 size="sm"
                 variant="outline"
@@ -103,13 +104,13 @@ export function CaptureApp(): React.JSX.Element {
                   window.radar.navigate({ view: 'inbox', id: result.item ?? undefined })
                 }
               >
-                Inbox에서 보기
+                {COPY.capture.viewInInbox}
               </Button>
             </>
           )}
           {!busy && result?.outcome === 'linked' && (
             <>
-              <span>이미 있는 결정과 같다: {(result.link_candidates ?? []).join(', ')}</span>
+              <span>{COPY.capture.linked((result.link_candidates ?? []).join(', '))}</span>
               <Button
                 size="sm"
                 variant="outline"
@@ -117,18 +118,18 @@ export function CaptureApp(): React.JSX.Element {
                   window.radar.navigate({ view: 'decisions', id: result.link_candidates?.[0] })
                 }
               >
-                Decisions에서 보기
+                {COPY.capture.viewInDecisions}
               </Button>
             </>
           )}
           {!busy && result?.outcome === 'no_draft' && (
-            <span>{result.message ?? '초안이 나오지 않았다'}</span>
+            <span>{result.message ?? COPY.capture.noDraft}</span>
           )}
         </div>
         <div className="flex shrink-0 items-center justify-between px-5 pt-2 pb-4">
-          <span className="text-[11px] text-muted-foreground">{mod}+Enter 보내기 · Esc 닫기</span>
+          <span className="text-[11px] text-muted-foreground">{COPY.capture.hint(mod)}</span>
           <Button disabled={busy || !ready || !text.trim()} onClick={() => void submit()}>
-            초안 만들기
+            {COPY.capture.submit}
           </Button>
         </div>
       </div>

@@ -35,6 +35,15 @@ npm run dev          # Electron 창 + 트레이 + 백엔드 자동 기동. 처�
 - 창을 닫으면 트레이로 숨는다. 끝내기는 트레이 메뉴 「종료」 — 백엔드 자식 프로세스도 같이 끈다(Windows는 `taskkill /T`)
 - 백엔드는 localhost 출처만 CORS로 허용한다(개발 화면 `localhost:5173`이 다른 포트라서). `npm start`(빌드본, file://)는 아직 확인하지 않았다
 
+## 화면 문구 (HYO-117)
+
+화면 · 트레이 · 알림 문구는 모두 `src/copy.ts`에서 고친다. 컴포넌트에 문구를 직접 쓰지 않는다.
+
+- 해요체, 한 문장이면 마침표 없이 — [토스 UX 라이팅 원칙](https://toss.tech/article/8-writing-principles-of-toss)을 따른다
+- 한국어가 기본. 사이드바만 영어
+- 고정 용어는 그대로: Inbox · Decisions · ADR · detect · revisit · capture
+- 사용자에게 「백엔드」라고 하지 않는다. 서버가 보내는 `message` · `errors`는 고치지 않는다(받은 그대로 보여 준다)
+
 ## 안전
 
 | 무엇 | 어떻게 |

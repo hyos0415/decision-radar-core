@@ -4,6 +4,7 @@ import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from './ui/dialog'
 import { Input, Textarea } from './ui/input'
 import { Label } from './ui/label'
+import { COPY } from '../../../copy'
 
 const EMPTY: AdrDraft = {
   title: '',
@@ -71,7 +72,7 @@ export function EditDialog({
     try {
       parsed = JSON.parse(lists)
     } catch (e) {
-      setErrors([`JSON 형식이 맞지 않다: ${e instanceof Error ? e.message : String(e)}`])
+      setErrors([COPY.edit.badJson(e instanceof Error ? e.message : String(e))])
       return
     }
     const next: AdrDraft = {
@@ -92,35 +93,35 @@ export function EditDialog({
     setErrors([])
     const res = await submit(next)
     if (res?.outcome === 'edit_errors') {
-      setErrors(res.errors?.length ? res.errors : [res.message ?? '검사를 통과하지 못했다.'])
+      setErrors(res.errors?.length ? res.errors : [res.message ?? COPY.edit.checkFailed])
     }
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl">
-        <DialogTitle>고쳐서 승인</DialogTitle>
-        <DialogDescription>상태와 번호는 고칠 수 없다. 저장할 때 정해진다.</DialogDescription>
+        <DialogTitle>{COPY.term.edit}</DialogTitle>
+        <DialogDescription>{COPY.edit.note}</DialogDescription>
         <div className="-mx-1 grid flex-1 gap-3 overflow-y-auto px-1 pb-1">
-          <Field label="제목">
+          <Field label={COPY.edit.title}>
             <Input value={title} onChange={(e) => setTitle(e.target.value)} />
           </Field>
-          <Field label="기술 (읽기 전용)">
+          <Field label={COPY.edit.technology}>
             <Input value={base.technology} readOnly disabled className="font-mono" />
           </Field>
-          <Field label="쓰는 곳 (use)">
+          <Field label={COPY.edit.use}>
             <Input value={use} onChange={(e) => setUse(e.target.value)} />
           </Field>
-          <Field label="배경 (context)">
+          <Field label={COPY.edit.context}>
             <Textarea rows={4} value={context} onChange={(e) => setContext(e.target.value)} />
           </Field>
-          <Field label="결정 (decision)">
+          <Field label={COPY.edit.decision}>
             <Textarea rows={4} value={decision} onChange={(e) => setDecision(e.target.value)} />
           </Field>
-          <Field label="조사 메모 (한 줄에 하나)">
+          <Field label={COPY.edit.researchNote}>
             <Textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} />
           </Field>
-          <Field label="목록 칸 (JSON: affected · evidence · related · revisit_when)">
+          <Field label={COPY.edit.lists}>
             <Textarea
               rows={10}
               spellCheck={false}
@@ -132,7 +133,7 @@ export function EditDialog({
         </div>
         {errors.length > 0 && (
           <div role="alert" className="rounded-md border bg-muted p-3 text-xs">
-            <div className="mb-1 font-medium">저장하지 않았다. 아래를 고쳐 다시 시도한다.</div>
+            <div className="mb-1 font-medium">{COPY.edit.notSaved}</div>
             <ul className="list-disc pl-4">
               {errors.map((e, i) => (
                 <li key={i} className="font-mono">
@@ -144,10 +145,10 @@ export function EditDialog({
         )}
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            취소
+            {COPY.term.cancel}
           </Button>
           <Button onClick={onSubmit} disabled={busy}>
-            {busy ? '저장 중…' : '고쳐서 승인'}
+            {busy ? COPY.edit.saving : COPY.term.edit}
           </Button>
         </div>
       </DialogContent>

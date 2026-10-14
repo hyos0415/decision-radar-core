@@ -6,14 +6,11 @@ import { dateOnly, resultLabel, revisitParts, statusLabel } from '@renderer/lib/
 import { adrStatusKey, resultKey } from '@renderer/lib/status'
 import { Markdown } from './Markdown'
 import { PageHeader, Status } from './Status'
+import { COPY } from '../../../copy'
 
-const FILTERS: { key: string; label: string }[] = [
-  { key: 'all', label: '전체' },
-  { key: 'proposed', label: '제안' },
-  { key: 'adopted', label: '채택' },
-  { key: 'hold', label: '보류' },
-  { key: 'rejected', label: '기각' }
-]
+const FILTERS: { key: string; label: string }[] = Object.entries(COPY.decisions.filters).map(
+  ([key, label]) => ({ key, label })
+)
 
 function Revisit({ d }: { d: Decision }): React.JSX.Element {
   const parts = revisitParts(d.revisit_summary)
@@ -51,12 +48,12 @@ function Panel({ id, onClose }: { id: string; onClose: () => void }): React.JSX.
   }, [id])
 
   return (
-    <aside className="overlay-panel" aria-label="결정 상세">
+    <aside className="overlay-panel" aria-label={COPY.decisions.detailLabel}>
       <div className="panel-head">
         <span className="eyebrow mono">ADR {id}</span>
         <span className="detail-close-wrap">
           <span className="esc-hint">Esc</span>
-          <button className="icon-button" onClick={onClose} aria-label="닫기">
+          <button className="icon-button" onClick={onClose} aria-label={COPY.term.close}>
             <X size={16} />
           </button>
         </span>
@@ -64,7 +61,7 @@ function Panel({ id, onClose }: { id: string; onClose: () => void }): React.JSX.
       <div className="panel-scroll">
         {err && <div className="panel-body text-[13px] text-muted-foreground">{err}</div>}
         {!d && !err && (
-          <div className="panel-body text-[13px] text-muted-foreground">불러오는 중…</div>
+          <div className="panel-body text-[13px] text-muted-foreground">{COPY.term.loading}</div>
         )}
         {d && (
           <div className="panel-body">
@@ -82,9 +79,9 @@ function Panel({ id, onClose }: { id: string; onClose: () => void }): React.JSX.
             </div>
 
             <section className="panel-section">
-              <h3>재검토 조건</h3>
+              <h3>{COPY.decisions.revisitConditions}</h3>
               {d.revisit.length === 0 ? (
-                <p className="text-xs text-muted-foreground">조건이 없다</p>
+                <p className="text-xs text-muted-foreground">{COPY.decisions.noConditions}</p>
               ) : (
                 d.revisit.map((r) => (
                   <div key={r.id} className="condition">
@@ -111,7 +108,7 @@ function Panel({ id, onClose }: { id: string; onClose: () => void }): React.JSX.
             <div className="file-note">
               <FileText size={15} />
               <span className="mono">{d.file}</span>
-              <span>상태는 ADR 파일에서 사람이 바꾼다</span>
+              <span>{COPY.decisions.statusNote}</span>
             </div>
             <Markdown compact>{d.markdown}</Markdown>
           </div>
@@ -167,7 +164,7 @@ export function DecisionsView({
 
   return (
     <div className={cn('page decisions-page', selectedId && 'panel-open')}>
-      <PageHeader title="Decisions" count={items?.length}>
+      <PageHeader title={COPY.term.decisions} count={items?.length}>
         <div className="page-tools">
           <div className="segmented">
             {FILTERS.map((f) => (
@@ -185,7 +182,7 @@ export function DecisionsView({
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="번호·제목·기술 검색"
+              placeholder={COPY.decisions.search}
             />
           </label>
         </div>
@@ -193,17 +190,17 @@ export function DecisionsView({
       {err && !items ? (
         <div className="empty-state">{err}</div>
       ) : !items ? (
-        <div className="empty-state">불러오는 중…</div>
+        <div className="empty-state">{COPY.term.loading}</div>
       ) : (
         <div className="decision-table-scroll">
-          <div role="table" aria-label="Decisions">
+          <div role="table" aria-label={COPY.term.decisions}>
             <div className="decision-grid decision-table-header" role="row">
-              <span role="columnheader">번호</span>
-              <span role="columnheader">상태</span>
-              <span role="columnheader">제목</span>
-              <span role="columnheader">기술</span>
-              <span role="columnheader">재검토</span>
-              <span role="columnheader">최근 확인</span>
+              <span role="columnheader">{COPY.decisions.columns.id}</span>
+              <span role="columnheader">{COPY.decisions.columns.status}</span>
+              <span role="columnheader">{COPY.decisions.columns.title}</span>
+              <span role="columnheader">{COPY.decisions.columns.technology}</span>
+              <span role="columnheader">{COPY.decisions.columns.revisit}</span>
+              <span role="columnheader">{COPY.decisions.columns.lastChecked}</span>
             </div>
             <div role="rowgroup">
               {shown.map((d) => (
@@ -238,7 +235,7 @@ export function DecisionsView({
                 </button>
               ))}
             </div>
-            {shown.length === 0 && <div className="empty-state">맞는 결정이 없다</div>}
+            {shown.length === 0 && <div className="empty-state">{COPY.decisions.empty}</div>}
           </div>
         </div>
       )}
