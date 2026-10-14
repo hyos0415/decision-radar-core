@@ -6,7 +6,7 @@ import type { NavTarget } from '../shared'
 
 type InboxKind = 'capture' | 'detect' | 'pending' | 'revisit'
 type InboxItem = { id: string; kind: InboxKind; title: string }
-type RunResult = { id: string; flow: 'detect' | 'revisit' }
+type RunResult = { id: string }
 
 type PollerDeps = {
   onClick: (t: NavTarget) => void // show + focus main window and route it
@@ -73,11 +73,6 @@ export async function postRun(flow: 'detect' | 'revisit'): Promise<void> {
 const live = new Set<Notification>() // keep references so they are not GC'd before click
 const knownInbox = new Set<string>()
 const knownRuns = new Set<string>()
-// detect/revisit items wait here until their run ends, so one run is one notification even when
-// a poll lands mid-run and sees only some of its items. HOLD_MAX_MS: let go even without a run.
-const HOLD_MAX_MS = 60_000
-let held: { item: InboxItem; since: number }[] = []
-const endedFlows = new Set<string>() // runs seen but not yet matched against the Inbox
 let baseline = false
 let timer: ReturnType<typeof setInterval> | null = null
 let polling = false
@@ -110,22 +105,11 @@ function notify(title: string, items: InboxItem[]): void {
   n.show()
 }
 
-// New items → notifications. detect/revisit items let go together come from one run, so each kind
-// is one notification; capture/pending are one each. Past the limit the rest share one 「외 N건」.
+// One notification per new item. Past the limit the rest share one 「외 N건」 instead of being dropped.
 function notifyNew(items: InboxItem[]): void {
-  const groups: InboxItem[][] = []
-  for (const kind of ['detect', 'revisit'] as const) {
-    const g = items.filter((i) => i.kind === kind)
-    if (g.length > 0) groups.push(g)
-  }
-  for (const it of items) if (it.kind === 'capture' || it.kind === 'pending') groups.push([it])
-  const shown =
-    groups.length > MAX_NOTIFY_PER_POLL ? groups.slice(0, MAX_NOTIFY_PER_POLL - 1) : groups
-  for (const g of shown) {
-    const title = KIND_TITLE[g[0].kind] + (g.length > 1 ? ` ${g.length}건` : '')
-    notify(title, g)
-  }
-  const rest = groups.slice(shown.length).flat()
+  const shown = items.length > MAX_NOTIFY_PER_POLL ? items.slice(0, MAX_NOTIFY_PER_POLL - 1) : items
+  for (const it of shown) notify(KIND_TITLE[it.kind], [it])
+  const rest = items.slice(shown.length)
   if (rest.length > 0) notify(`새 Inbox 항목 ${rest.length}건`, rest)
 }
 
@@ -134,38 +118,24 @@ export async function pollNow(): Promise<void> {
   if (!base()) return
   polling = true
   try {
-    // runs before inbox: a run is recorded after its items, so once a run shows, all of its
-    // items are already in the Inbox we read next
-    const runs = await getJson<{ items: RunResult[] }>('/runs')
     const inbox = await getJson<{ items: InboxItem[] }>('/inbox')
+    const runs = await getJson<{ items: RunResult[] }>('/runs')
     let changed = false
 
-    if (runs) {
-      for (const r of runs.items) {
-        if (knownRuns.has(r.id)) continue
-        knownRuns.add(r.id)
-        changed = true
-        if (baseline) endedFlows.add(r.flow)
-      }
-    }
     // Notifications come only from the Inbox (HYO-111): detect drafts and revisit alerts are
-    // Inbox items too, so a run only tells when its held items may go.
+    // Inbox items too, so a new run only refreshes the window.
     if (inbox) {
       deps.onPending(inbox.items.length)
       const fresh = inbox.items.filter((it) => !knownInbox.has(it.id))
       for (const it of fresh) knownInbox.add(it.id)
       if (fresh.length > 0) changed = true
-      if (baseline) {
-        const now = Date.now()
-        const ready: InboxItem[] = []
-        for (const it of fresh) {
-          if (it.kind === 'detect' || it.kind === 'revisit') held.push({ item: it, since: now })
-          else ready.push(it)
-        }
-        const go = held.filter((h) => endedFlows.has(h.item.kind) || now - h.since > HOLD_MAX_MS)
-        held = held.filter((h) => !go.includes(h))
-        endedFlows.clear()
-        notifyNew([...go.map((h) => h.item), ...ready])
+      if (baseline) notifyNew(fresh)
+    }
+    if (runs) {
+      for (const r of runs.items) {
+        if (knownRuns.has(r.id)) continue
+        knownRuns.add(r.id)
+        changed = true
       }
     }
     if (inbox && runs) baseline = true // the first complete poll is only a baseline
