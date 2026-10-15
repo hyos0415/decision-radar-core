@@ -55,8 +55,9 @@ def rollup(chunk_hits, chunk_to_doc):
     return [(d, s) for d, _, s in rollup_chunks(chunk_hits, chunk_to_doc)]
 
 
-def run_queries(strategy, queries, chunk_to_doc, k_docs=20, chunk_k=200):
-    """-> (run {qid: {doc_id: score}}, 질의 지연 ms 목록). 문서 k_docs개가 채워지게 청크를 넉넉히(chunk_k) 받는다."""
+def run_queries(strategy, queries, chunk_to_doc, k_docs=20, chunk_k=200, rep_chunks=None):
+    """-> (run {qid: {doc_id: score}}, 질의 지연 ms 목록). 문서 k_docs개가 채워지게 청크를 넉넉히(chunk_k) 받는다.
+    rep_chunks(dict)를 주면 {qid: {doc_id: 대표 chunk_id}}를 채운다 — component 근거(jhs_metrics)가 청크 단위로 본다."""
     run, latencies = {}, []
     for q in queries:
         t0 = time.perf_counter()
@@ -67,7 +68,10 @@ def run_queries(strategy, queries, chunk_to_doc, k_docs=20, chunk_k=200):
         else:
             hits = strategy.search(q["text"], chunk_k)
         latencies.append((time.perf_counter() - t0) * 1000)
-        run[q["qid"]] = {d: s for d, s in rollup(hits, chunk_to_doc)[:k_docs]}
+        top = rollup_chunks(hits, chunk_to_doc)[:k_docs]
+        run[q["qid"]] = {d: s for d, _, s in top}
+        if rep_chunks is not None:
+            rep_chunks[q["qid"]] = {d: c for d, c, _ in top}
     return run, latencies
 
 
@@ -176,13 +180,62 @@ def result_key(strategy_id, version, corpus_version, gold_version, tier="T0", se
     return "__".join(parts)
 
 
-def save_results(results_root, key, run, metrics, system, env):
-    """같은 키 폴더가 이미 있으면 덮어쓰지 않고 실패한다 — 옛 결과는 그 버전의 기록이다."""
+def save_results(results_root, key, run, metrics, system, env, extra=None):
+    """같은 키 폴더가 이미 있으면 덮어쓰지 않고 실패한다 — 옛 결과는 그 버전의 기록이다.
+    extra {파일 이름: 객체} — 예: rep_chunks.json (문서별 대표 청크)."""
+    files = {"run.json": run, "metrics.json": metrics, "system.json": system, "env.json": env}
+    for name in extra or {}:
+        if name in files or not name.endswith(".json") or Path(name).name != name:
+            raise ValueError(f"extra 파일 이름으로 쓸 수 없다: {name!r}")
     d = Path(results_root) / key
     d.mkdir(parents=True, exist_ok=False)          # FileExistsError
-    for name, obj in (("run.json", run), ("metrics.json", metrics), ("system.json", system), ("env.json", env)):
+    for name, obj in {**files, **(extra or {})}.items():
         (d / name).write_text(json.dumps(obj, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     return d
+
+
+def peak_memory():
+    """구축 비용 (§5 변경 2026-10-13) — 이 프로세스의 최대 RSS와 GPU 최대 메모리. 잴 수 없는 항목은 None.
+    ES 서버(도커)의 메모리는 들어가지 않는다 — 색인 크기(index_size_bytes)로 따로 본다."""
+    rss = None
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            class PMC(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                            ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+            pmc = PMC()
+            pmc.cb = ctypes.sizeof(PMC)
+            get = ctypes.windll.psapi.GetProcessMemoryInfo
+            get.argtypes = [wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD]
+            proc = ctypes.windll.kernel32.GetCurrentProcess
+            proc.restype = wintypes.HANDLE
+            if get(proc(), ctypes.byref(pmc), pmc.cb):
+                rss = int(pmc.PeakWorkingSetSize)
+        else:
+            import resource
+            r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            rss = int(r if sys.platform == "darwin" else r * 1024)          # macOS는 바이트, Linux는 KB
+    except Exception:                                                        # noqa: BLE001 — 계측 실패가 실행을 죽이지 않게
+        rss = None
+    gpu = {"device": None, "peak_bytes": None}
+    torch = sys.modules.get("torch")                                         # 임베딩 전략만 torch를 불러온다
+    if torch is not None:
+        try:
+            if torch.cuda.is_available() and torch.cuda.is_initialized():
+                gpu = {"device": "cuda", "peak_bytes": int(torch.cuda.max_memory_allocated())}
+            elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                gpu = {"device": "mps", "peak_bytes": None,
+                       "driver_allocated_at_end_bytes": int(torch.mps.driver_allocated_memory()),
+                       "note": "MPS는 최대값 API가 없다 — 끝날 때 드라이버 할당량"}
+        except Exception:                                                    # noqa: BLE001
+            pass
+    return {"peak_rss_bytes": rss, "gpu": gpu}
 
 
 def _git(*args):

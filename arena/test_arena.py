@@ -1816,6 +1816,192 @@ def _():
             assert type(cli.make_strategy(name, args, {"version": "c-all@v1"}, {"version": "p@v1"}, emb)) is cls
     assert cli.DIAG_STRATEGIES == ["s4.flat", "s4.int8flat", "s4.bbqflat"]
     assert not set(cli.DIAG_STRATEGIES) & set(cli.STRATEGY_CHOICES)          # 격자 전략 목록에는 넣지 않는다
+
+
+# --- JHS 보조 지표 (HYO-34 · retrieval-arena §5 변경 2026-10-13) ----------------------------------------------------
+
+from arena import jhs_metrics as jm  # noqa: E402
+
+
+def rel_doc(repo, tag):
+    return {"doc_id": f"github-release:{repo}@{tag}", "corpus": "c-doc", "source_type": "release_note",
+            "meta": {"repo": repo, "tag": tag}}
+
+
+def jhs_nodes():
+    return jm.Nodes({"version": "nodes@test", "technologies": [
+        {"id": "tech:lc", "label": "LangChain", "aliases": [{"text": "LangChain", "source": "adr:0009"}]},
+        {"id": "tech:lca", "label": "langchain-anthropic", "aliases": [{"text": "langchain-anthropic", "source": "s"}]},
+        {"id": "tech:cc", "label": "Claude Code", "aliases": [{"text": "Claude Code", "source": "s"}]}],
+        "components": [{"id": "component:dr/product", "repo": "dr", "name": "product", "source": "s"},
+                       {"id": "component:dr/skill", "repo": "dr", "name": "skill", "source": "s"}]})
+
+
+@case("JHS 버전: tag 읽기 — 모노레포 `<패키지>==` · v 접두어 · 숫자 아닌 tag는 None · 정답 릴리스가 하나가 아니면 실패")
+def _():
+    assert jm.split_tag("langchain-anthropic==1.7.5") == ("langchain-anthropic", "1.7.5")
+    assert jm.split_tag("v0.23.0") == (None, "v0.23.0")
+    assert jm.parse_version("v0.23.0") == (0, 23, 0) and jm.parse_version("1.2.13") == (1, 2, 13)
+    assert jm.parse_version("b11240") is None and jm.parse_version(None) is None
+    rels = jm.release_index([rel_doc("o/a", "v1.0.0"), rel_doc("o/a", "v1.1.0"),
+                             {"doc_id": "adr:0001", "corpus": "c-adr", "source_type": "adr", "meta": {}}])
+    assert set(rels) == {"github-release:o/a@v1.0.0", "github-release:o/a@v1.1.0"}
+    q = {"qid": "C1", "type": "C", "expected_version": "1.1.0"}
+    assert jm.correct_release(q, {"github-release:o/a@v1.1.0": 2}, rels) == "github-release:o/a@v1.1.0"
+    assert raises(ValueError, jm.correct_release, q, {"github-release:o/a@v1.1.0": 1}, rels)       # 등급 2가 아니다
+    assert raises(ValueError, jm.correct_release, q, {"github-release:o/a@v1.0.0": 2}, rels)       # 버전이 다르다
+    assert raises(ValueError, jm.release_index, [{"doc_id": "github-release:x@1", "meta": {}}])     # repo·tag 없음
+
+
+@case("JHS 버전 혼동 (C): 이전 형제가 정답 위 · 정답이 상위 k 밖인데 이전 형제가 안 → 위험 / 이후 형제 · 등급 1 형제 · 다른 패키지 → 위험 아님")
+def _():
+    docs = [rel_doc("o/a", t) for t in ("v1.0.0", "v1.1.0", "v1.2.0", "v1.0.5", "v1.1.1")] + \
+           [rel_doc("o/m", "core==1.0.0"), rel_doc("o/m", "app==1.1.0"), rel_doc("o/m", "app==0.9.0"), rel_doc("o/solo", "v2.0.0")]
+    rels = jm.release_index(docs)
+    R = "github-release:"
+    queries = [{"qid": f"C{i}", "type": "C", "expected_version": v} for i, v in
+               ((1, "1.1.0"), (2, "1.1.0"), (3, "1.1.0"), (4, "1.1.0"), (5, "1.1.0"), (6, "2.0.0"))] + \
+              [{"qid": "E1", "type": "E", "expected_version": "1.1.0"}]
+    qrels = {q: {R + "o/a@v1.1.0": 2, R + "o/a@v1.0.5": 1} for q in ("C1", "C2", "C3", "C4", "E1")}
+    qrels["C5"] = {R + "o/m@app==1.1.0": 2}
+    qrels["C6"] = {R + "o/solo@v2.0.0": 2}
+    filler = [f"x{i}" for i in range(12)]
+    run = {"C1": {R + "o/a@v1.0.0": 3, R + "o/a@v1.1.0": 2},                     # 이전 형제가 정답 위 → 위험
+           "C2": {d: 1 for d in filler[:10] + [R + "o/a@v1.1.0"] + [R + "o/a@v1.0.0"]},    # 둘 다 상위 10 밖 → 위험 아님
+           "C3": {R + "o/a@v1.0.0": 2, **{d: 1 for d in filler}},                # 정답 없음 + 이전 형제 상위 k → 위험
+           "C4": {R + "o/a@v1.2.0": 3, R + "o/a@v1.0.5": 2.5, R + "o/a@v1.1.0": 2, R + "o/a@v1.0.0": 1},  # 이후 형제 · 등급1 형제만 위
+           "C5": {R + "o/m@core==1.0.0": 3, R + "o/m@app==0.9.0": 2, R + "o/m@app==1.1.0": 1},  # 다른 패키지는 형제 아님
+           "C6": {R + "o/solo@v2.0.0": 1}, "E1": {R + "o/a@v1.0.0": 2}}
+    t = jm.version_confusion(run, qrels, queries, rels, k=10)
+    rows = {r["qid"]: r for r in t["rows"]}
+    assert "E1" not in rows                                                      # E는 넣지 않는다
+    assert t["risk_qids"] == ["C1", "C3", "C5"], t["risk_qids"]
+    assert rows["C1"]["risk_docs"] == [R + "o/a@v1.0.0"] and rows["C1"]["correct_rank"] == 2
+    assert [s["doc"] for s in rows["C4"]["later"]] == [R + "o/a@v1.2.0", R + "o/a@v1.1.1"] and not rows["C4"]["risk"]
+    assert R + "o/a@v1.0.5" not in {s["doc"] for g in ("earlier", "later") for s in rows["C4"][g]}   # 등급 1은 형제가 아니다
+    assert [s["doc"] for s in rows["C5"]["earlier"]] == [R + "o/m@app==0.9.0"]  # core==는 다른 패키지
+    assert rows["C6"]["note"] == "형제 없음" and not rows["C6"]["risk"]
+
+
+@case("JHS Correct Version@k (C·E): 정답 릴리스 적중 · 「Recall과 같음」은 등급 2가 릴리스뿐일 때만")
+def _():
+    R = "github-release:"
+    rels = jm.release_index([rel_doc("o/a", "v1.1.0")])
+    queries = [{"qid": "C1", "type": "C", "expected_version": "v1.1.0"},
+               {"qid": "E1", "type": "E", "expected_version": "1.1.0"}]
+    qrels = {"C1": {R + "o/a@v1.1.0": 2}, "E1": {R + "o/a@v1.1.0": 2, "stack:dr/product/requirements.txt": 2}}
+    run = {"C1": {"x": 2, R + "o/a@v1.1.0": 1}, "E1": {R + "o/a@v1.1.0": 1}}
+    m = jm.correct_version(run, qrels, queries, rels, ks=(1, 5))
+    assert m["@1"]["C"]["mean"] == 0.0 and m["@5"]["C"]["mean"] == 1.0 and m["@5"]["C"]["same_as_recall"]
+    assert m["@5"]["E"]["mean"] == 1.0 and not m["@5"]["E"]["same_as_recall"]     # Recall은 0.5 (manifest를 놓침)
+
+
+@case("JHS component 근거 (E): 같은 repo 스택 표 행(별칭+component 칸) · manifest 디렉터리 — 경계·다른 repo·다른 칸·상위 k 밖은 잡지 않는다")
+def _():
+    nodes = jhs_nodes()
+    row = "| langgraph · langchain-anthropic | product (spike) |\n| Claude Code routines | skill |\n| LangChain 문서 | eval |"
+    texts = {"stack:dr/CLAUDE.md#stack#1": row,
+             "stack:dr/product/requirements.txt#0": "langchain==1.4.3\nlangchain-anthropic==1.7.5",
+             "stack:other/CLAUDE.md#stack#1": "| langchain | product |"}
+    kind = jm.component_evidence_kind
+    assert kind("stack:dr/CLAUDE.md#stack", row, "dr", "product", ["langchain-anthropic"]) == "stack-row"
+    assert kind("stack:dr/CLAUDE.md#stack", row, "dr", "product", ["LangChain"]) is None    # langchain-anthropic 안의 langchain은 아니다
+    assert kind("stack:dr/CLAUDE.md#stack", row, "dr", "skill", ["Claude Code"]) == "stack-row"
+    assert kind("stack:dr/CLAUDE.md#stack", "| Claude Code를 쓴다 | skill에서 |", "dr", "skill", ["Claude Code"]) == "stack-row"  # 조사
+    assert kind("stack:dr/CLAUDE.md#stack", "| product 도구 | eval |", "dr", "product", ["product"]) is None  # component가 의존성 칸에만
+    assert kind("stack:dr/product/requirements.txt", texts["stack:dr/product/requirements.txt#0"], "dr", "product", ["LangChain"]) == "manifest"
+    assert kind("stack:dr/requirements.txt", "langchain==1", "dr", "product", ["LangChain"]) is None   # 루트 manifest는 component가 없다
+    assert kind("stack:other/CLAUDE.md#stack", texts["stack:other/CLAUDE.md#stack#1"], "dr", "product", ["LangChain"]) is None
+    queries = [{"qid": "E1", "type": "E", "nodes": [{"technology": "LangChain", "repo": "dr", "component": "product"}]},
+               {"qid": "E2", "type": "E", "nodes": [{"technology": "Claude Code", "repo": "dr", "component": "skill"}]},
+               {"qid": "E3", "type": "E", "nodes": [{"technology": "없는 기술", "repo": "dr", "component": "product"}]},
+               {"qid": "C1", "type": "C", "nodes": [{"technology": "LangChain", "repo": "dr", "component": "product"}]}]
+    qrels = {"E1": {"stack:dr/product/requirements.txt": 2}, "E2": {"r": 2}, "E3": {"r": 2}, "C1": {"r": 2}}
+    far = {f"x{i}": 1 for i in range(10)}
+    run = {"E1": {"stack:other/CLAUDE.md#stack": 3, "stack:dr/product/requirements.txt": 2},
+           "E2": {**far, "stack:dr/CLAUDE.md#stack": 0.5},                                # 11위 — 상위 10 밖
+           "E3": {"stack:dr/product/requirements.txt": 1}, "C1": {"stack:dr/product/requirements.txt": 1}}
+    reps = {"E1": {"stack:other/CLAUDE.md#stack": "stack:other/CLAUDE.md#stack#1",
+                   "stack:dr/product/requirements.txt": "stack:dr/product/requirements.txt#0"},
+            "E2": {"stack:dr/CLAUDE.md#stack": "stack:dr/CLAUDE.md#stack#1"},
+            "E3": {"stack:dr/product/requirements.txt": "stack:dr/product/requirements.txt#0"}}
+    t = jm.component_evidence(run, reps, texts, queries, qrels, nodes, k=10)
+    rows = {r["qid"]: r for r in t["rows"]}
+    assert set(rows) == {"E1", "E2", "E3"}                                          # C는 넣지 않는다
+    assert rows["E1"]["first_rank"] == 2 and rows["E1"]["evidence"][0]["via"] == "manifest" and rows["E1"]["overlaps_grade2"]
+    assert rows["E2"]["evidence"] == [] and rows["E2"]["first_rank"] is None
+    assert rows["E3"]["note"] == "nodes@v1에 없는 기술" and rows["E3"]["node"] is None
+
+
+@case("JHS 커뮤니티 비율@k: reddit·hn 비율의 질의 평균 · 유형별 · 빈 결과는 뺀다")
+def _():
+    queries = [{"qid": "q1", "type": "B"}, {"qid": "q2", "type": "C"}, {"qid": "q3", "type": "C"}]
+    st = {"r1": "community", "h1": "community", "d1": "release_note", "d2": "adr"}
+    run = {"q1": {"r1": 3, "d1": 2}, "q2": {"d2": 1, "h1": 0.5, "r1": 0.1}, "q3": {}}
+    m = jm.community_share(run, queries, st, ks=(1, 5))
+    assert m["@1"]["overall"] == 0.5 and m["@1"]["by_type"] == {"B": 1.0, "C": 0.0}
+    assert m["@5"]["overall"] == round((0.5 + 2 / 3) / 2, 4) and m["@5"]["by_type"]["C"] == round(2 / 3, 4)
+
+
+@case("JHS Seed Recall@k: id 일치만 · B는 뺀다 · 어휘에 없는 노드는 놓친 것으로 세고 따로 적는다")
+def _():
+    nodes = jhs_nodes()
+    queries = [{"qid": "E1", "type": "E", "nodes": [{"technology": "langchain", "repo": "dr", "component": "product"}]},
+               {"qid": "K1", "type": "K", "nodes": [{"technology": "LangChain", "repo": "dr", "component": "retrieval-arena"}]},
+               {"qid": "B1", "type": "B", "nodes": [{"technology": "GGUF reranker"}]}]
+    seeds = {"E1": ["tech:lca", "tech:lc", "component:dr/product"], "K1": ["tech:lc"], "B1": ["tech:cc"]}
+    r = jm.seed_recall(seeds, queries, nodes, ks=(1, 3))
+    assert r["n"] == 2 and "B1" not in r["per_query"]
+    assert r["per_query"]["E1"] == {"@1": 0.0, "@3": 1.0}                      # 별칭은 대소문자만 무시 — 1위는 다른 노드
+    assert r["per_query"]["K1"] == {"@1": 0.5, "@3": 0.5}                      # retrieval-arena는 어휘에 없다 → 놓침
+    assert r["not_in_graph"] == {"K1": ["component:dr/retrieval-arena"]}
+    assert jm.Nodes.tech_id(nodes, "Lang Chain") is None                       # 흔들림은 지표가 흡수하지 않는다
+
+
+@case("JHS nodes 어휘 검사가 잡는다: 두 노드에 같은 별칭 · 출처 없음 · 출처 문서에 없는 별칭 · component id 형식")
+def _():
+    base = {"version": "v", "components": []}
+    t = lambda i, a, s="s": {"id": i, "label": i, "aliases": [{"text": a, "source": s}]}     # noqa: E731
+    assert raises(ValueError, jm.Nodes, {**base, "technologies": [t("a", "LangChain"), t("b", "langchain")]})
+    assert raises(ValueError, jm.Nodes, {**base, "technologies": [{"id": "a", "aliases": [{"text": "x"}]}]})
+    assert raises(ValueError, jm.Nodes, {"version": "v", "technologies": [],
+                                         "components": [{"id": "dr/product", "repo": "dr", "name": "product", "source": "s"}]})
+    n = jm.Nodes({"version": "v", "technologies": [t("a", "LangChain", "adr:1"), t("b", "Neo4j", "adr:9")],
+                  "components": [{"id": "component:dr/product", "repo": "dr", "name": "product", "source": "adr:1"}]})
+    bad = jm.check_nodes(n, {"adr:1": "LangChain을 product에 쓴다"})
+    assert len(bad) == 1 and "adr:9" in bad[0]
+    assert jm.check_nodes(n, {"adr:1": "langchain · product", "adr:9": "NEO4J"}) == []
+    real = jm.load_nodes(HERE.parent / "eval" / "arena" / "nodes@v1.json")         # 등록된 어휘 파일 자체가 검사를 통과한다
+    assert real.version == "nodes@v1" and real.tech_id("OpenAI Agents SDK") == real.tech_id("openai-agents")
+
+
+@case("하네스: run_queries가 대표 청크를 남긴다 · save_results extra 파일 (이름 검사) · peak_memory · build_cost(cold 여부)")
+def _():
+    from types import SimpleNamespace
+
+    from arena import cli
+
+    class Fake(harness.Strategy):
+        def search(self, query, k):
+            return [("a#1", 2.0), ("b#0", 1.5), ("a#0", 1.0)]
+    reps = {}
+    run, _ = harness.run_queries(Fake(), [{"qid": "q1", "text": "x"}], {"a#0": "A", "a#1": "A", "b#0": "B"}, rep_chunks=reps)
+    assert reps == {"q1": {"A": "a#1", "B": "b#0"}} and list(run["q1"]) == ["A", "B"]
+    with tempfile.TemporaryDirectory() as tmp:
+        d = harness.save_results(tmp, "k", {}, {}, {}, {}, extra={"rep_chunks.json": reps})
+        assert json.loads((d / "rep_chunks.json").read_text(encoding="utf-8")) == reps
+        for bad in ("run.json", "x.txt", "../x.json"):
+            assert raises(ValueError, harness.save_results, tmp, "k2", {}, {}, {}, {}, extra={bad: {}})
+    mem = harness.peak_memory()
+    assert isinstance(mem["peak_rss_bytes"], int) and mem["peak_rss_bytes"] > 0, mem
+    e = lambda hits: SimpleNamespace(info=lambda: {"model_id": "m", "chunks": 10, "cache_hits": hits, "encoded": 10 - hits,  # noqa: E731
+                                                     "chunk_encode_seconds": 1.0, "device": "cpu"})
+    sysd = {"index_build_seconds": 5.0}
+    cold = cli.build_cost(sysd, [e(0)], SimpleNamespace())
+    warm = cli.build_cost(sysd, [e(0), e(3)], SimpleNamespace(build_llm_cost_usd=0.25))
+    assert cold["cold_build"] and cold["cold_build_seconds"] == 5.0 and cold["build_llm_cost_usd"] == 0.0
+    assert not warm["cold_build"] and warm["cold_build_seconds"] is None and warm["note"] and warm["build_llm_cost_usd"] == 0.25
+    assert cli.build_cost(sysd, [], SimpleNamespace())["cold_build"]                  # BM25: 임베딩 없음 → 늘 cold
     assert set(cli.DIAG_STRATEGIES) <= set(cli.BGE_STRATEGIES) <= set(cli.EMBEDDING_STRATEGIES)
 
 
