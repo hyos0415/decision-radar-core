@@ -37,6 +37,11 @@ SEVERITY = {"security": 0, "breaking": 1, "eol": 2, "model_retirement": 2, "depr
 SEVERITY_REST = 4
 WEEKLY_LIMIT = 5
 
+# 관문이 판정 못 한 비율 경고 (HYO-122 ⑤ — 592건이 요약에 안 보이고 조용히 빠졌다). (모르는 기술 + 분류 불가) / (레인 A − 팀원 스택)이 넘으면 경고.
+# 잠정 (2026-10-15, 사용자 — 아직 재 보지 않은 첫 제안. 고치기 전 W42 ≈ 81%). HYO-122 PR 4 뒤 W42(+W41)를 다시 돌려 정상 비율을 보고
+# 그보다 조금 높게 다시 정한다. 바꿀 때는 지우지 않고 `변경 (날짜, 이유)`로 남긴다.
+UNKNOWN_WARN_RATIO = 0.20
+
 
 def severity(change):
     return SEVERITY.get(change, SEVERITY_REST)
@@ -105,3 +110,26 @@ def apply_cap(entries, limit=WEEKLY_LIMIT):
     ordered = sorted(entries, key=rank_key)
     shown, cut = ordered[:limit], ordered[limit:]
     return shown, cut, f"{len(shown)}/{len(ordered)}"
+
+
+def gate_counts(entries, warn_ratio=None):
+    """레인 A 항목들(각각 `gate` 칸) → 요약 건수 + 경고. 모르는 기술 = unclassified인데 걸린 기술이 없음, 분류 불가 = 기술은 있는데 등급이 없음.
+    ratio = (모르는 기술 + 분류 불가) / (레인 A − 팀원 스택). 분모가 0이면 None (경고 없음)."""
+    warn_ratio = UNKNOWN_WARN_RATIO if warn_ratio is None else warn_ratio
+    c = {"lane_a": len(entries), "kept": 0, "unknown": 0, "unresolved": 0, "other_stack": 0, "error": 0}
+    for e in entries:
+        g = e.get("gate") or {}
+        s = g.get("status")
+        if g.get("keep"):
+            c["kept"] += 1
+        if s == "unclassified":
+            c["unresolved" if g.get("technologies") else "unknown"] += 1
+        elif s == "other-stack":
+            c["other_stack"] += 1
+        elif s == "error":
+            c["error"] += 1
+    base = c["lane_a"] - c["other_stack"]
+    c["ratio"] = (c["unknown"] + c["unresolved"]) / base if base else None
+    c["warn_ratio"] = warn_ratio
+    c["warn"] = c["ratio"] is not None and c["ratio"] > warn_ratio
+    return c

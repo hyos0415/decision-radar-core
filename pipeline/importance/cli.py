@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 from .backends import TechQuery, make_backend
-from .signals import read_repo_signals
+from .signals import NPM_DEV, read_repo_signals
 from .tiers import NOT_IMPLEMENTED, TierStore
 
 
@@ -50,6 +50,8 @@ def queries_from_repos(repos, extra=None):
         for key, s in read_repo_signals(repo, exclude).items():
             if s["image"]:
                 usage, source = f"컨테이너 이미지 ({s['image_ref']})", s["image_ref"]
+            elif s["group"] == NPM_DEV:      # 개발 도구일 수도, 번들돼 운영에 들어갈 수도 있다 (⑩) — 모델이 정하도록 그대로 알린다
+                usage, source = "package.json devDependencies (개발 도구일 수도, 앱에 번들돼 운영 코드에 들어갈 수도 있다)", s["manifest"]
             else:
                 usage, source = f"{s['manifest']} 직접 의존성 ({s['group']})", s["manifest"]
             qs.append(TechQuery(name=s["name"], usage=usage, source=source, signals={k: s[k] for k in ("manifest", "group", "pin", "image")}))
@@ -73,15 +75,23 @@ def load_vendor_terms(path=None):
     return {v: list((spec or {}).get("match") or [v]) for v, spec in (d.get("vendors") or {}).items()}
 
 
-def build_gate(model, tiers_path, *, real_api=False, call_log=None, limit=None, backend=None):
-    """profile_filter가 부르는 자리. 등급 파일이 없으면 거부한다 (등급 없이는 판정할 수 없다 — classify-stack을 먼저)."""
+def build_gate(model, tiers_path, *, real_api=False, call_log=None, limit=None, backend=None, other_stack=None, targets=None):
+    """profile_filter가 부르는 자리. 등급 파일이 없으면 거부한다 (등급 없이는 판정할 수 없다 — classify-stack을 먼저).
+    other_stack: 팀원 스택 이름 (None이면 수집 전용 대상에서 읽는다 — other_stack_names). 어디서 읽었나는 gate.other_info."""
     from .backends import CallLog
     from .gate import Gate
     from . import policy
     if not Path(tiers_path).exists():
         raise SystemExit(f"등급 파일이 없다: {tiers_path} — `python -m pipeline.importance classify-stack`을 먼저 돌린다")
+    store = TierStore(tiers_path)
+    if other_stack is None:
+        other_stack, info = other_stack_names(targets, store.names() + [o.get("technology", k) for k, o in store.data["overrides"].items()])
+    else:
+        info = {"given": True}
     backend = backend or make_backend(model, allow_real=real_api, log=CallLog(call_log))
-    return Gate(backend, TierStore(tiers_path), load_vendor_terms(), limit or policy.WEEKLY_LIMIT), backend
+    gate = Gate(backend, store, load_vendor_terms(), limit or policy.WEEKLY_LIMIT, other_stack=other_stack)
+    gate.other_info = {**info, "names": len(other_stack)}
+    return gate, backend
 
 
 def cmd_classify(a):
@@ -131,6 +141,33 @@ def collector_stack_names(targets_path=None):
             names += github.dependencies_from_claude_md(md.read_text(encoding="utf-8"))
         names += github.dependencies_from_package_json(root, ex)
     return names, missing
+
+
+def other_stack_names(targets_path=None, mine=()):
+    """수집 전용 대상(팀원 repo — collector/targets-collect-only.json)에만 있는 의존성 이름 (HYO-122 결정 1: 팀원 스택은 내 관문 밖으로 따로 센다).
+    내 스택(수집기가 내 대상에서 읽는 이름 + 관문 manifest 신호 + mine)에도 있는 이름은 뺀다 — 겹치면 내 것이다.
+    → (이름 목록, info {"file", "repos", "missing", "error"?}). 내 스택을 못 읽으면 빼 줄 수 없으니 이름 없이 error만 남긴다 (조용히 넘기지 않는다)."""
+    from collector.run import collect_only_targets
+    from collector.sources import github
+    from .signals import norm
+    texts, roots, raw = collect_only_targets()
+    info = {"file": raw["file"], "repos": raw["repos"], "missing": raw["missing"]}
+    try:
+        my_names, _ = collector_stack_names(targets_path)
+        found, _, _ = load_targets(targets_path)
+    except SystemExit as e:
+        return [], {**info, "error": f"내 스택을 못 읽어 팀원 스택을 가를 수 없다: {e}"}
+    my_names = list(my_names) + [s["name"] for _, root, ex in found for s in read_repo_signals(root, ex).values()]   # requirements 등 수집기가 안 읽는 것
+    mine_n = {norm(n) for n in my_names + list(mine)}
+    out, seen = [], set()
+    for repo, root in roots.items():
+        names = github.dependencies_from_claude_md(texts[repo]) if repo in texts else []
+        names += github.dependencies_from_package_json(root, raw["excludes"].get(repo) or ())
+        for n in names:
+            if norm(n) not in mine_n and norm(n) not in seen:
+                seen.add(norm(n))
+                out.append(n)
+    return out, info
 
 
 def cmd_stack_diff(a):

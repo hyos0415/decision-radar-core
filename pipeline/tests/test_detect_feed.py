@@ -118,8 +118,20 @@ def test_gate_why_and_funnel_line():
     assert why[ITEMS[1]["url"]]["reason"] == "acme-model L2 × retirement"
     assert why[ITEMS[0]["url"]]["kept_by"][0]["tier"] == "L5"
     assert "tier" not in json.dumps(json.loads((out / "feed.json").read_text(encoding="utf-8")))   # 관문 판단은 detect 입력에 넣지 않는다
-    assert detect_feed.funnel_line(f) == "수집 120 → 레인 A 6 → 관문 남김 4 → detect 입력 3 (3/4)"
+    assert detect_feed.funnel_line(f) == "수집 120 → 레인 A 6 → 관문 남김 4 (모르는 기술 1 · 분류 불가 0 · 팀원 스택 0) → detect 입력 3 (3/4)"
     assert f["gate_status"] == {"ok": 5, "unclassified": 1}
+    assert f["gate_counts"]["unknown"] == 1 and not f["gate_counts"]["warn"]          # 1/6 ≈ 17% — 기준(20%, 잠정) 아래
+
+
+def test_funnel_line_warns_and_old_funnel_unchanged():
+    old = {"items": 2290, "lane_a": 222, "kept": 8, "cap": "5/8", "to_detect": 5}       # gate_counts 없는 예전 funnel.json (데스크톱 데모)
+    assert detect_feed.funnel_line(old) == "수집 2290 → 레인 A 222 → 관문 남김 8 → detect 입력 5 (5/8)"
+    lane_a = ([{"gate": {"status": "unclassified", "technologies": []}}] * 6 + [{"gate": {"status": "unclassified", "technologies": ["x"]}}] * 2
+              + [{"gate": {"status": "other-stack", "technologies": ["next"]}}] * 4 + [{"gate": {"status": "ok", "keep": True}}] * 2)
+    f = {**old, "lane_a": 14, "kept": 2, "cap": "2/2", "to_detect": 2, "gate_counts": detect_feed.policy.gate_counts(lane_a)}
+    line = detect_feed.funnel_line(f)
+    assert line.startswith("수집 2290 → 레인 A 14 → 관문 남김 2 (모르는 기술 6 · 분류 불가 2 · 팀원 스택 4) → detect 입력 2 (2/2) — 경고: "), line
+    assert "80%" in line and "기준 20%, 잠정" in line, line                               # (6+2) / (14−4)
 
 
 def test_refuses_run_without_gate():

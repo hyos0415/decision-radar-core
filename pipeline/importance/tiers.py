@@ -7,7 +7,8 @@
 스크립트 검증 규칙 (지금 대상 repo에서 읽을 수 있는 신호만):
   S1 Dockerfile `FROM` · compose `image`로 나온 기술      → L1 (베이스 이미지·서빙 엔진·우리가 띄우는 서버, V3-1). 경로 prod
   S2 dev 그룹(requirements-dev · optional-dependencies/dependency-groups의 dev·test·lint… · poetry group)의 패키지 → L7, 경로 dev
-  S3 manifest(main 그룹)에 직접 적힌 패키지 → 언어 런타임(L0)·실행 기반(L1)일 수 없다 — 모델이 낸 L0·L1만 떨어낸다. 호스팅 등급(L2·L3)은 떨어내지 않는다
+     package.json devDependencies(signals.NPM_DEV)는 S2가 아니다 — Electron·Vite 앱은 번들되는 런타임을 거기 둔다 (HYO-122 ⑩). 모델이 정한다
+  S3 manifest(main 그룹 — package.json dependencies 포함)에 직접 적힌 패키지 → 언어 런타임(L0)·실행 기반(L1)일 수 없다 — 모델이 낸 L0·L1만 떨어낸다. 호스팅 등급(L2·L3)은 떨어내지 않는다
      (langfuse = L3 서비스 + L5 SDK 같은 두 등급이 유지돼야 한다 — importance-policy §4 예시 · §8 판정 세부). 남는 게 없으면 분류 불가
 분류 불가(unresolved)는 이번 주 후보에서 빼고 로그에 남긴다 (v1.1 U4).
 NOT_IMPLEMENTED: 구현하지 못한 신호 목록 — 보고서와 같은 내용.
@@ -24,7 +25,8 @@ from .signals import norm
 NOT_IMPLEMENTED = [
     "test 경로 신호: 테스트 코드에서만 import되는 패키지 → L7 (import 위치 스캔 + 패키지명↔모듈명 매핑이 필요 — PyYAML→yaml 같은 불일치를 못 푼다)",
     "코드 속 모델 id·서비스 URL 신호 (L2·L3 확정): 코드를 읽어야 안다 — 제품 detect의 몫",
-    "package.json · CI `uses` · Gemfile · go.mod · Cargo: 대상 repo가 아직 Python뿐이다",
+    "CI `uses` · Gemfile · go.mod · Cargo: 대상 repo에 아직 없다 (package.json은 HYO-122에서 넣었다)",
+    "package.json devDependencies가 앱에 번들되는지(운영) 개발 도구인지: 번들러 설정을 읽어야 안다 — S2를 걸지 않고 모델이 정한다 (HYO-122 ⑩)",
     "민감 경로(PII 경로) · 로컬 서빙 모델 여부: 자동으로 알 수 없어 overrides(사람 입력)로만 켠다",
     "운영 기본값 vs 비교용 호스팅 모델 구분 (importance-policy §7)",
 ]
