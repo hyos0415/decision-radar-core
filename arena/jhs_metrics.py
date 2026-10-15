@@ -7,6 +7,7 @@
   - 커뮤니티 비율@k                  상위 k 중 reddit·hn
   - Seed Recall@k                    시드를 내는 전략만 — nodes@v1 id 일치
 정의를 바꾸려면 등록 문서에 `변경`을 먼저 남긴다 (CLAUDE.md 규율 7).
+변경 (2026-10-15, #98): 버전 비교 정규화 · 정답 릴리스를 못 찾는 질의는 「판정 불가」 행 (실행을 멈추지 않는다).
 """
 import json
 import re
@@ -29,6 +30,30 @@ def parse_version(s):
     return tuple(int(x) for x in m.group(1).split(".")) if m else None
 
 
+def version_key(s):
+    """같은 버전인지 비교하는 키 (§5 변경 2026-10-15). 숫자 버전은 끝의 0을 뗀 튜플('1.3' = '1.3.0' = 'v1.3'),
+    아니면 앞 v를 뗀 소문자 문자열('B11240' = 'b11240'). 비어 있으면 None."""
+    v = parse_version(s)
+    if v is not None:
+        v = list(v)
+        while len(v) > 1 and v[-1] == 0:
+            v.pop()
+        return tuple(v)
+    s = (s or "").strip()
+    if s[:1] in ("v", "V") and len(s) > 1:
+        s = s[1:]
+    return s.casefold() or None
+
+
+def _numeric(key):
+    """순서를 정할 수 있는 키 — 숫자 버전 튜플만."""
+    return key if isinstance(key, tuple) else None
+
+
+class Undetermined(ValueError):
+    """정답 릴리스를 기계적으로 뽑지 못한 질의 — 실행을 멈추지 않고 「판정 불가」 행으로 적는다 (§5 변경 2026-10-15)."""
+
+
 def split_tag(tag):
     """'langchain-anthropic==1.7.5' → ('langchain-anthropic', '1.7.5') · 'v0.23.0' → (None, 'v0.23.0')."""
     pkg, sep, ver = (tag or "").partition("==")
@@ -36,7 +61,7 @@ def split_tag(tag):
 
 
 def release_index(docs):
-    """{doc_id: {repo, package, version, tag}} — `github-release:` 문서만. 모노레포는 tag의 `<패키지>==`로 패키지를 가른다."""
+    """{doc_id: {repo, package, version, key, tag}} — `github-release:` 문서만. 모노레포는 tag의 `<패키지>==`로 패키지를 가른다."""
     out = {}
     for d in docs:
         if not d["doc_id"].startswith("github-release:"):
@@ -46,18 +71,20 @@ def release_index(docs):
         if not repo or not tag:
             raise ValueError(f"{d['doc_id']}: 릴리스 meta에 repo·tag가 없다")
         pkg, ver = split_tag(tag)
-        out[d["doc_id"]] = {"repo": repo, "package": pkg, "version": parse_version(ver), "tag": tag}
+        out[d["doc_id"]] = {"repo": repo, "package": pkg, "version": parse_version(ver), "key": version_key(ver), "tag": tag}
     return out
 
 
 def correct_release(q, qrels_q, releases):
-    """정답 릴리스 = 등급 2인 릴리스 문서 중 버전이 expected_version과 같은 것. 하나가 아니면 gold 문제라 실패한다."""
-    want = parse_version(q.get("expected_version"))
+    """정답 릴리스 = 등급 2인 릴리스 문서 중 버전(version_key)이 expected_version과 같은 것.
+    하나가 아니면 Undetermined — 부르는 쪽이 「판정 불가」로 적는다."""
+    want = version_key(q.get("expected_version"))
     if want is None:
-        raise ValueError(f"{q['qid']}: expected_version {q.get('expected_version')!r}을 버전으로 읽을 수 없다")
-    hits = [d for d, g in qrels_q.items() if g == 2 and d in releases and releases[d]["version"] == want]
+        raise Undetermined(f"{q['qid']}: expected_version이 없다")
+    hits = [d for d, g in qrels_q.items() if g == 2 and d in releases and releases[d]["key"] == want]
     if len(hits) != 1:
-        raise ValueError(f"{q['qid']}: 정답 릴리스가 하나가 아니다 — {hits}")
+        raise Undetermined(f"{q['qid']}: expected_version {q.get('expected_version')!r}과 같은 등급 2 릴리스가 "
+                           f"하나가 아니다 — {len(hits)}개")
     return hits[0]
 
 
@@ -77,21 +104,28 @@ def recall_l2(run_q, qrels_q, k):
 
 
 def correct_version(run, qrels, queries, releases, ks=VERSION_KS, types=("C", "E")):
-    """-> {"@k": {유형: {"n", "mean", "per_query", "same_as_recall"}}}. same_as_recall = 그 유형 질의 전부에서 Recall@k(-l2)와 같다."""
+    """-> {"@k": {유형: {"n", "mean", "per_query", "same_as_recall", "undetermined"}}}.
+    same_as_recall = 판정된 질의 전부에서 Recall@k(-l2)와 같다. 판정 불가 질의는 n·mean·same_as_recall에서 빼고 이유를 적는다."""
     out = {}
     for k in ks:
         by_type = {}
         for t in types:
-            per_q, same = {}, True
+            per_q, undetermined, same = {}, {}, True
             for q in (q for q in queries if q["type"] == t and q["qid"] in qrels):
                 qid = q["qid"]
-                c = correct_release(q, qrels[qid], releases)
+                try:
+                    c = correct_release(q, qrels[qid], releases)
+                except Undetermined as e:
+                    undetermined[qid] = str(e)
+                    continue
                 hit = 1.0 if (rank_of(run.get(qid, {}), c) or k + 1) <= k else 0.0
                 per_q[qid] = hit
                 same = same and hit == recall_l2(run.get(qid, {}), qrels[qid], k)
-            if per_q:
-                by_type[t] = {"n": len(per_q), "mean": round(sum(per_q.values()) / len(per_q), 4),
-                              "per_query": per_q, "same_as_recall": same}
+            if per_q or undetermined:
+                by_type[t] = {"n": len(per_q),
+                              "mean": round(sum(per_q.values()) / len(per_q), 4) if per_q else None,
+                              "per_query": per_q, "same_as_recall": same if per_q else None,
+                              "undetermined": undetermined}
         out[f"@{k}"] = by_type
     return out
 
@@ -99,18 +133,25 @@ def correct_version(run, qrels, queries, releases, ks=VERSION_KS, types=("C", "E
 def version_confusion(run, qrels, queries, releases, k=K):
     """C 질의마다 사례 한 줄. 형제 = 같은 repo·같은 패키지의 다른 버전 릴리스 중 이 질의 등급 0·판정 없음.
     위험 = 이전 형제가 상위 k 안에서 정답보다 위 (정답이 상위 k 밖이면 상위 k의 이전 형제는 모두 위험).
-    이후 형제는 적기만 한다. 버전을 읽을 수 없는 형제는 order_unknown — 사람이 본다."""
+    이후 형제는 적기만 한다. 숫자 버전이 아니거나 정답과 같은 버전인 형제는 order_unknown — 사람이 본다.
+    정답 릴리스를 못 찾은 질의는 「판정 불가」 행 (risk None — 위험 수에 넣지 않는다)."""
     rows = []
     for q in (q for q in queries if q["type"] == "C" and q["qid"] in qrels):
         qid, run_q = q["qid"], run.get(q["qid"], {})
-        c = correct_release(q, qrels[qid], releases)
+        try:
+            c = correct_release(q, qrels[qid], releases)
+        except Undetermined as e:
+            rows.append({"qid": qid, "correct": None, "correct_rank": None, "earlier": [], "later": [], "order_unknown": [],
+                         "risk": None, "risk_docs": [], "note": f"판정 불가 — {e}"})
+            continue
         cr = releases[c]
         sib = [d for d, r in releases.items()
                if d != c and r["repo"] == cr["repo"] and r["package"] == cr["package"] and qrels[qid].get(d, 0) == 0]
         groups = {"earlier": [], "later": [], "order_unknown": []}
+        ck = _numeric(cr["key"])
         for d in sib:
-            v = releases[d]["version"]
-            g = "order_unknown" if v is None or cr["version"] is None else "earlier" if v < cr["version"] else "later"
+            v = _numeric(releases[d]["key"])
+            g = "order_unknown" if v is None or ck is None or v == ck else "earlier" if v < ck else "later"
             groups[g].append({"doc": d, "tag": releases[d]["tag"], "rank": rank_of(run_q, d)})
         for g in groups.values():
             g.sort(key=lambda x: (x["rank"] is None, x["rank"] or 0, x["doc"]))
@@ -119,7 +160,8 @@ def version_confusion(run, qrels, queries, releases, k=K):
         risky = [s["doc"] for s in groups["earlier"] if s["rank"] is not None and s["rank"] <= k and s["rank"] < c_eff]
         rows.append({"qid": qid, "correct": c, "correct_rank": c_rank, **groups,
                      "risk": bool(risky), "risk_docs": risky, "note": "형제 없음" if not sib else ""})
-    return {"k": k, "rows": rows, "risk_qids": [r["qid"] for r in rows if r["risk"]]}
+    return {"k": k, "rows": rows, "risk_qids": [r["qid"] for r in rows if r["risk"]],
+            "undetermined_qids": [r["qid"] for r in rows if r["risk"] is None]}
 
 
 # --- 노드 어휘 nodes@v1 ---------------------------------------------------------------------------------------------
@@ -308,7 +350,7 @@ def compute(run, rep_chunks, qrels, queries, docs, chunk_text, nodes):
     releases = release_index(docs)
     st = {d["doc_id"]: d["source_type"] for d in docs}
     return {
-        "definition": "docs/design/retrieval-arena.md §5 변경 (2026-10-13)",
+        "definition": "docs/design/retrieval-arena.md §5 변경 (2026-10-13) · 변경 (2026-10-15)",
         "nodes_version": nodes.version,
         "correct_version_at_k": correct_version(run, qrels, queries, releases),
         "version_confusion": version_confusion(run, qrels, queries, releases),

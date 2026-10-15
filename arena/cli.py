@@ -12,6 +12,7 @@ import hashlib
 import json
 import sys
 import time
+import traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -174,6 +175,16 @@ def build_cost(system, embedders, strat):
     }
 
 
+def jhs_block(*a):
+    """JHS 보조 지표 -> (블록, 오류 문자열 | None). 계산이 예외로 실패해도 헤드라인 결과는 저장되게
+    오류를 블록에 적어 돌려준다 — 부르는 쪽이 저장한 뒤 실패 코드로 끝낸다 (§5 변경 2026-10-15)."""
+    try:
+        return jhs_metrics.compute(*a), None
+    except Exception as e:                                   # noqa: BLE001 — 숨기지 않는다: 저장 뒤 SystemExit(1)
+        err = f"{type(e).__name__}: {e}"
+        return {"error": err, "traceback": traceback.format_exc()}, err
+
+
 def cmd_nodes_check(args):
     """nodes@v1 확인 — 별칭이 출처 문서에 글자 그대로 있나 · gold 질의 노드가 어휘에 연결되나.
     test 질의는 연결 안 된 수만 센다(이름을 보고 별칭을 고치지 않는다 — §5 변경 2026-10-13)."""
@@ -229,7 +240,7 @@ def cmd_run(args):
     run, lat = harness.run_queries(strat, queries, chunk_to_doc, k_docs=args.k, chunk_k=args.chunk_k, rep_chunks=rep_chunks)
     metrics = harness.compute_metrics(run, qrels, queries, {d["doc_id"]: d["source_type"] for d in docs})
     stack_text = {c["chunk_id"]: c["text"] for c in chunks if c["doc_id"].startswith("stack:")}
-    metrics["jhs"] = jhs_metrics.compute(run, rep_chunks, qrels, queries, docs, stack_text, nodes)
+    metrics["jhs"], jhs_error = jhs_block(run, rep_chunks, qrels, queries, docs, stack_text, nodes)
     system = {
         "index_build_seconds": round(build_secs, 3),
         "chunking_seconds": round(chunk_secs, 3),
@@ -274,6 +285,9 @@ def cmd_run(args):
     out = harness.save_results(args.results, key, run, metrics, system, env, extra={"rep_chunks.json": rep_chunks})
     print(f"결과: {out}")
     print(json.dumps({"overall": metrics["overall"], "latency_ms": system["query_latency_ms"]}, ensure_ascii=False))
+    if jhs_error:
+        print(f"JHS 보조 지표 실패 — 헤드라인 결과는 저장했다 ({out / 'metrics.json'}의 jhs.error): {jhs_error}", file=sys.stderr)
+        raise SystemExit(1)
 
 
 def main(argv=None):
