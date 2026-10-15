@@ -64,6 +64,8 @@ python pipeline/tests/test_profile_filter.py                      # 오프라인
 ```bash
 # 1) 스택의 기술 등급 — 스택이 바뀔 때만. 스크립트 검증(Dockerfile FROM·dev 그룹·manifest)이 모델을 덮는다
 python -m pipeline.importance classify-stack --targets --extra pipeline/importance/stack-extra.json --tiers tiers.json --model stub [--plan]   # --targets = 내 대상 전부 (env RADAR_TARGETS 또는 ../adr/radar-targets.json), 각자의 exclude 적용 · 폴더 없는 대상은 출력
+#   질의 = 매니페스트 신호 + 대상 repo CLAUDE.md 「의존성 → component」 표(수집기와 같은 파서): 표의 행은 usage에 붙고, 매니페스트 밖 이름(llama.cpp · litellm …)은
+#   표에서 바로 질의가 된다 (npm 행은 usage만). stack-extra.json은 「외부 모델·서비스」 몫(모델 id · 서비스)만 (HYO-122 PR 4)
 python -m pipeline.importance stack-diff --tiers tiers.json --targets      # 수집기가 보는 스택 vs 등급 파일 — 수집기만 · 관문만 · 양쪽
 python -m pipeline.importance override --tiers tiers.json --tech PyYAML --set-tiers L6      # 사람이 고친 값 (최우선, 재분류해도 유지)
 # 2) 레인 A에 붙이기 (gate: keep/drop + 어느 행 때문인지, 5/N 상한)
@@ -91,7 +93,7 @@ python -m pipeline.detect_feed --run pipeline/out/w41 --out pipeline/out/w41/det
 python pipeline/tests/test_detect_feed.py      # 오프라인 — radar.py feed·fetch 왕복 + 변이 3개
 ```
 
-- `funnel.json` = 건수(수집 → 레인 A → 관문 남김 → detect 입력) + 관문이 판정 못 한 것(`gate_counts`: 모르는 기술 · 분류 불가 · 팀원 스택(`other-stack`) · 오류). 실행 요약의 첫 줄이 된다 (`run_detect` · 데스크톱 `_summarize_detect`). (모르는 기술+분류 불가)/(레인 A−팀원 스택)이 `policy.UNKNOWN_WARN_RATIO`(20%, 잠정)를 넘으면 같은 줄에 경고 (HYO-122)
+- `funnel.json` = 건수(수집 → 레인 A → 관문 남김 → detect 입력) + 관문이 판정 못 한 것(`gate_counts`: 모르는 기술 · 분류 불가 · 팀원 스택(`other-stack`) · 오류). 실행 요약의 첫 줄이 된다 (`run_detect` · 데스크톱 `_summarize_detect`). (모르는 기술+분류 불가)/(레인 A−팀원 스택)이 `policy.UNKNOWN_WARN_RATIO`(5%, 잠정 — 2026-10-15 20%에서 변경, 다시 잰 정상 비율 W41 0.9% · W42 0.8%)를 넘으면 같은 줄에 경고 (HYO-122)
 - `gate.json` = url → 왜 남았나(`kept_by`). **detect 입력(feed)에는 넣지 않는다** — 모델 판단을 흔들지 않게. 화면의 「왜 왔나」 칸(HYO-85)이 읽는다
 - 버린 이유(결정표의 행)는 옮기지 않는다 — `lane_a.json`·`gate-calls.jsonl`에 있다 (깔때기 화면은 만들지 않는다, 10/8)
 - manifest는 수집기와 같은 리더(`collector/stack.py`)로 읽는다 — git 추적 파일만, 대상별 `exclude`(radar-targets.json) 적용. `--repo`만 주면 exclude 없이 그 폴더의 추적 파일을 읽는다 (HYO-122)

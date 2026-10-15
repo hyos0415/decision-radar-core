@@ -20,7 +20,9 @@ def _tokens(name):
 
 
 def resolve_technologies(item, names, vendor_terms=None):
-    """항목 → 스택 기술 이름들. ① meta.dependency ② 벤더 이름(vendors.yaml의 match 단어)이 든 기술 ③ 제목에 이름이 나오는 기술.
+    """항목 → 스택 기술 이름들. 의존성 릴리스(meta.dependency)는 그 의존성 하나로만 본다 — 모르면 [] (HYO-122 PR 4:
+    `openai/openai-python` 릴리스에 제목의 python이, `langchain-ai/langgraph` 릴리스에 langchain이 붙어 다른 기술의 등급으로 판정되던 것.
+    팀원 스택 쪽 Gate._other_stack과 같은 규칙). 그 밖의 소식은 ① 벤더 이름(vendors.yaml의 match 단어)이 든 기술 ② 제목에 이름이 나오는 기술.
     못 찾으면 []. 한 소식이 여러 기술에 걸치면 전부 평가하고 하나라도 남기면 남긴다."""
     meta = item.get("meta") or {}
     by_norm = {norm(n): n for n in names}
@@ -31,8 +33,8 @@ def resolve_technologies(item, names, vendor_terms=None):
             out.append(n)
 
     dep = meta.get("dependency")
-    if dep and norm(dep) in by_norm:
-        add(by_norm[norm(dep)])
+    if dep:
+        return [by_norm[norm(dep)]] if norm(dep) in by_norm else []
     vendor = meta.get("vendor")
     if vendor:
         terms = {t.lower() for t in (vendor_terms or {}).get(vendor, [vendor])}

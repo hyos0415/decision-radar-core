@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 
 from .backends import TechQuery, make_backend
-from .signals import NPM_DEV, read_repo_signals
+from .signals import NPM_DEV, norm, read_repo_signals
 from .tiers import NOT_IMPLEMENTED, TierStore
 
 
@@ -46,11 +46,32 @@ def load_targets(path=None):
     return found, missing, p
 
 
+def claude_md_rows(root):
+    """대상 repo 루트 CLAUDE.md 「의존성 → component」 표의 행 (수집기와 같은 파서 · 같은 파일). 없으면 []."""
+    from collector.sources import github
+    md = Path(root) / "CLAUDE.md"
+    return github.dependency_rows_from_claude_md(md.read_text(encoding="utf-8")) if md.exists() else []
+
+
 def queries_from_repos(repos, extra=None):
-    """repos: 폴더 경로 또는 (경로, exclude) 쌍."""
-    qs = []
+    """repos: 폴더 경로 · (경로, exclude) · (경로, exclude, repo 이름).
+
+    매니페스트 신호 + 대상 repo CLAUDE.md 「의존성 → component」 표 (HYO-122 ③ ④):
+    - 매니페스트에 있는 이름은 표의 행(첫 칸 · component)을 usage에 덧붙인다 — 매니페스트 줄만으로는 쓰임새를 몰라 분류 불가가 나던 것 (langfuse 등)
+    - 매니페스트에 없는 표의 이름(llama.cpp · litellm(별도 venv) · vLLM …)은 그 행으로 질의를 만든다 (신호 없음 — 모델이 정한다).
+      수집기도 같은 표를 읽으니 「수집기와 관문의 스택이 같다」가 구조로 지켜진다. npm 행은 쓰임새만 주고 질의는 만들지 않는다 — package.json 신호가 있다
+    한 이름이 여러 repo에 있으면 신호는 처음 것, usage에는 repo마다의 행을 모두 붙인다."""
+    qs, notes, table_only = [], {}, []
     for repo in repos:
-        repo, exclude = repo if isinstance(repo, tuple) else (repo, ())
+        repo, exclude, label = (tuple(repo) + (None,))[:3] if isinstance(repo, tuple) else (repo, (), None)
+        label = label or Path(repo).name
+        for row in claude_md_rows(repo):
+            for n in row["names"]:
+                note = f"{label} CLAUDE.md 「의존성 → component」: {row['cell']} → {row['component']}"
+                if note not in notes.setdefault(norm(n), []):
+                    notes[norm(n)].append(note)
+                if not row["npm"]:                       # npm 행은 쓰임새만 준다 — 질의는 package.json 신호로
+                    table_only.append(TechQuery(name=n, usage="", source=f"{label}/CLAUDE.md", signals={}))
         for key, s in read_repo_signals(repo, exclude).items():
             if s["image"]:
                 usage, source = f"컨테이너 이미지 ({s['image_ref']})", s["image_ref"]
@@ -59,13 +80,18 @@ def queries_from_repos(repos, extra=None):
             else:
                 usage, source = f"{s['manifest']} 직접 의존성 ({s['group']})", s["manifest"]
             qs.append(TechQuery(name=s["name"], usage=usage, source=source, signals={k: s[k] for k in ("manifest", "group", "pin", "image")}))
+    qs += table_only                                     # 매니페스트 뒤 — 같은 이름이면 매니페스트 신호가 이긴다
     for e in extra or []:
         qs.append(TechQuery(name=e["name"], usage=e.get("usage", ""), source=e.get("source", ""), signals=e.get("signals") or {}))
     seen, out = set(), []
     for q in qs:
-        if q.name.lower() not in seen:
-            seen.add(q.name.lower())
-            out.append(q)
+        if norm(q.name) in seen:
+            continue
+        seen.add(norm(q.name))
+        rows = notes.get(norm(q.name))
+        if rows:
+            q = TechQuery(name=q.name, usage=" · ".join(([q.usage] if q.usage else []) + rows), source=q.source, signals=q.signals)
+        out.append(q)
     return out
 
 
@@ -111,7 +137,7 @@ def classify(tiers, model, *, repos=(), targets=None, extra=None, real_api=False
     if targets:
         found, missing, path = load_targets(None if targets is True else targets)
         rep["targets"], rep["missing_targets"] = str(path), [{"repo": n, "path": str(r)} for n, r in missing]   # 조용히 빼지 않는다
-        repos += [(root, ex) for _, root, ex in found]
+        repos += [(root, ex, name) for name, root, ex in found]
     qs = queries_from_repos(repos, extra or [])
     store = TierStore(tiers)
     todo = [q for q in qs if not store.human_tiers(q.name) and (refresh or store.needs_classify(q))]
