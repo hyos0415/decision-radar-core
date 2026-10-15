@@ -123,7 +123,7 @@ def cmd_run(a):
         from .importance.cli import build_gate
         if not a.tiers:
             raise SystemExit("--gate에는 --tiers(등급 파일)가 필요하다")
-        gate, backend = build_gate(a.gate, a.tiers, real_api=a.real_api, call_log=out / "gate-calls.jsonl", limit=a.gate_limit)
+        gate, backend = build_gate(a.gate, a.tiers, real_api=a.real_api, call_log=out / "gate-calls.jsonl", limit=a.gate_limit, targets=a.targets)
     try:
         res = run_filter(items, profile, strategies, stack["terms"], a.only_new, gate=gate)
     finally:
@@ -138,13 +138,19 @@ def cmd_run(a):
                 "weights": {"PRIORITY_WEIGHT": keyword_match.PRIORITY_WEIGHT, "MATCH_BASE": keyword_match.MATCH_BASE,
                             "EXTRA_TERM": keyword_match.EXTRA_TERM, "EXTRA_TERM_CAP": keyword_match.EXTRA_TERM_CAP,
                             "NOT_PENALTY": keyword_match.NOT_PENALTY, "EXCLUDE_PENALTY": keyword_match.EXCLUDE_PENALTY},
-                "lane_a_gate": ({"model": a.gate, "tiers": str(a.tiers), **res["gate_summary"], "calls": backend.log.totals()}
+                "lane_a_gate": ({"model": a.gate, "tiers": str(a.tiers), **res["gate_summary"], "calls": backend.log.totals(),
+                                 "other_stack": getattr(gate, "other_info", None)}
                                 if gate is not None else "not-implemented (--gate로 켠다: pipeline.importance)")}
     write_json(out / "run.json", manifest)
     write_json(out / "profile.resolved.json", profile)
     c = res["counts"]
     print(f"profile@v{profile['version']} · 항목 {c['items']} → 레인 A {c['lane_a']} · 레인 B 후보 {c['lane_b_candidates']} "
           f"(페이지 원본 제외 {c['skipped_pages']}) · 순위에 오른 항목 {c['lane_b_ranked']}")
+    if gate is not None:
+        from .detect_feed import funnel_line
+        s = res["gate_summary"]
+        print(funnel_line({"items": c["items"], "lane_a": c["lane_a"], "kept": s["total_kept"], "cap": s["label"],
+                           "gate_counts": s["status_counts"], "to_detect": len(s["shown"])}))
     print(f"-> {out}")
     return 0
 

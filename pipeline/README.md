@@ -91,7 +91,7 @@ python -m pipeline.detect_feed --run pipeline/out/w41 --out pipeline/out/w41/det
 python pipeline/tests/test_detect_feed.py      # 오프라인 — radar.py feed·fetch 왕복 + 변이 3개
 ```
 
-- `funnel.json` = 건수(수집 → 레인 A → 관문 남김 → detect 입력). 실행 요약의 첫 줄이 된다 (`run_detect` · 데스크톱 `_summarize_detect`)
+- `funnel.json` = 건수(수집 → 레인 A → 관문 남김 → detect 입력) + 관문이 판정 못 한 것(`gate_counts`: 모르는 기술 · 분류 불가 · 팀원 스택(`other-stack`) · 오류). 실행 요약의 첫 줄이 된다 (`run_detect` · 데스크톱 `_summarize_detect`). (모르는 기술+분류 불가)/(레인 A−팀원 스택)이 `policy.UNKNOWN_WARN_RATIO`(20%, 잠정)를 넘으면 같은 줄에 경고 (HYO-122)
 - `gate.json` = url → 왜 남았나(`kept_by`). **detect 입력(feed)에는 넣지 않는다** — 모델 판단을 흔들지 않게. 화면의 「왜 왔나」 칸(HYO-85)이 읽는다
 - 버린 이유(결정표의 행)는 옮기지 않는다 — `lane_a.json`·`gate-calls.jsonl`에 있다 (깔때기 화면은 만들지 않는다, 10/8)
 - manifest는 수집기와 같은 리더(`collector/stack.py`)로 읽는다 — git 추적 파일만, 대상별 `exclude`(radar-targets.json) 적용. `--repo`만 주면 exclude 없이 그 폴더의 추적 파일을 읽는다 (HYO-122)

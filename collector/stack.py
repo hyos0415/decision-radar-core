@@ -1,4 +1,4 @@
-"""스택 manifest 공용 리더 (HYO-122) — 수집기(package.json)와 관문(requirements·Dockerfile·compose)이 같은 파일 목록을 본다.
+"""스택 manifest 공용 리더 (HYO-122) — 수집기(package.json)와 관문(requirements·package.json·Dockerfile·compose)이 같은 파일 목록을 본다.
 
 규칙: git이 추적하는 파일만 (untracked·ignored 사본이 섞이지 않게) + 대상별 `exclude`. git이 아니면 폴더를 걷되 info에 이유를 남긴다.
 """
@@ -68,7 +68,7 @@ def manifest_files(root, exclude=()):
 
 
 def package_json_entries(root, exclude=()):
-    """root의 package.json들 → [{name, file(상대 POSIX), section}]. 파일 순 → dependencies 먼저 → 파일 안 순서."""
+    """root의 package.json들 → [{name, file(상대 POSIX), section, spec}]. 파일 순 → dependencies 먼저 → 파일 안 순서. spec = 버전 문자열(관문 pin 신호)."""
     root = Path(root)
     paths, _ = manifest_files(root, exclude)
     out = []
@@ -84,6 +84,6 @@ def package_json_entries(root, exclude=()):
         rel = f.relative_to(root).as_posix()
         for sect in ("dependencies", "devDependencies"):
             deps = pkg.get(sect)
-            for n in (deps if isinstance(deps, dict) else {}):
-                out.append({"name": n, "file": rel, "section": sect})
+            for n, spec in (deps.items() if isinstance(deps, dict) else ()):
+                out.append({"name": n, "file": rel, "section": sect, "spec": spec if isinstance(spec, str) else ""})
     return out

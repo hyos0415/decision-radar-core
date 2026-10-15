@@ -21,6 +21,7 @@ import re
 import sys
 from pathlib import Path
 
+from .importance import policy
 from .profile_filter import read_items, write_json
 
 SUMMARY_CHARS = 1500    # triage 프롬프트에 그대로 들어간다. 전문은 snapshot_fetch로
@@ -83,13 +84,23 @@ def funnel(manifest, lane_a, chosen):
         s = (e.get("gate") or {}).get("status") or "none"
         statuses[s] = statuses.get(s, 0) + 1
     return {"snapshot": manifest.get("snapshot"), "gate_model": g.get("model"), "items": c.get("items"), "lane_a": c.get("lane_a"),
-            "gate_status": statuses, "kept": g.get("total_kept"), "cap": g.get("label"), "to_detect": len(chosen)}
+            "gate_status": statuses, "gate_counts": policy.gate_counts(lane_a), "kept": g.get("total_kept"), "cap": g.get("label"),
+            "to_detect": len(chosen)}
 
 
 def funnel_line(f):
-    """실행 요약 한 줄 — 데스크톱 `_summarize_detect`와 run_detect가 같이 쓴다."""
+    """실행 요약 한 줄 — 데스크톱 `_summarize_detect`와 run_detect가 같이 쓴다.
+    관문이 판정 못 한 건수(모르는 기술 · 분류 불가 · 팀원 스택)를 같은 줄에 보이고, 비율이 기준을 넘으면 경고를 붙인다 (HYO-122 ⑤ — 조용히 빠지지 않게).
+    gate_counts가 없는 예전 funnel.json은 예전 줄 그대로."""
     cap = f" ({f['cap']})" if f.get("cap") else ""
-    return f"수집 {f.get('items')} → 레인 A {f.get('lane_a')} → 관문 남김 {f.get('kept')} → detect 입력 {f.get('to_detect')}{cap}"
+    kept = f"관문 남김 {f.get('kept')}"
+    gc = f.get("gate_counts")
+    if gc:
+        kept += f" (모르는 기술 {gc['unknown']} · 분류 불가 {gc['unresolved']} · 팀원 스택 {gc['other_stack']}" + (f" · 오류 {gc['error']}" if gc.get("error") else "") + ")"
+    line = f"수집 {f.get('items')} → 레인 A {f.get('lane_a')} → {kept} → detect 입력 {f.get('to_detect')}{cap}"
+    if gc and gc.get("warn"):
+        line += (f" — 경고: 관문이 판정 못 한 소식 {gc['ratio']:.0%} (모르는 기술+분류 불가 / 팀원 스택 뺀 레인 A — 기준 {gc['warn_ratio']:.0%}, 잠정)")
+    return line
 
 
 def build(run_dir, out_dir, snapshot=None, all_kept=False):

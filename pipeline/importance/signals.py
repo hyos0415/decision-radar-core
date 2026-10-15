@@ -1,8 +1,9 @@
 """대상 repo에서 결정론적으로 읽을 수 있는 신호 (importance-policy §4 「등급을 매기는 주체」의 스크립트 검증 재료).
 
 지금 구현한 것: requirements*.txt · pyproject.toml(dependencies · optional-dependencies · dependency-groups · poetry group) ·
-Dockerfile `FROM` · compose `image`.
-신호 칸: manifest(파일 이름|None) · group("main"|"dev") · pin("pinned"|"range"|"floating") · image(bool) · image_ref.
+package.json(dependencies · devDependencies, HYO-122) · Dockerfile `FROM` · compose `image`.
+신호 칸: manifest(파일 이름|None) · group("main"|"dev"|NPM_DEV) · pin("pinned"|"range"|"floating") · image(bool) · image_ref.
+NPM_DEV = package.json devDependencies — dev 그룹(S2 → L7)이 아니다. Electron·Vite 앱은 번들되는 런타임(electron·react)을 devDependencies에 둔다 (HYO-122 ⑩).
 못 한 것: tiers.py의 NOT_IMPLEMENTED.
 """
 import fnmatch
@@ -13,6 +14,8 @@ from pathlib import Path
 from collector import stack
 
 DEV_GROUPS = {"dev", "test", "tests", "lint", "docs", "ci", "typing", "style", "format"}
+NPM_DEV = "npm-dev"
+_GROUP_RANK = {"main": 0, NPM_DEV: 1, "dev": 2}    # 한 이름이 여러 곳에 있으면 운영 쪽이 이긴다 (npm-dev는 운영일 수도 있어 dev보다 앞)
 _REQ = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)\s*(\[[^\]]*\])?\s*((?:===|==|~=|!=|>=|<=|>|<)[^;#\s,]*(?:\s*,\s*(?:===|==|~=|!=|>=|<=|>|<)[^;#\s,]*)*)?")
 _FROM = re.compile(r"^\s*FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?", re.I)
 
@@ -42,7 +45,7 @@ def parse_requirement(line):
 def _add(out, name, manifest, group, pin):
     key = norm(name)
     old = out.get(key)
-    if old and old["group"] == "main":    # 한 기술이 main에도 있으면 main이 이긴다 (운영에 들어간다)
+    if old and (old["group"] == "main" or _GROUP_RANK.get(old["group"], 9) < _GROUP_RANK.get(group, 9)):    # main이 이긴다 (운영에 들어간다)
         return
     out[key] = {"name": name, "manifest": manifest, "group": group, "pin": pin, "image": False, "image_ref": None}
 
@@ -89,6 +92,25 @@ def read_python_manifests(repo, exclude=()):
     return out
 
 
+_NPM_EXACT = re.compile(r"^=?v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)*$")
+
+
+def _npm_pin(spec):
+    """package.json 버전 문자열 → pin. `1.2.3`만 고정, `^`·`~`·범위·태그 아닌 것은 range, 비었거나 `*`·`latest`는 떠 있음."""
+    s = (spec or "").strip()
+    if s in ("", "*", "x", "latest"):
+        return "floating"
+    return "pinned" if _NPM_EXACT.match(s) else "range"
+
+
+def read_package_json(repo, exclude=(), out=None):
+    """package.json(git 추적 − exclude — 수집기와 같은 목록) → 신호. dependencies → main, devDependencies → NPM_DEV."""
+    out = {} if out is None else out
+    for e in stack.package_json_entries(repo, exclude):
+        _add(out, e["name"], "package.json", "main" if e["section"] == "dependencies" else NPM_DEV, _npm_pin(e.get("spec")))
+    return out
+
+
 def _image_pin(ref):
     tag = ref.rsplit(":", 1)[1] if ":" in ref.rsplit("/", 1)[-1] else ""
     return "floating" if tag in ("", "latest") else "pinned"
@@ -123,8 +145,8 @@ def read_images(repo, exclude=()):
 
 
 def read_repo_signals(repo, exclude=()):
-    """repo 폴더 → {정규화 이름: 신호}. 패키지와 이미지를 함께 (이미지는 이름 그대로 소문자 키)."""
-    sig = read_python_manifests(repo, exclude)
+    """repo 폴더 → {정규화 이름: 신호}. 패키지(Python·npm)와 이미지를 함께 (이미지는 이름 그대로 소문자 키)."""
+    sig = read_package_json(repo, exclude, read_python_manifests(repo, exclude))
     for ref, s in read_images(repo, exclude).items():
         sig[ref.lower()] = s
     return sig

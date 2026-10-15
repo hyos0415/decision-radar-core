@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from collector import stack  # noqa: E402
 from pipeline import profile_filter  # noqa: E402
 from pipeline import interest_profile as ip  # noqa: E402
-from pipeline.importance import agents_backend, backends, evaluate, gate as gate_mod, policy, signals, tiers  # noqa: E402
+from pipeline.importance import agents_backend, backends, cli as cli_mod, evaluate, gate as gate_mod, policy, signals, tiers  # noqa: E402
 from pipeline.importance.backends import (Backend, BoundaryError, CallLog, LabelAnswer, NewsQuery, StubBackend,  # noqa: E402
                                            TechQuery, labels_from_scores, make_backend)
 from pipeline.importance.tiers import TierStore  # noqa: E402
@@ -252,14 +252,131 @@ def test_classify_stack_targets_reads_all_targets_with_excludes_and_reports_miss
         t = _targets_file(d)
         rc, out = _cli(["classify-stack", "--targets", str(t), "--tiers", str(Path(d) / "tiers.json"), "--plan"])
         assert rc == 0 and "대상 폴더 없음: ghost" in out, out
-        assert "기술 4개 중 새로 분류할 것 4개" in out, out                      # requests·httpx·python:3.12-slim(a) + pydantic(b) — torch(제외)는 없다
+        assert "기술 5개 중 새로 분류할 것 5개" in out, out                      # requests·httpx·python:3.12-slim·react(package.json)(a) + pydantic(b) — torch(제외)는 없다
         old = os.environ.get("RADAR_TARGETS")
         os.environ["RADAR_TARGETS"] = str(t)                                      # 값 없는 --targets는 env를 따른다
         try:
             rc, out2 = _cli(["classify-stack", "--targets", "--tiers", str(Path(d) / "tiers.json"), "--plan"])
         finally:
             os.environ.pop("RADAR_TARGETS") if old is None else os.environ.__setitem__("RADAR_TARGETS", old)
-        assert rc == 0 and "기술 4개" in out2, out2
+        assert rc == 0 and "기술 5개" in out2, out2
+
+
+def _npm_repo(d):
+    """내 repo: requirements(openai main · eslint dev) + package.json(next·react·openai는 dependencies, electron·prettier·eslint는 devDependencies)
+    + demo/package.json(supabase — exclude 대상)."""
+    d = Path(d)
+    _write(d / "requirements.txt", "openai\n")
+    _write(d / "requirements-dev.txt", "eslint==1\n")
+    _write(d / "package.json", json.dumps({"dependencies": {"next": "15.1.0", "react": "^19.0.0"},
+                                           "devDependencies": {"electron": "39.0.0", "prettier": "*", "eslint": "~9", "openai": "^5"}}))
+    _write(d / "demo" / "package.json", json.dumps({"dependencies": {"supabase": "2"}}))
+    _git_add(d, "requirements.txt", "requirements-dev.txt", "package.json", "demo/package.json")
+    return d
+
+
+def test_package_json_signals_and_dev_dependencies_are_not_s2():
+    from pipeline.importance.cli import queries_from_repos
+    with tempfile.TemporaryDirectory() as d:
+        _npm_repo(d)
+        s = signals.read_repo_signals(d, ["demo"])
+        qs = {q.name: q for q in queries_from_repos([(Path(d), ["demo"])])}
+    g = lambda n: (s[n]["manifest"], s[n]["group"], s[n]["pin"])   # noqa: E731
+    assert g("next") == ("package.json", "main", "pinned") and g("react") == ("package.json", "main", "range")
+    assert g("electron") == ("package.json", signals.NPM_DEV, "pinned") and g("prettier")[1:] == (signals.NPM_DEV, "floating")
+    assert g("openai") == ("requirements.txt", "main", "floating")          # main이 이긴다 (Python main vs npm devDependencies)
+    assert g("eslint") == ("package.json", signals.NPM_DEV, "range")        # npm-dev가 dev를 이긴다 (운영일 수도 있다)
+    assert "supabase" not in s                                               # exclude는 package.json에도 (수집기와 같은 목록)
+    # ⑩ devDependencies는 S2(→ L7)가 아니다 — Electron 앱의 런타임이 L7로 떨어지면 안 된다. 모델이 정한다
+    v = tiers.verify(["L1"], False, qs["electron"].signals)
+    assert v["tiers"] == ["L1"] and v["path"] == "prod" and v["mismatch"] is None, v
+    assert tiers.verify(["L7"], False, qs["prettier"].signals)["tiers"] == ["L7"]
+    assert tiers.verify([], True, qs["electron"].signals)["unresolved"]      # 모델이 모르면 스크립트도 정하지 않는다
+    # dependencies는 S3 — L0·L1만 떨어낸다
+    v = tiers.verify(["L1", "L4"], False, qs["next"].signals)
+    assert v["tiers"] == ["L4"] and v["mismatch"]["rule"].startswith("S3"), v
+    assert "devDependencies" in qs["electron"].usage and qs["next"].usage == "package.json 직접 의존성 (main)"
+
+
+def test_gate_other_stack_is_counted_apart_and_needs_no_model_call():
+    st = _store(pydantic={"tiers": ["L4"]})
+    be = StubBackend(changes={"p": ["breaking"]})
+    g = gate_mod.Gate(be, st, other_stack=["next", "google-auth-library", "pydantic"])
+    r = g(_item("t", "google-auth-library v10", tech="google-auth-library"))
+    assert r["status"] == "other-stack" and not r["keep"] and r["technologies"] == ["google-auth-library"] and "팀원 스택" in r["reason"], r
+    assert g(_item("n", "next 15.2 released"))["status"] == "other-stack"                 # 의존성 칸이 없으면 제목으로
+    u = g(_item("e", "electron 39 vs next", tech="electron"))                              # 내 스택의 모르는 기술 — 제목에 팀원 기술이 섞여도
+    assert u["status"] == "unclassified" and u["technologies"] == [], u
+    assert g(_item("p", "pydantic breaking", tech="pydantic"))["status"] == "ok"           # 양쪽에 있으면 내 것
+    assert len(be.log.calls) == 1                                                          # 팀원 스택은 모델을 부르지 않는다
+    assert gate_mod.Gate(be, st)(_item("t", "x", tech="google-auth-library"))["status"] == "unclassified"   # 팀원 스택을 안 주면 예전 그대로
+
+
+def _ga(status, keep=False, techs=()):
+    return {"id": status, "gate": {"keep": keep, "status": status, "technologies": list(techs)}}
+
+
+def test_gate_counts_and_warning_ratio():
+    entries = ([_ga("other-stack")] * 3 + [_ga("unclassified"), _ga("unclassified", techs=["weird"]), _ga("error")]
+               + [_ga("ok", True), _ga("ok", True), _ga("ok"), _ga("ok")])
+    c = policy.gate_counts(entries)
+    assert (c["lane_a"], c["kept"], c["unknown"], c["unresolved"], c["other_stack"], c["error"]) == (10, 2, 1, 1, 3, 1), c
+    assert abs(c["ratio"] - 2 / 7) < 1e-12 and c["warn"] and c["warn_ratio"] == policy.UNKNOWN_WARN_RATIO   # 분모에서 팀원 스택을 뺀다
+    assert not policy.gate_counts([_ga("unclassified")] + [_ga("ok")] * 4)["warn"]          # 정확히 20%는 경고 아님 (넘어야)
+    assert policy.gate_counts([_ga("unclassified")] + [_ga("ok")] * 3)["warn"]
+    allother = policy.gate_counts([_ga("other-stack")] * 2)
+    assert allother["ratio"] is None and not allother["warn"]
+    assert policy.gate_counts([], 0.5)["ratio"] is None
+
+
+def test_cli_run_reads_team_stack_from_collect_only_targets():
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        a = d / "a"
+        _write(a / "requirements.txt", "pydantic\n")
+        _write(a / "package.json", json.dumps({"devDependencies": {"electron": "39.0.0"}}))
+        _write(a / "CLAUDE.md", "### 의존성 → component\n| 의존성 | component |\n|---|---|\n| langfuse | product |\n")
+        _git_add(a, "requirements.txt", "package.json", "CLAUDE.md")
+        team = d / "team"
+        # 겹치는 이름을 출처별로 하나씩: pydantic(내 requirements — 관문 신호만) · langfuse(내 CLAUDE.md 표 — 수집기만)
+        _write(team / "package.json", json.dumps({"dependencies": {"next": "15", "google-auth-library": "10", "pydantic": "1", "langfuse": "3"}}))
+        _write(team / "fixtures" / "package.json", json.dumps({"dependencies": {"left-pad": "1"}}))
+        _git_add(team, "package.json", "fixtures/package.json")
+        t = d / "adr" / "radar-targets.json"
+        _write(t, json.dumps([{"repo": "a", "path": "../a"}]))
+        co = d / "collect-only.json"
+        _write(co, json.dumps({"targets": [{"repo": "team", "path": str(team), "exclude": ["fixtures"]},
+                                           {"repo": "ghost", "path": str(d / "ghost")}]}))
+        _write(d / "p.yaml", "version: 1\ninterests:\n  - {topic: 하이브리드 검색, description: d}\n")
+        items = [_item("a1", "pydantic 3 breaking", tech="pydantic"), _item("a2", "google-auth-library 10", tech="google-auth-library"),
+                 _item("a3", "electron 39", tech="electron")]
+        _write(d / "items.jsonl", "\n".join(json.dumps(i, ensure_ascii=False) for i in items) + "\n")
+        st = TierStore(d / "tiers.json")
+        st.ensure([TechQuery("pydantic", usage="u")], StubBackend(tiers={"pydantic": ["L4"]}))
+        st.save()
+        old = {k: os.environ.get(k) for k in ("RADAR_COLLECT_ONLY", "RADAR_TARGETS")}
+        os.environ["RADAR_COLLECT_ONLY"] = str(co)
+        try:
+            from pipeline.importance.cli import other_stack_names
+            names, info = other_stack_names(t)
+            assert names == ["next", "google-auth-library"], names                     # pydantic·langfuse는 내 스택 · left-pad는 exclude
+            assert [m["repo"] for m in info["missing"]] == ["ghost"] and info["repos"] == ["team"], info
+            import contextlib
+            import io
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = profile_filter.main(["run", "--snapshot", str(d / "items.jsonl"), "--profile", str(d / "p.yaml"), "--no-stack",
+                                          "--out", str(d / "out"), "--tiers", str(d / "tiers.json"), "--gate", "stub", "--targets", str(t)])
+        finally:
+            for k, v in old.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        assert rc == 0
+        g = json.loads((d / "out" / "run.json").read_text(encoding="utf-8"))["lane_a_gate"]
+        sc = g["status_counts"]
+        assert (sc["kept"], sc["other_stack"], sc["unknown"], sc["unresolved"]) == (1, 1, 1, 0), sc
+        assert g["other_stack"]["names"] == 2 and g["other_stack"]["missing"][0]["repo"] == "ghost", g["other_stack"]
+        out = buf.getvalue()
+        assert "모르는 기술 1 · 분류 불가 0 · 팀원 스택 1" in out and "경고" in out and "50%" in out, out   # electron 1 / (3 − 1)
 
 
 def test_compare_stacks_groups_and_normalizes():
@@ -1331,8 +1448,32 @@ def _dev_not_first(tier, change, ctx=None):
     return r
 
 
+_ORIG_GATE_COUNTS = policy.gate_counts
+
+
+def _counts_other_in_base(entries, warn_ratio=None):
+    """경고 비율의 분모에서 팀원 스택을 빼지 않는다."""
+    c = _ORIG_GATE_COUNTS(entries, warn_ratio)
+    c["ratio"] = (c["unknown"] + c["unresolved"]) / c["lane_a"] if c["lane_a"] else None
+    c["warn"] = c["ratio"] is not None and c["ratio"] > c["warn_ratio"]
+    return c
+
+
+def _other_by_title_even_with_dependency(self, item, mine):
+    mine_n = {signals.norm(n) for n in mine}
+    return gate_mod.resolve_technologies(item, [n for n in self.other_stack if signals.norm(n) not in mine_n], self.vendor_terms)
+
+
 def mutations():
     return [
+        ("package.json devDependencies에 S2(→ L7)를 건다", [(signals, "NPM_DEV", "dev")], test_package_json_signals_and_dev_dependencies_are_not_s2),
+        ("관문이 package.json을 안 읽는다", [(signals, "read_package_json", lambda repo, exclude=(), out=None: {} if out is None else out)], test_package_json_signals_and_dev_dependencies_are_not_s2),
+        ("팀원 스택을 따로 세지 않음 (모르는 기술로 섞임)", [(gate_mod.Gate, "_other_stack", lambda self, item, mine: [])], test_gate_other_stack_is_counted_apart_and_needs_no_model_call),
+        ("의존성 릴리스도 제목으로 팀원 스택을 고름", [(gate_mod.Gate, "_other_stack", _other_by_title_even_with_dependency)], test_gate_other_stack_is_counted_apart_and_needs_no_model_call),
+        ("경고 분모에서 팀원 스택을 안 뺌", [(policy, "gate_counts", _counts_other_in_base)], test_gate_counts_and_warning_ratio),
+        ("팀원 스택에서 수집기가 읽는 내 스택을 안 뺌 (CLI)", [(cli_mod, "collector_stack_names", lambda targets_path=None: ([], []))], test_cli_run_reads_team_stack_from_collect_only_targets),
+        ("팀원 스택에서 관문 manifest 신호를 안 뺌 (CLI)", [(cli_mod, "read_repo_signals", lambda repo, exclude=(): {})], test_cli_run_reads_team_stack_from_collect_only_targets),
+        ("팀원 스택이 exclude를 무시 (CLI)", [(stack, "_excluded", lambda p, exclude: False)], test_cli_run_reads_team_stack_from_collect_only_targets),
         ("두 등급인데 첫 등급 행만 적용", [(policy, "decide", _first_tier_only)], test_two_tiers_any_row_keeps_and_records_which),
         ("두 등급인데 첫 등급 행만 적용 (관문)", [(policy, "decide", _first_tier_only)], test_lane_a_gate_wiring_and_cap),
         ("모델 은퇴 ✅를 ❌로", [(policy, "TABLE", _widened_table())], test_every_cell_default_context),
