@@ -34,6 +34,11 @@ function Register-Collector($name, $day, $at, $label, $collectorArgs, $after = "
 New-Item -ItemType Directory -Force (Join-Path $repo "collector\out") | Out-Null
 # weekly는 수집이 끝나면 바로 주간 스냅숏으로 얼려 data repo에 push한다 (HYO-72). 한 출처가 죽어도 얼린다 — manifest에 남는다
 $freeze = "; & '$python' -m collector.snapshot freeze --push *>> 'collector\out\last-weekly.log'"
+# 얼린 뒤 관문 등급 파일을 스택에 맞춘다 (HYO-122 PR 3) — 지문 바뀐 기술만 실제 모델(Sonnet 5.5, .env의 ANTHROPIC_API_KEY)로.
+# 키가 없으면 분류를 건너뛰고 「미분류 N」을 로그에 남긴다. anthropic이 필요해 .venv 파이썬으로 돈다 (수집기는 시스템 파이썬 + PyYAML)
+$venvPython = Join-Path $repo ".venv\Scripts\python.exe"
+if (-not (Test-Path $venvPython)) { throw ".venv가 없다: $venvPython — weekly-tiers는 .venv의 anthropic을 쓴다" }
+$freeze += "; & '$venvPython' -m pipeline.importance weekly-tiers --report 'collector\out\last-tiers.json' *>> 'collector\out\last-weekly.log'"
 Register-Collector "JHS-Collector-Weekly" $WeeklyDay $WeeklyTime "weekly" "" $freeze
 Register-Collector "JHS-Collector-AWS" $AwsDay $AwsTime "aws" "--sources vendor --only aws-bedrock"
 Get-ScheduledTask -TaskName $names | Select-Object TaskName, State, @{n="Next";e={(Get-ScheduledTaskInfo $_).NextRunTime}}

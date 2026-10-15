@@ -24,6 +24,8 @@ M1으로 옮길 때는 같은 두 명령을 `launchd`(StartCalendarInterval — 
 
 weekly 예약 실행은 수집이 끝나면 `collector.snapshot freeze --push`로 한 주를 **`corpus@<ISO 주차>`**로 얼려 private data repo `hyos0415/radar-snapshots`(로컬 `../radar-snapshots`, 환경 변수 `RADAR_SNAPSHOT_REPO`)에 push한다. 폴더 형식은 그 repo의 README.
 
+얼린 뒤에는 `.venv` 파이썬으로 `python -m pipeline.importance weekly-tiers`가 돈다 (HYO-122 PR 3) — 관문 등급 파일 `../radar-snapshots/tiers.json`(고정 경로, `RADAR_TIERS`)을 내 스택에 맞춘다. 지문이 바뀐 기술만 Sonnet 5.5(API, `.env`의 `ANTHROPIC_API_KEY`)로 다시 분류하고, 분류한 게 있으면 그 파일만 커밋·push한다. 보고서는 `collector/out/last-tiers.json`(새 기술 · 지문 바뀜 · 사라진 기술 · 실패 · 호출 · 비용). 키가 없으면 분류를 건너뛰고 「미분류 N」을 로그에 남긴다. 예약을 바꾼 뒤에는 `schedule_windows.ps1`을 다시 실행해 등록을 갱신한다.
+
 ```bash
 python -m collector.snapshot status                    # 얼린 주차 · 안 얼린 실행
 python -m collector.snapshot freeze --push             # 손으로 (예약 실행이 실패했을 때)

@@ -1369,6 +1369,200 @@ def test_calllog_file_and_totals():
         assert log.totals() == {"model_calls": 2, "errors": 1, "input_tokens": 4, "output_tokens": 2, "cost_usd": 0.5, "unpriced_calls": 1}
 
 
+# ---------------------------------------------------------------- Claude 백엔드 · 주간 재분류 (HYO-122 PR 3 — 실제 API 없이 가짜 클라이언트)
+
+from types import SimpleNamespace  # noqa: E402
+
+from pipeline.importance import claude_backend  # noqa: E402
+
+
+class FakeAnthropic:
+    """messages.create만 흉내 낸다. script: 차례로 돌려줄 것 — dict(JSON 답) · 예외 · 호출 가능(kwargs → 응답) · ("refusal", 범주)."""
+
+    def __init__(self, script, model="claude-sonnet-5-5"):
+        self.script, self.requests, self.model = list(script), [], model
+        self.messages = SimpleNamespace(create=self._create)
+
+    def _create(self, **kw):
+        self.requests.append(kw)
+        step = self.script.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        if callable(step):
+            step = step(kw)
+        usage = SimpleNamespace(input_tokens=1000, output_tokens=200)
+        if isinstance(step, tuple) and step[0] == "refusal":
+            return SimpleNamespace(stop_reason="refusal", stop_details=SimpleNamespace(category=step[1]), content=[], usage=usage, model=self.model)
+        return SimpleNamespace(stop_reason="end_turn", stop_details=None, model=self.model, usage=usage,
+                               content=[SimpleNamespace(type="thinking", thinking=""), SimpleNamespace(type="text", text=json.dumps(step))])
+
+
+class _Status(Exception):
+    def __init__(self, code):
+        super().__init__(f"status {code}")
+        self.status_code = code
+
+
+def _claude(script, **kw):
+    b = claude_backend.ClaudeBackend(client=FakeAnthropic(script), guard=kw.pop("guard", False), **kw)
+    b.retry.SLEEPER.sleep = lambda s: None
+    return b
+
+
+def test_claude_backend_request_shape_labels_and_cost():
+    b = _claude([{"tiers": ["L5", "L3"], "unsure": False, "reason": "서비스 + SDK"}, {"changes": ["security", "breaking"], "reason": "r"},
+                 {"tiers": ["L6"], "unsure": True, "reason": "모름"}])
+    a = b.classify_tiers(TechQuery("langfuse", usage="트레이싱"))
+    assert a.labels == ["L3", "L5"] and not a.unsure and a.reason == "서비스 + SDK"                 # 등급 순서로 정리
+    req = b.client.requests[0]
+    assert req["model"] == "claude-sonnet-5-5" and req["system"] == prompts.TIER_INSTRUCTIONS and "langfuse" in req["messages"][0]["content"]
+    assert req["output_config"]["effort"] == "medium" and req["output_config"]["format"]["type"] == "json_schema"
+    assert req["output_config"]["format"]["schema"]["properties"]["tiers"]["items"]["enum"] == policy.TIERS
+    assert "tool_choice" not in req and "thinking" not in req and "fallbacks" not in req               # 강제 tool_choice는 Sonnet 5.5에서 400 · 다른 모델로 넘기지 않는다
+    c = b.classify_changes(NewsQuery("n", "x", "t"))
+    assert c.labels == ["breaking", "security"] and b.client.requests[1]["system"] == prompts.CHANGE_INSTRUCTIONS
+    u = b.classify_tiers(TechQuery("weird"))
+    assert u.unsure and u.labels == []                                                               # 모델이 모른다면 라벨을 버린다
+    rec = b.log.calls[0]
+    assert rec["model"] == rec["served_model"] == "claude-sonnet-5-5" and rec["input_tokens"] == 1000 and rec["attempts"] == 1
+    assert abs(rec["cost_usd"] - (1000 * 2.00 + 200 * 10.00) / 1e6) < 1e-12 and b.log.totals()["unpriced_calls"] == 0
+    assert claude_backend.cost_usd("claude-opus-5-5", 1, 1) is None                                  # 단가표에 없는 모델은 모름(None)
+
+
+def test_claude_backend_retry_refusal_and_gating():
+    b = _claude([_Status(529), _Status(429), {"tiers": ["L4"], "unsure": False, "reason": "r"}, ("refusal", "cyber"), _Status(400)])
+    assert b.classify_tiers(TechQuery("fastapi")).labels == ["L4"]
+    assert b.log.calls[0]["attempts"] == 3 and b.log.calls[0]["retried"] == ["_Status(529)", "_Status(429)"]
+    for want in (claude_backend.RefusalError, _Status):                                             # 거절 · 400은 재시도 없이 오류로 기록하고 올린다
+        try:
+            b.classify_tiers(TechQuery("x"))
+            raise AssertionError(f"{want.__name__}가 삼켜졌다")
+        except want:
+            pass
+    assert "refusal (cyber)" in b.log.calls[1]["error"] and b.log.calls[1]["attempts"] == 1 and b.log.calls[2]["attempts"] == 1
+    try:
+        make_backend("claude-sonnet-5-5")
+        raise AssertionError("--real-api 없이 실제 모델이 만들어졌다")
+    except PermissionError:
+        pass
+
+
+def test_claude_backend_netguard_allows_only_anthropic():
+    real = socket.getaddrinfo
+
+    def offline(host, *a, **k):
+        raise socket.gaierror("offline test")
+    socket.getaddrinfo = offline
+    try:
+        def leaks(kw):
+            socket.getaddrinfo("telemetry.example.invalid", 443)
+            return {"tiers": [], "unsure": True, "reason": "r"}
+        b = _claude([leaks, {"tiers": ["L4"], "unsure": False, "reason": "r"}], guard=True)
+        try:
+            try:
+                b.classify_tiers(TechQuery("x"))
+                raise AssertionError("허용 밖 호스트가 막히지 않았다")
+            except BoundaryError as e:
+                assert "telemetry.example.invalid" in str(e)
+            assert b.log.calls[0]["attempts"] == 1 and len(b.client.script) == 1                    # 재시도 없음
+            assert b.guard._ok("api.anthropic.com") and not b.guard._ok("api.openai.com")
+            assert claude_backend.ALLOWED_HOSTS == {"api.anthropic.com"}
+        finally:
+            b.close()
+    finally:
+        socket.getaddrinfo = real
+
+
+class _FlakyTiers(StubBackend):
+    def __init__(self, bad, exc=RuntimeError):
+        super().__init__(tiers={})
+        self.bad, self.exc = bad, exc
+
+    def classify_tiers(self, q):
+        if q.name == self.bad:
+            raise self.exc("boom")
+        return super().classify_tiers(q)
+
+
+def test_ensure_records_failures_and_continues_but_boundary_stops():
+    st = TierStore()
+    fails = []
+    done = st.ensure([_q("a"), _q("b"), _q("c")], _FlakyTiers("b"), failures=fails)
+    assert done == ["a", "c"] and fails[0]["technology"] == "b" and "boom" in fails[0]["error"]
+    assert st.get("b") is None and st.needs_classify(_q("b"))                                      # 다음 실행에서 다시 시도된다
+    try:
+        TierStore().ensure([_q("a")], _FlakyTiers("a"))                                             # failures 없이는 예전처럼 올린다
+        raise AssertionError("실패가 삼켜졌다")
+    except RuntimeError:
+        pass
+    try:
+        TierStore().ensure([_q("a")], _FlakyTiers("a", BoundaryError), failures=[])
+        raise AssertionError("경계 위반이 삼켜졌다")
+    except BoundaryError:
+        pass
+
+
+def test_classify_report_new_changed_removed_and_no_key_skip():
+    with tempfile.TemporaryDirectory() as d:
+        t = _targets_file(d)
+        tiers_path = Path(d) / "tiers.json"
+        r1 = cli_mod.classify(tiers_path, "stub", targets=t)
+        assert r1["technologies"] == 5 and len(r1["new"]) == 5 and r1["changed"] == [] and len(r1["classified"]) == 5 and r1["calls"]["model_calls"] == 5
+        assert [m["repo"] for m in r1["missing_targets"]] == ["ghost"]
+        st = TierStore(tiers_path)
+        st.data["technologies"]["gone"] = {"technology": "gone", "tiers": ["L8"], "unresolved": False}
+        st.data["technologies"][signals.norm("requests")]["fingerprint"] = "old"
+        st.save()
+        r2 = cli_mod.classify(tiers_path, "stub", targets=t, plan=True)
+        assert (r2["new"], r2["changed"], r2["removed"], r2["to_classify"]) == ([], ["requests"], ["gone"], 1), r2
+        lines = cli_mod.report_lines(r2)
+        assert "새 기술 0 · 지문 바뀜 1" in lines[1] and "사라진 기술 1 ['gone']" in lines[1], lines
+        empty = Path(d) / "empty.env"
+        empty.write_text("OTHER=1\n", encoding="utf-8")
+        old = os.environ.get("RADAR_ENV_FILE")
+        os.environ["RADAR_ENV_FILE"] = str(empty)                                                   # 키 없는 .env — 네트워크 없이 키 확인에서 멈춘다
+        try:
+            r3 = cli_mod.classify(tiers_path, "claude-sonnet-5-5", targets=t, real_api=True, skip_if_no_key=True)
+            assert r3["skipped"].startswith("no-key") and r3["classified"] == [] and r3["to_classify"] == 1, r3
+            assert "미분류 1개 — 분류 건너뜀" in cli_mod.report_lines(r3)[-1]
+            try:
+                cli_mod.classify(tiers_path, "claude-sonnet-5-5", targets=t, real_api=True)
+                raise AssertionError("키 없이 조용히 넘어갔다")
+            except SystemExit:
+                pass
+        finally:
+            os.environ.pop("RADAR_ENV_FILE") if old is None else os.environ.__setitem__("RADAR_ENV_FILE", old)
+        assert TierStore(tiers_path).data["technologies"][signals.norm("requests")]["fingerprint"] == "old"   # 건너뛰면 파일을 건드리지 않는다
+
+
+def test_weekly_tiers_plan_and_push_only_the_tier_file():
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        t = _targets_file(d)
+        remote, work = d / "remote.git", d / "snap"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True, capture_output=True)
+        subprocess.run(["git", "clone", "-q", str(remote), str(work)], check=True, capture_output=True)
+        for k, v in (("user.email", "t@example.invalid"), ("user.name", "t")):
+            subprocess.run(["git", "-C", str(work), "config", k, v], check=True, capture_output=True)
+        _write(work / "other.txt", "남의 파일\n")                                                      # 커밋되면 안 된다
+        tiers_path = work / "tiers.json"
+        old = os.environ.get("RADAR_TIERS")
+        os.environ["RADAR_TIERS"] = str(tiers_path)
+        try:
+            rc, out = _cli(["weekly-tiers", "--targets", str(t), "--plan", "--report", str(d / "rep.json")])
+        finally:
+            os.environ.pop("RADAR_TIERS") if old is None else os.environ.__setitem__("RADAR_TIERS", old)
+        rep = json.loads((d / "rep.json").read_text(encoding="utf-8"))
+        assert rc == 0 and rep["model"] == "claude-sonnet-5-5" and rep["to_classify"] == rep["technologies"] and not tiers_path.exists(), out
+        assert rep["technologies"] > 5                                                              # stack-extra(모델 id·서비스)도 함께
+        assert cli_mod.push_tiers(d / "nogit" / "tiers.json", "m") == "push 안 함: git 사본이 아니다"
+        cli_mod.classify(tiers_path, "stub", targets=t)
+        assert cli_mod.push_tiers(tiers_path, "tiers: test") == "push 완료"
+        assert cli_mod.push_tiers(tiers_path, "tiers: test") == "push 안 함: 바뀐 것 없음"
+        files = subprocess.run(["git", "--git-dir", str(remote), "ls-tree", "-r", "--name-only", "HEAD"], capture_output=True, text=True).stdout.split()
+        assert files == ["tiers.json"], files
+
+
 # ---------------------------------------------------------------- 변이 검사 (규율 3)
 
 class Mutation:
@@ -1449,6 +1643,7 @@ def _dev_not_first(tier, change, ctx=None):
 
 
 _ORIG_GATE_COUNTS = policy.gate_counts
+_ORIG_ENSURE = TierStore.ensure
 
 
 def _counts_other_in_base(entries, warn_ratio=None):
@@ -1466,6 +1661,10 @@ def _other_by_title_even_with_dependency(self, item, mine):
 
 def mutations():
     return [
+        ("Claude 허용 호스트를 넓힘", [(claude_backend, "ALLOWED_HOSTS", {"api.anthropic.com", "telemetry.example.invalid"})], test_claude_backend_netguard_allows_only_anthropic),
+        ("Claude 단가를 10배로", [(claude_backend, "PRICES", {"claude-sonnet-5-5": (20.0, 100.0)})], test_claude_backend_request_shape_labels_and_cost),
+        ("Claude effort를 high로 (등록: medium)", [(claude_backend, "DEFAULT_EFFORT", "high")], test_claude_backend_request_shape_labels_and_cost),
+        ("한 기술 실패가 주간 재분류 전체를 멈춤", [(TierStore, "ensure", lambda self, queries, backend, refresh=False, failures=None: _ORIG_ENSURE(self, queries, backend, refresh))], test_ensure_records_failures_and_continues_but_boundary_stops),
         ("package.json devDependencies에 S2(→ L7)를 건다", [(signals, "NPM_DEV", "dev")], test_package_json_signals_and_dev_dependencies_are_not_s2),
         ("관문이 package.json을 안 읽는다", [(signals, "read_package_json", lambda repo, exclude=(), out=None: {} if out is None else out)], test_package_json_signals_and_dev_dependencies_are_not_s2),
         ("팀원 스택을 따로 세지 않음 (모르는 기술로 섞임)", [(gate_mod.Gate, "_other_stack", lambda self, item, mine: [])], test_gate_other_stack_is_counted_apart_and_needs_no_model_call),

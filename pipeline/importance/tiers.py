@@ -121,11 +121,22 @@ class TierStore:
         self.data["technologies"][norm(q.name)] = rec
         return rec
 
-    def ensure(self, queries, backend, refresh=False):
-        """필요한 기술만 분류해 저장 → 새로 분류한 이름 목록. refresh=True면 전부 다시 (사람 등급은 여전히 건드리지 않는다)."""
+    def ensure(self, queries, backend, refresh=False, failures=None):
+        """필요한 기술만 분류해 저장 → 새로 분류한 이름 목록. refresh=True면 전부 다시 (사람 등급은 여전히 건드리지 않는다).
+        failures(리스트)를 주면 한 기술의 호출 실패가 전체를 멈추지 않는다 — {technology, error}를 쌓고 다음으로 (주간 예약용).
+        그 기술은 예전 기록(있으면)이 그대로 남고 지문이 안 바뀌어 다음 실행에서 다시 시도된다. 경계 위반(BoundaryError)은 언제나 멈춘다."""
+        from .backends import BoundaryError
         done = []
         for q in queries:
             if not self.human_tiers(q.name) and (refresh or self.needs_classify(q)):
-                self.classify(q, backend)
+                try:
+                    self.classify(q, backend)
+                except BoundaryError:
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    if failures is None:
+                        raise
+                    failures.append({"technology": q.name, "error": f"{type(e).__name__}: {str(e)[:200]}"})
+                    continue
                 done.append(q.name)
         return done
