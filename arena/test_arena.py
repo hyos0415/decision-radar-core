@@ -1896,6 +1896,61 @@ def _():
     assert m["@5"]["E"]["mean"] == 1.0 and not m["@5"]["E"]["same_as_recall"]     # Recall은 0.5 (manifest를 놓침)
 
 
+@case("JHS 변경 2026-10-15: 버전 비교 정규화 — 끝 0 · v 접두어 · 숫자 아닌 tag는 대소문자 무시 문자열 · 같은 버전 형제는 order_unknown")
+def _():
+    assert jm.version_key("1.3") == jm.version_key("1.3.0") == jm.version_key("v1.3") == (1, 3)
+    assert jm.version_key("1.0") == (1,) and jm.version_key("0.0") == (0,)
+    assert jm.version_key("B11240") == jm.version_key("b11240") == "b11240"
+    assert jm.version_key(None) is None and jm.version_key("  ") is None
+    assert jm.version_key("1.3.1") != jm.version_key("1.3")
+    R = "github-release:"
+    rels = jm.release_index([rel_doc("g/l", "b100"), rel_doc("o/a", "v1.3.0"), rel_doc("o/a", "v1.2.9"),
+                             rel_doc("o/a", "1.3"), rel_doc("o/a", "v1.10.0")])
+    assert jm.correct_release({"qid": "C1", "expected_version": "B100"}, {R + "g/l@b100": 2}, rels) == R + "g/l@b100"
+    q = {"qid": "C2", "type": "C", "expected_version": "1.3"}
+    assert jm.correct_release(q, {R + "o/a@v1.3.0": 2}, rels) == R + "o/a@v1.3.0"            # 1.3 = 1.3.0
+    rows = jm.version_confusion({"C2": {}}, {"C2": {R + "o/a@v1.3.0": 2}}, [q], rels)["rows"]
+    assert [s["doc"] for s in rows[0]["earlier"]] == [R + "o/a@v1.2.9"]                       # (1,2,9) < (1,3)
+    assert [s["doc"] for s in rows[0]["later"]] == [R + "o/a@v1.10.0"]                        # 1.10 > 1.3 (문자열 순서 아님)
+    assert [s["doc"] for s in rows[0]["order_unknown"]] == [R + "o/a@1.3"]                    # 같은 버전의 다른 문서
+
+
+@case("JHS 변경 2026-10-15: 정답 릴리스를 못 찾는 질의는 「판정 불가」 — 평균·Recall과 같음·위험 수에서 빼고 이유를 적는다 (실행은 멈추지 않는다)")
+def _():
+    R = "github-release:"
+    rels = jm.release_index([rel_doc("o/a", "v1.0.0"), rel_doc("o/a", "v1.1.0")])
+    queries = [{"qid": "C1", "type": "C", "expected_version": "1.1.0"},
+               {"qid": "C2", "type": "C", "expected_version": "2.0.0"},                      # 버전이 맞는 릴리스 없음
+               {"qid": "C3", "type": "C"},                                                    # expected_version 없음
+               {"qid": "E1", "type": "E", "expected_version": "1.1.0"}]
+    qrels = {"C1": {R + "o/a@v1.1.0": 2}, "C2": {R + "o/a@v1.1.0": 2}, "C3": {R + "o/a@v1.1.0": 2},
+             "E1": {R + "o/a@v1.0.0": 2, R + "o/a@v1.1.0": 1}}                               # 등급 2의 버전이 다르다
+    run = {q: {R + "o/a@v1.0.0": 2, R + "o/a@v1.1.0": 1} for q in qrels}
+    m = jm.correct_version(run, qrels, queries, rels, ks=(1,))
+    assert m["@1"]["C"]["n"] == 1 and m["@1"]["C"]["mean"] == 0.0 and set(m["@1"]["C"]["undetermined"]) == {"C2", "C3"}
+    assert m["@1"]["C"]["same_as_recall"] is True
+    assert m["@1"]["E"] == {"n": 0, "mean": None, "per_query": {}, "same_as_recall": None,
+                            "undetermined": {"E1": m["@1"]["E"]["undetermined"]["E1"]}}
+    t = jm.version_confusion(run, qrels, queries, rels, k=10)
+    assert t["risk_qids"] == ["C1"] and t["undetermined_qids"] == ["C2", "C3"]
+    rows = {r["qid"]: r for r in t["rows"]}
+    assert rows["C2"]["risk"] is None and rows["C2"]["note"].startswith("판정 불가")
+    out = jm.compute(run, {}, qrels, queries, [rel_doc("o/a", "v1.0.0"), rel_doc("o/a", "v1.1.0")], {}, jhs_nodes())
+    assert out["version_confusion"]["undetermined_qids"] == ["C2", "C3"]                      # compute가 멈추지 않는다
+
+
+@case("JHS 변경 2026-10-15: 지표 계산이 예외로 실패해도 헤드라인 결과는 저장된다 — jhs.error에 적고 오류를 돌려준다")
+def _():
+    from arena import cli
+    ok, err = cli.jhs_block({}, {}, {}, [], [], {}, jhs_nodes())
+    assert err is None and "error" not in ok
+    bad, err = cli.jhs_block({}, {}, {}, [], [{"doc_id": "github-release:x@1", "meta": {}}], {}, jhs_nodes())  # meta 없음 → ValueError
+    assert err and err.startswith("ValueError") and bad["error"] == err and "Traceback" in bad["traceback"]
+    with tempfile.TemporaryDirectory() as tmp:
+        d = harness.save_results(tmp, "k", {"q": {}}, {"overall": {}, "jhs": bad}, {}, {})
+        assert json.loads((d / "metrics.json").read_text(encoding="utf-8"))["jhs"]["error"] == err
+
+
 @case("JHS component 근거 (E): 같은 repo 스택 표 행(별칭+component 칸) · manifest 디렉터리 — 경계·다른 repo·다른 칸·상위 k 밖은 잡지 않는다")
 def _():
     nodes = jhs_nodes()
