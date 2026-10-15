@@ -208,8 +208,8 @@ def cmd_weekly(a):
                    call_log=a.call_log)
     rep["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     lines = report_lines(rep)
-    if not a.plan and not a.no_push and rep["classified"]:
-        rep["push"] = push_tiers(tiers, f"tiers: {rep['finished_at'][:10]} {a.model} 분류 {len(rep['classified'])}")
+    if not a.plan and not a.no_push:                    # 파일에 커밋 안 된 변경이 있으면 올린다 (이번에 분류한 게 없어도 — 손으로 돌린 결과가 남지 않게)
+        rep["push"] = push_tiers(tiers, f"tiers: {rep['finished_at'][:10]} {a.model} 분류 {len(rep['classified'])} · 기술 {rep['technologies']}")
         lines.append(rep["push"])
     for line in lines:
         print(line)
