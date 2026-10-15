@@ -17,7 +17,7 @@
 | PyYAML | skill (`radar.py`) · collector · product |
 | openai-agents · openai | product (`spike/agents_sdk` — 최적화 모드, ADR 0008) |
 | langgraph · langgraph-checkpoint · langgraph-checkpoint-sqlite · langchain · langchain-core · langchain-anthropic | product (`spike/langgraph_spike` — 비교 모드, ADR 0009) |
-| anthropic | product |
+| anthropic | product · pipeline (`pipeline/importance/claude_backend.py` — 관문 등급 재분류, HYO-122) |
 | litellm (별도 venv) | product (`spike/agents_sdk`의 Claude 경로) |
 | fastapi · uvicorn | desktop (`desktop/backend` — 앱 백엔드, localhost) |
 | ranx · tokenizers (+ ranx가 끄는 numpy·scipy·pandas·numba) | arena (`arena/` — 하네스 지표 · 청크 상한 계량) |
@@ -29,7 +29,7 @@
 
 | 모델·서비스 | component |
 |---|---|
-| Anthropic `claude-sonnet-5-5` (effort medium) — `claude -p`(eval 러너) · API(스파이크) | eval · product |
+| Anthropic `claude-sonnet-5-5` (effort medium) — `claude -p`(eval 러너) · API(스파이크 · 관문 주간 등급 재분류 `weekly-tiers`, HYO-122) | eval · product · pipeline |
 | Claude Code routines (스킬 실사용, HYO-21) | skill |
 | OpenAI `gpt-6-sol` — `codex exec` (judge, HYO-20) | eval |
 | OpenAI `gpt-6-luna` (tier-screen, ADR 0007) | eval |

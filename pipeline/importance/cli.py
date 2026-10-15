@@ -3,6 +3,9 @@
   python -m pipeline.importance classify-stack --targets [radar-targets.json] [--repo <폴더> ...] [--extra stack-extra.json] --tiers tiers.json --model stub
       내 대상 전부(각자의 exclude 포함)의 manifest·Dockerfile·compose에서 기술을 뽑아 등급을 매겨 저장한다 (스택이 바뀐 기술만). 실제 모델은 --real-api가 있어야 한다.
       읽는 파일은 수집기와 같다 — git 추적 파일만 (collector/stack.py)
+  python -m pipeline.importance weekly-tiers [--plan] [--report collector/out/last-tiers.json]
+      주간 예약(freeze 뒤, HYO-122 PR 3): 내 대상 전부 + stack-extra.json → 고정 등급 파일(<부모>/radar-snapshots/tiers.json)에 이어 쓴다.
+      실제 모델(claude-sonnet-5-5)로 지문 바뀐 기술만 부르고, 키가 없으면 「미분류 N」을 남기고 건너뛴다. 분류한 게 있으면 그 파일만 커밋·push
   python -m pipeline.importance stack-diff --tiers tiers.json [--targets [radar-targets.json]]
       수집기가 보는 이름과 등급 파일이 아는 이름을 견준다 (수집기만 · 관문만 · 양쪽)
   python -m pipeline.importance override --tiers tiers.json --tech PyYAML --set-tiers L6 [--sensitive] [--local] [--path dev]
@@ -16,6 +19,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 from .backends import TechQuery, make_backend
@@ -94,33 +98,126 @@ def build_gate(model, tiers_path, *, real_api=False, call_log=None, limit=None, 
     return gate, backend
 
 
-def cmd_classify(a):
-    extra = json.loads(Path(a.extra).read_text(encoding="utf-8")) if a.extra else []
-    repos = list(a.repo or [])
-    if a.targets:
-        found, missing, path = load_targets(None if a.targets is True else a.targets)
-        for name, root in missing:
-            print(f"대상 폴더 없음: {name} -> {root}")       # 조용히 빼지 않는다
-        repos += [(root, ex) for _, root, ex in found]
-        print(f"대상 {len(found)}개 읽음 ({path})")
-    qs = queries_from_repos(repos, extra)
-    store = TierStore(a.tiers)
-    todo = [q for q in qs if store.needs_classify(q) or a.refresh]
-    print(f"기술 {len(qs)}개 중 새로 분류할 것 {len(todo)}개 (모델 호출 {len(todo)}회)")
-    if a.plan:
-        return 0
+def classify(tiers, model, *, repos=(), targets=None, extra=None, real_api=False, refresh=False, plan=False, call_log=None,
+             skip_if_no_key=False, backend=None):
+    """등급 파일을 스택에 맞춘다 → 보고서 dict. 한 기술이 실패해도 나머지는 돈다(failed). 경계 위반은 멈춘다.
+    보고서: 기술 수 · 새 기술 · 지문 바뀜 · 사라진 기술(등급 파일엔 있는데 스택에 없음 — 지우지 않고 알린다) · 분류 · 실패 · 호출 · 시간.
+    skip_if_no_key: 키가 없으면 분류를 건너뛰고 skipped="no-key"로 미분류 수를 남긴다 (주간 예약 — 조용히 빠지지 않게)."""
     from .backends import CallLog
-    backend = make_backend(a.model, allow_real=a.real_api, log=CallLog(a.call_log))
+    from .signals import norm
+    t0 = time.perf_counter()
+    rep = {"model": model, "tiers": str(tiers), "targets": None, "missing_targets": []}
+    repos = list(repos)
+    if targets:
+        found, missing, path = load_targets(None if targets is True else targets)
+        rep["targets"], rep["missing_targets"] = str(path), [{"repo": n, "path": str(r)} for n, r in missing]   # 조용히 빼지 않는다
+        repos += [(root, ex) for _, root, ex in found]
+    qs = queries_from_repos(repos, extra or [])
+    store = TierStore(tiers)
+    todo = [q for q in qs if not store.human_tiers(q.name) and (refresh or store.needs_classify(q))]
+    current = {norm(q.name) for q in qs}
+    rep.update({"technologies": len(qs), "new": [q.name for q in todo if store.get(q.name) is None],
+                "changed": [q.name for q in todo if store.get(q.name) is not None],
+                "removed": sorted(r["technology"] for k, r in store.data["technologies"].items() if k not in current),
+                "to_classify": len(todo), "classified": [], "failed": [], "skipped": None, "calls": None})
+    if plan or not todo:
+        rep["seconds"] = round(time.perf_counter() - t0, 1)
+        return rep
+    if backend is None:
+        try:
+            backend = make_backend(model, allow_real=real_api, log=CallLog(call_log))
+        except SystemExit as e:                      # 키 파일에 키가 없다
+            if not skip_if_no_key:
+                raise
+            rep.update({"skipped": f"no-key: {e}", "seconds": round(time.perf_counter() - t0, 1)})
+            return rep
     try:
-        done = store.ensure(qs, backend, refresh=a.refresh)
+        rep["classified"] = store.ensure(qs, backend, refresh=refresh, failures=rep["failed"])
         store.save()
     finally:
         backend.close()
-    unresolved = [r["technology"] for r in store.data["technologies"].values() if r["unresolved"]]
-    mism = [r["technology"] for r in store.data["technologies"].values() if r.get("mismatch")]
-    print(f"분류 {len(done)}개 · 분류 불가 {len(unresolved)} {unresolved} · 스크립트가 모델을 덮어쓴 것 {len(mism)} {mism}")
-    print(f"-> {a.tiers}")
-    return 0
+    recs = store.data["technologies"].values()
+    rep.update({"unresolved": sorted(r["technology"] for r in recs if r["unresolved"]),
+                "script_overrode_model": sorted(r["technology"] for r in recs if r.get("mismatch")),
+                "calls": backend.log.totals(), "seconds": round(time.perf_counter() - t0, 1)})
+    return rep
+
+
+def report_lines(rep):
+    """보고서 → 사람이 읽는 줄들 (주간 로그 · 콘솔)."""
+    out = [f"대상 폴더 없음: {m['repo']} -> {m['path']}" for m in rep["missing_targets"]]
+    out.append(f"기술 {rep['technologies']}개 중 새로 분류할 것 {rep['to_classify']}개 (새 기술 {len(rep['new'])} · 지문 바뀜 {len(rep['changed'])}) · "
+               f"사라진 기술 {len(rep['removed'])}" + (f" {rep['removed']}" if rep["removed"] else ""))
+    if rep["skipped"]:
+        out.append(f"미분류 {rep['to_classify']}개 — 분류 건너뜀 ({rep['skipped']})")
+    elif rep["calls"] is not None:
+        c = rep["calls"]
+        out.append(f"분류 {len(rep['classified'])}개 · 실패 {len(rep['failed'])}" + (f" {[f['technology'] for f in rep['failed']]}" if rep["failed"] else "")
+                   + f" · 분류 불가 {len(rep['unresolved'])} {rep['unresolved']} · 스크립트가 모델을 덮어쓴 것 {len(rep['script_overrode_model'])}")
+        out.append(f"모델 {rep['model']} · 호출 {c['model_calls']}회 · 오류 {c['errors']} · 토큰 {c['input_tokens']}/{c['output_tokens']} · "
+                   f"비용 ${c['cost_usd']}" + (f" (단가 모름 {c['unpriced_calls']}회)" if c["unpriced_calls"] else "") + f" · {rep['seconds']}초")
+    return out
+
+
+def cmd_classify(a):
+    extra = json.loads(Path(a.extra).read_text(encoding="utf-8")) if a.extra else []
+    rep = classify(a.tiers, a.model, repos=a.repo or [], targets=a.targets, extra=extra, real_api=a.real_api, refresh=a.refresh,
+                   plan=a.plan, call_log=a.call_log)
+    for line in report_lines(rep):
+        print(line)
+    if rep["targets"]:
+        print(f"대상 목록: {rep['targets']}")
+    if not a.plan:
+        print(f"-> {a.tiers}")
+    return 1 if rep["failed"] else 0
+
+
+# 주간 예약이 쓰는 고정 등급 파일 (HYO-122 PR 3) — 주마다 새로 만들지 않고 이어 쓴다(사람 overrides가 남게). 수집 스냅숏 repo(private,
+# 매주 push)에 둔다: 기계가 쓰는 상태이고 기기를 옮겨도 따라온다. RADAR_TIERS로 바꿀 수 있다
+WEEKLY_MODEL = "claude-sonnet-5-5"     # 재분류 모델 (사용자 2026-10-15: API · Sonnet 5.5)
+STACK_EXTRA = Path(__file__).resolve().parent / "stack-extra.json"
+
+
+def default_tiers_path():
+    return Path(os.environ.get("RADAR_TIERS") or (REPO.parent / "radar-snapshots" / "tiers.json"))
+
+
+def push_tiers(path, message):
+    """등급 파일이 git 사본 안에 있으면 그 파일만 커밋·push. → 결과 문자열 (실패해도 예외 없이 — 분류 결과는 이미 파일에 있다)."""
+    import subprocess
+    d = Path(path).resolve().parent
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(d), *args], capture_output=True, text=True, encoding="utf-8")
+    if git("rev-parse", "--is-inside-work-tree").returncode != 0:
+        return "push 안 함: git 사본이 아니다"
+    if not git("status", "--porcelain", "--", Path(path).name).stdout.strip():
+        return "push 안 함: 바뀐 것 없음"
+    for args in (("add", "--", Path(path).name), ("commit", "-q", "-m", message, "--", Path(path).name), ("push", "-q", "origin", "HEAD")):
+        p = git(*args)
+        if p.returncode != 0:
+            return f"push 실패 (git {args[0]}): {(p.stderr or p.stdout).strip()[:200]}"
+    return "push 완료"
+
+
+def cmd_weekly(a):
+    """주간 예약(수집 → freeze 뒤): 내 대상 전부 + stack-extra를 고정 등급 파일에 맞춘다. 실제 모델 — 지문 바뀐 기술만 부른다."""
+    tiers = Path(a.tiers) if a.tiers else default_tiers_path()
+    extra = json.loads(STACK_EXTRA.read_text(encoding="utf-8")) if STACK_EXTRA.exists() else []
+    rep = classify(tiers, a.model, targets=a.targets or True, extra=extra, real_api=True, plan=a.plan, skip_if_no_key=True,
+                   call_log=a.call_log)
+    rep["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    lines = report_lines(rep)
+    if not a.plan and not a.no_push and rep["classified"]:
+        rep["push"] = push_tiers(tiers, f"tiers: {rep['finished_at'][:10]} {a.model} 분류 {len(rep['classified'])}")
+        lines.append(rep["push"])
+    for line in lines:
+        print(line)
+    print(f"-> {tiers}")
+    if a.report:
+        Path(a.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(a.report).write_text(json.dumps(rep, ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
+    return 1 if rep["failed"] else 0
 
 
 def compare_stacks(collector_names, gate_names):
@@ -231,6 +328,15 @@ def main(argv=None):
     c.add_argument("--plan", action="store_true", help="호출 수만 세고 끝")
     c.add_argument("--call-log")
     c.set_defaults(fn=cmd_classify)
+    w = sp.add_parser("weekly-tiers", help="주간 예약: 고정 등급 파일을 내 스택에 맞춘다 (실제 모델, 지문 바뀐 기술만)")
+    w.add_argument("--tiers", help="기본: env RADAR_TIERS 또는 <부모>/radar-snapshots/tiers.json")
+    w.add_argument("--targets", help="기본: env RADAR_TARGETS 또는 <부모>/adr/radar-targets.json")
+    w.add_argument("--model", default=WEEKLY_MODEL)
+    w.add_argument("--plan", action="store_true", help="호출 수만 세고 끝 (API를 부르지 않는다)")
+    w.add_argument("--no-push", action="store_true", help="등급 파일을 커밋·push하지 않는다")
+    w.add_argument("--report", help="보고서 JSON 경로 (예약: collector/out/last-tiers.json)")
+    w.add_argument("--call-log")
+    w.set_defaults(fn=cmd_weekly)
     d = sp.add_parser("stack-diff", help="수집기가 보는 스택 vs 관문(등급 파일)이 아는 스택")
     d.add_argument("--tiers", required=True)
     d.add_argument("--targets", nargs="?", const=True, default=None)
