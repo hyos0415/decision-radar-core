@@ -368,6 +368,93 @@ def test_github_releases_package_json_without_claude_md():
         assert rep["dependencies"]["repos"] == 1 and rep["dependencies"]["by_ecosystem"] == {"npm": 1}, rep
 
 
+def _git_repo(root, tracked, untracked=None):
+    """임시 폴더에 진짜 git init + add (커밋은 필요 없다 — ls-files는 인덱스를 본다). tracked/untracked: {package.json 상대 경로: 내용}."""
+    import subprocess
+    root = Path(root)
+    for rel, obj in {**tracked, **(untracked or {})}.items():
+        _write_pkg(root / Path(rel).parent, obj)
+    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "--"] + list(tracked), check=True)
+
+
+def test_stack_git_mode_ignores_untracked_manifests():
+    import tempfile
+    from collector import stack
+    with tempfile.TemporaryDirectory() as t:
+        _git_repo(t, {"package.json": {"dependencies": {"react": "19"}}},
+                  {"desktop/.dev-data-x/package.json": {"dependencies": {"next": "15"}}})
+        paths, info = stack.manifest_files(t)
+        assert info["mode"] == "git" and info["why"] is None, info
+        assert [p.relative_to(t).as_posix() for p in paths] == ["package.json"], paths
+        assert github.dependencies_from_package_json(t) == ["react"]
+
+
+def test_stack_exclude_drops_tracked_files_and_reports_them():
+    import tempfile
+    from collector import stack
+    tracked = {"app/package.json": {"dependencies": {"react": "19"}},
+               "demo/profiles/a/package.json": {"dependencies": {"next": "15"}},
+               "demo/other/package.json": {"dependencies": {"vue": "3"}}}
+    with tempfile.TemporaryDirectory() as t:
+        _git_repo(t, tracked)
+        assert github.dependencies_from_package_json(t) == ["react", "vue", "next"]
+        for ex in (["demo/profiles"], ["demo/profiles/"], ["demo/profiles/a/package.json"], ["demo/profiles/*/package.json"]):
+            paths, info = stack.manifest_files(t, ex)
+            assert info["excluded"] == ["demo/profiles/a/package.json"], (ex, info)
+            assert github.dependencies_from_package_json(t, ex) == ["react", "vue"], ex
+        assert stack.manifest_files(t, ["demo/prof"])[1]["excluded"] == []          # 접두 문자열이 아니라 폴더 경계로 맞춘다
+        e = stack.package_json_entries(t, ["demo/profiles"])
+        assert [(x["name"], x["file"], x["section"]) for x in e] == [
+            ("react", "app/package.json", "dependencies"), ("vue", "demo/other/package.json", "dependencies")], e
+
+
+def test_stack_non_git_folder_walks_with_reason():
+    import tempfile
+    from collector import stack
+    with tempfile.TemporaryDirectory() as t:
+        _write_pkg(Path(t) / "a", {"dependencies": {"react": "19"}, "devDependencies": {"vite": "7"}})
+        paths, info = stack.manifest_files(t)
+        assert info["mode"] == "walk" and info["why"], info
+        assert [x["section"] for x in stack.package_json_entries(t)] == ["dependencies", "devDependencies"]
+        assert github.dependencies_from_package_json(t) == ["react", "vite"]
+        paths, info = stack.manifest_files(Path(t) / "nope")
+        assert paths == [] and info["why"], info
+
+
+def test_stack_skips_claude_dir_in_both_modes():
+    import tempfile
+    from collector import stack
+    with tempfile.TemporaryDirectory() as t:                # walk
+        _write_pkg(Path(t), {"dependencies": {"react": "19"}})
+        _write_pkg(Path(t) / ".claude" / "worktrees" / "x", {"dependencies": {"next": "15"}})
+        assert stack.manifest_files(t)[1]["mode"] == "walk"
+        assert github.dependencies_from_package_json(t) == ["react"]
+    with tempfile.TemporaryDirectory() as t:                # git — 추적돼 있어도 .claude는 보지 않는다
+        _git_repo(t, {"package.json": {"dependencies": {"react": "19"}}, ".claude/worktrees/x/package.json": {"dependencies": {"next": "15"}}})
+        paths, info = stack.manifest_files(t)
+        assert info["mode"] == "git" and [p.relative_to(t).as_posix() for p in paths] == ["package.json"], (paths, info)
+
+
+def test_github_releases_honors_excludes_end_to_end():
+    import tempfile
+    tracked = {"package.json": {"dependencies": {"react": "19"}}, "demo/package.json": {"dependencies": {"next": "15"}}}
+    with tempfile.TemporaryDirectory() as t:
+        _git_repo(t, tracked, {"scratch/package.json": {"dependencies": {"vue": "3"}}})
+
+        class F:
+            def get(self, url):
+                return 200, json.dumps({"repository": "github:acme/x"}).encode()
+            def get_json(self, url, headers=None):
+                return []
+        rep = {"requests": 0, "failed": []}
+        github.releases({}, F(), {}, rep, 0, {}, {"mate/front": Path(t)}, {"mate/front": ["demo"]})
+        d = rep["dependencies"]
+        assert d["total"] == 1 and d["by_ecosystem"] == {"npm": 1}, d             # react만 — next(제외)·vue(untracked)는 안 읽는다
+        m = d["manifests"]["mate/front"]
+        assert m["mode"] == "git" and m["excluded"] == ["demo/package.json"], m
+
+
 def test_hf_parsers():
     ms = huggingface.parse_models([{"id": "fastino/GLiNER2.5-Decide", "trendingScore": 207, "likes": 10,
                                     "pipeline_tag": "token-classification", "createdAt": "2026-09-24T00:00:00Z"}],

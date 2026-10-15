@@ -9,9 +9,8 @@ import re
 import subprocess
 import time
 import urllib.parse
-from pathlib import Path
 
-from .. import feeds
+from .. import feeds, stack
 from ..item import Item, extract_links
 
 API = "https://api.github.com"
@@ -109,27 +108,12 @@ def dependencies_from_claude_md(text, skipped=None):
     return names
 
 
-# .claude: worktrees/ 아래 다른 브랜치 사본이 있다 — main에 없는 의존성이 섞인다 · eval/runs 같은 실행 산출물도 대상이 아니다
-_SKIP_DIRS = {"node_modules", ".git", "out", "dist", ".venv", "venv", ".claude"}
-
-
-def dependencies_from_package_json(root):
-    """root 아래 모든 package.json의 dependencies + devDependencies 이름 (수집은 넓게 — 거르는 건 뒷 단계)."""
+def dependencies_from_package_json(root, exclude=()):
+    """root의 package.json들(git 추적 파일 − exclude)의 dependencies + devDependencies 이름 (수집은 넓게 — 거르는 건 뒷 단계)."""
     names = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
-        if "package.json" not in filenames:
-            continue
-        try:
-            pkg = json.loads(Path(dirpath, "package.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(pkg, dict):
-            continue
-        for sect in ("dependencies", "devDependencies"):
-            for n in (pkg.get(sect) or {}):
-                if n not in names:
-                    names.append(n)
+    for e in stack.package_json_entries(root, exclude):
+        if e["name"] not in names:
+            names.append(e["name"])
     return names
 
 
@@ -206,13 +190,15 @@ def parse_releases(body, repo, dep):
     return out
 
 
-def releases(cfg, fetcher, claude_md_texts, report, since_ts, headers, target_roots=None):
-    deps, skipped = [], []
+def releases(cfg, fetcher, claude_md_texts, report, since_ts, headers, target_roots=None, target_excludes=None):
+    deps, skipped, manifests = [], [], {}
     for repo_name, text in (claude_md_texts or {}).items():
         for d in dependencies_from_claude_md(text, skipped):
             deps.append((repo_name, d, "pypi"))
     for repo_name, root in (target_roots or {}).items():
-        for d in dependencies_from_package_json(root):
+        exclude = (target_excludes or {}).get(repo_name) or ()
+        manifests[repo_name] = stack.manifest_files(root, exclude)[1]     # 어떻게 읽었나 (git/walk · 뺀 파일) — run.json에 남긴다
+        for d in dependencies_from_package_json(root, exclude):
             deps.append((repo_name, d, "npm"))
     cache, items, unresolved = {}, [], []
     seen = set()
@@ -230,7 +216,7 @@ def releases(cfg, fetcher, claude_md_texts, report, since_ts, headers, target_ro
     for _, _, eco in deps:
         by_eco[eco] = by_eco.get(eco, 0) + 1
     report["dependencies"] = {"total": len(deps), "by_ecosystem": by_eco, "repos": len(seen),
-                              "unresolved": unresolved, "skipped_npm_rows": len(skipped)}
+                              "unresolved": unresolved, "skipped_npm_rows": len(skipped), "manifests": manifests}
     return items
 
 
@@ -280,7 +266,7 @@ def _ts(iso):
         return 0
 
 
-def collect(cfg, fetcher, now=None, claude_md_texts=None, target_roots=None):
+def collect(cfg, fetcher, now=None, claude_md_texts=None, target_roots=None, target_excludes=None):
     now = now or time.time()
     fetcher.min_interval.setdefault("api.github.com", cfg.get("min_interval_s", 2.1))
     fetcher.min_interval.setdefault("registry.npmjs.org", cfg.get("npm_min_interval_s", 0.5))
@@ -291,5 +277,5 @@ def collect(cfg, fetcher, now=None, claude_md_texts=None, target_roots=None):
     if claude_md_texts or target_roots:
         # 하루 겹치게 받는다 — 같은 릴리스는 id가 같아 스냅숏 단계에서 합쳐진다
         window = cfg.get("release_window_days", 8)
-        items += releases(cfg, fetcher, claude_md_texts, report, now - window * 86400, headers, target_roots)
+        items += releases(cfg, fetcher, claude_md_texts, report, now - window * 86400, headers, target_roots, target_excludes)
     return items, report

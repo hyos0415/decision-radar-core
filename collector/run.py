@@ -56,6 +56,14 @@ def target_roots():
     return roots
 
 
+def target_excludes():
+    """{repo: exclude 목록} — radar-targets.json 각 항목의 `exclude`(root 기준 경로·폴더·glob). manifest를 읽을 때 뺀다 (stack.py)."""
+    path = Path(os.environ.get("RADAR_TARGETS") or (REPO.parent / "adr" / "radar-targets.json"))
+    if not path.exists():
+        return {}
+    return {t["repo"]: list(t.get("exclude") or []) for t in json.loads(path.read_text(encoding="utf-8"))}
+
+
 COLLECT_ONLY = HERE / "targets-collect-only.json"
 
 
@@ -64,10 +72,11 @@ def collect_only_targets():
 
     `adr/radar-targets.json`은 스킬·제품·데스크톱·파이프라인이 「내 스택」으로 읽는다 — 거기에 넣으면 내 detect가 남의 스택까지 본다.
     그래서 수집기만 읽는 별도 파일에 둔다. 형식: {"targets": [{"repo": 이름, "path": 형제 폴더 이름(이 레포의 부모 기준), ...}]}.
-    → ({repo: CLAUDE.md 본문}, {repo: 루트}, {"file", "repos", "missing"}). 폴더가 없으면 조용히 빼지 않고 missing에 남긴다.
+    → ({repo: CLAUDE.md 본문}, {repo: 루트}, {"file", "repos", "missing", "excludes"}). 폴더가 없으면 조용히 빼지 않고 missing에 남긴다.
+    excludes = {repo: 항목의 `exclude` 목록}.
     """
     path = Path(os.environ.get("RADAR_COLLECT_ONLY") or COLLECT_ONLY)
-    info = {"file": str(path), "repos": [], "missing": []}
+    info = {"file": str(path), "repos": [], "missing": [], "excludes": {}}
     if not path.exists():
         return {}, {}, info
     texts, roots = {}, {}
@@ -77,6 +86,7 @@ def collect_only_targets():
             info["missing"].append({"repo": t["repo"], "path": str(root)})
             continue
         roots[t["repo"]] = root
+        info["excludes"][t["repo"]] = list(t.get("exclude") or [])
         info["repos"].append(t["repo"])
         md = root / "CLAUDE.md"
         if md.exists():
@@ -164,6 +174,7 @@ def main(argv=None):
     collect_only["my_targets_missing"] = my_targets_missing()
     claude_md = merge_targets(claude_md, extra_md, "CLAUDE.md")     # 수집에만 합친다 — targets()를 쓰는 pipeline은 여전히 내 스택만 본다
     roots = merge_targets(roots, extra_roots, "repo 루트")
+    excludes = {**target_excludes(), **collect_only["excludes"]}
     run = {"started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), "pool_version": pool["version"],
            "vendors_version": vendors_cfg["version"], "targets": targets_path, "collect_only": collect_only, "sources": {}}
     all_items = []
@@ -175,7 +186,7 @@ def main(argv=None):
             elif name == "hn":
                 items, rep = hn.collect(pool["hn"], fetcher, now)
             elif name == "github":
-                items, rep = github.collect(pool["github"], fetcher, now, claude_md, roots)
+                items, rep = github.collect(pool["github"], fetcher, now, claude_md, roots, excludes)
             elif name == "huggingface":
                 items, rep = huggingface.collect(pool["huggingface"], fetcher, now)
             elif name == "vendor":
