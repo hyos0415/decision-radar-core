@@ -5,9 +5,12 @@ Dockerfile `FROM` · compose `image`.
 신호 칸: manifest(파일 이름|None) · group("main"|"dev") · pin("pinned"|"range"|"floating") · image(bool) · image_ref.
 못 한 것: tiers.py의 NOT_IMPLEMENTED.
 """
+import fnmatch
 import re
 import tomllib
 from pathlib import Path
+
+from collector import stack
 
 DEV_GROUPS = {"dev", "test", "tests", "lint", "docs", "ci", "typing", "style", "format"}
 _REQ = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)\s*(\[[^\]]*\])?\s*((?:===|==|~=|!=|>=|<=|>|<)[^;#\s,]*(?:\s*,\s*(?:===|==|~=|!=|>=|<=|>|<)[^;#\s,]*)*)?")
@@ -30,7 +33,7 @@ def _pin(spec):
 def parse_requirement(line):
     """requirements 한 줄 → (이름, pin) | None. 주석·옵션·URL 의존성은 건너뛴다."""
     s = line.split(" #")[0].strip()
-    if not s or s.startswith(("#", "-", "git+", "http")):
+    if not s or s.startswith(("#", "-", "git+", "http://", "https://")):      # "http"만 보면 httpx가 URL로 오인돼 빠진다
         return None
     m = _REQ.match(s)
     return (m.group(1), _pin(m.group(3))) if m else None
@@ -44,20 +47,22 @@ def _add(out, name, manifest, group, pin):
     out[key] = {"name": name, "manifest": manifest, "group": group, "pin": pin, "image": False, "image_ref": None}
 
 
-def read_python_manifests(repo):
+def _files(repo, exclude, match):
+    """collector.stack이 고른 manifest 중 이름이 맞는 것 — 수집기와 같은 목록 (git 추적 파일 − exclude)."""
+    return [f for f in stack.manifest_files(repo, exclude)[0] if match(f.name)]
+
+
+def read_python_manifests(repo, exclude=()):
     repo = Path(repo)
     out = {}
-    for f in sorted(repo.rglob("requirements*.txt")):
-        if any(p in {".venv", "venv", "node_modules", ".git"} for p in f.parts):
-            continue
+    for f in _files(repo, exclude, lambda n: fnmatch.fnmatchcase(n, "requirements*.txt")):
         stem = f.stem.lower()
         group = "dev" if any(w in stem for w in ("dev", "test", "lint")) else "main"
         for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
             r = parse_requirement(line)
             if r:
                 _add(out, r[0], f.name, group, r[1])
-    py = repo / "pyproject.toml"
-    if py.exists():
+    for py in _files(repo, exclude, lambda n: n == "pyproject.toml"):
         d = tomllib.loads(py.read_text(encoding="utf-8"))
         proj = d.get("project", {})
         for spec in proj.get("dependencies", []):
@@ -89,12 +94,10 @@ def _image_pin(ref):
     return "floating" if tag in ("", "latest") else "pinned"
 
 
-def read_images(repo):
+def read_images(repo, exclude=()):
     """Dockerfile FROM · compose image. 앞선 스테이지 이름(FROM x AS y의 y)과 scratch는 기술이 아니다."""
     repo, out = Path(repo), {}
-    for f in sorted(repo.rglob("Dockerfile*")):
-        if any(p in {".venv", "node_modules", ".git"} for p in f.parts) or not f.is_file():
-            continue
+    for f in _files(repo, exclude, lambda n: n.startswith("Dockerfile")):
         stages = set()
         for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
             m = _FROM.match(line)
@@ -107,9 +110,7 @@ def read_images(repo):
                 continue
             out[ref] = {"name": ref, "manifest": None, "group": None, "pin": _image_pin(ref), "image": True, "image_ref": f"{f.name} FROM"}
     import yaml
-    for f in sorted(list(repo.rglob("compose*.y*ml")) + list(repo.rglob("docker-compose*.y*ml"))):
-        if any(p in {".venv", "node_modules", ".git"} for p in f.parts):
-            continue
+    for f in _files(repo, exclude, lambda n: n.startswith(("compose", "docker-compose"))):
         try:
             d = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
         except yaml.YAMLError:
@@ -121,9 +122,9 @@ def read_images(repo):
     return out
 
 
-def read_repo_signals(repo):
+def read_repo_signals(repo, exclude=()):
     """repo 폴더 → {정규화 이름: 신호}. 패키지와 이미지를 함께 (이미지는 이름 그대로 소문자 키)."""
-    sig = read_python_manifests(repo)
-    for ref, s in read_images(repo).items():
+    sig = read_python_manifests(repo, exclude)
+    for ref, s in read_images(repo, exclude).items():
         sig[ref.lower()] = s
     return sig

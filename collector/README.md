@@ -63,6 +63,8 @@ python collector/tests/test_snapshot.py                # 오프라인 테스트
 
 내 스택 repo는 당기지 않는다(그 노트북에서 작업하는 사본이다). 단 `radar-targets.json`에 `"mirror": true`가 붙은 항목은 **레이더 전용 읽기 사본**이라 수집 직전에 당긴다(`collect_only.my_mirrors_refresh`) — 예: medical-mate-ai는 작업 사본이 다른 브랜치에 있어 `../medical-mate-ai-radar`(main 클론)를 대상으로 둔다 (2026-10-08). 목록에 있는데 폴더가 없으면 `collect_only.my_targets_missing`에 남는다 — 조용히 빠지면 그 주 수집이 영구히 빈다
 
+**manifest는 git이 추적하는 파일만 읽는다** (HYO-122, `stack.py`) — 수집기(package.json)와 관문(`pipeline/importance`, requirements·Dockerfile·compose)이 같은 리더를 쓴다. 미추적·ignored 사본(`.dev-data-*` 등)과 `.claude`·`node_modules` 같은 폴더는 안 읽는다. 다른 사람의 사본이 레포 안에 추적돼 있으면 대상 항목에 `"exclude": ["desktop/backend/profiles"]`(root 기준 경로·폴더·glob)를 적는다 (`radar-targets.json` · `targets-collect-only.json` 둘 다). git이 아닌 폴더는 걸어서 읽고 `run.json`의 `github.dependencies.manifests`에 모드(`git`|`walk`)와 뺀 파일을 남긴다.
+
 ## 첫 실행에서 고친 것 (2026-10-02)
 
 - PyPI `project_urls`의 첫 GitHub 링크가 **후원 페이지**(`github.com/sponsors/…`)인 패키지가 있었다(pydantic·uvicorn) → 키 우선순위(Source·Repository 먼저) + 소유자 `sponsors` 제외

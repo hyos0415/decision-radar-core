@@ -63,7 +63,8 @@ python pipeline/tests/test_profile_filter.py                      # 오프라인
 
 ```bash
 # 1) 스택의 기술 등급 — 스택이 바뀔 때만. 스크립트 검증(Dockerfile FROM·dev 그룹·manifest)이 모델을 덮는다
-python -m pipeline.importance classify-stack --repo ../adr --extra pipeline/importance/stack-extra.json --tiers tiers.json --model stub [--plan]
+python -m pipeline.importance classify-stack --targets --extra pipeline/importance/stack-extra.json --tiers tiers.json --model stub [--plan]   # --targets = 내 대상 전부 (env RADAR_TARGETS 또는 ../adr/radar-targets.json), 각자의 exclude 적용 · 폴더 없는 대상은 출력
+python -m pipeline.importance stack-diff --tiers tiers.json --targets      # 수집기가 보는 스택 vs 등급 파일 — 수집기만 · 관문만 · 양쪽
 python -m pipeline.importance override --tiers tiers.json --tech PyYAML --set-tiers L6      # 사람이 고친 값 (최우선, 재분류해도 유지)
 # 2) 레인 A에 붙이기 (gate: keep/drop + 어느 행 때문인지, 5/N 상한)
 python -m pipeline.profile_filter run --snapshot ... --gate stub --tiers tiers.json --out pipeline/out/w41
@@ -93,6 +94,7 @@ python pipeline/tests/test_detect_feed.py      # 오프라인 — radar.py feed�
 - `funnel.json` = 건수(수집 → 레인 A → 관문 남김 → detect 입력). 실행 요약의 첫 줄이 된다 (`run_detect` · 데스크톱 `_summarize_detect`)
 - `gate.json` = url → 왜 남았나(`kept_by`). **detect 입력(feed)에는 넣지 않는다** — 모델 판단을 흔들지 않게. 화면의 「왜 왔나」 칸(HYO-85)이 읽는다
 - 버린 이유(결정표의 행)는 옮기지 않는다 — `lane_a.json`·`gate-calls.jsonl`에 있다 (깔때기 화면은 만들지 않는다, 10/8)
+- manifest는 수집기와 같은 리더(`collector/stack.py`)로 읽는다 — git 추적 파일만, 대상별 `exclude`(radar-targets.json) 적용. `--repo`만 주면 exclude 없이 그 폴더의 추적 파일을 읽는다 (HYO-122)
 - 등급 파일은 `classify-stack`으로 만든다. 등급 스크립트 집행(HYO-67)은 데모 뒤
 
 ## 알려진 한계

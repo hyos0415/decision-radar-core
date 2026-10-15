@@ -1,7 +1,10 @@
 """분류기 CLI.
 
-  python -m pipeline.importance classify-stack --repo <대상 repo 폴더> [--repo ...] [--extra stack-extra.json] --tiers tiers.json --model stub
-      대상 repo의 manifest·Dockerfile·compose에서 기술을 뽑아 등급을 매겨 저장한다 (스택이 바뀐 기술만). 실제 모델은 --real-api가 있어야 한다
+  python -m pipeline.importance classify-stack --targets [radar-targets.json] [--repo <폴더> ...] [--extra stack-extra.json] --tiers tiers.json --model stub
+      내 대상 전부(각자의 exclude 포함)의 manifest·Dockerfile·compose에서 기술을 뽑아 등급을 매겨 저장한다 (스택이 바뀐 기술만). 실제 모델은 --real-api가 있어야 한다.
+      읽는 파일은 수집기와 같다 — git 추적 파일만 (collector/stack.py)
+  python -m pipeline.importance stack-diff --tiers tiers.json [--targets [radar-targets.json]]
+      수집기가 보는 이름과 등급 파일이 아는 이름을 견준다 (수집기만 · 관문만 · 양쪽)
   python -m pipeline.importance override --tiers tiers.json --tech PyYAML --set-tiers L6 [--sensitive] [--local] [--path dev]
       사람이 고친 값 — 자동 분류보다 우선하고, 다시 분류해도 지워지지 않는다
   python -m pipeline.importance show --tiers tiers.json
@@ -11,6 +14,7 @@
 """
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -19,10 +23,31 @@ from .signals import read_repo_signals
 from .tiers import NOT_IMPLEMENTED, TierStore
 
 
+REPO = Path(__file__).resolve().parents[2]
+
+
+def load_targets(path=None):
+    """radar-targets.json(내 스택) → ([(repo 이름, 루트, exclude)], 폴더 없는 [(repo 이름, 루트)], 파일 경로).
+    경로 해석은 collector/run.py와 같다: 인자 > env RADAR_TARGETS > `<이 레포 부모>/adr/radar-targets.json`."""
+    p = Path(path or os.environ.get("RADAR_TARGETS") or (REPO.parent / "adr" / "radar-targets.json"))
+    if not p.exists():
+        raise SystemExit(f"대상 목록이 없다: {p}")
+    found, missing = [], []
+    for t in json.loads(p.read_text(encoding="utf-8")):
+        root = (p.parent / t["path"]).resolve()
+        if root.is_dir():
+            found.append((t["repo"], root, list(t.get("exclude") or [])))
+        else:
+            missing.append((t["repo"], root))
+    return found, missing, p
+
+
 def queries_from_repos(repos, extra=None):
+    """repos: 폴더 경로 또는 (경로, exclude) 쌍."""
     qs = []
     for repo in repos:
-        for key, s in read_repo_signals(repo).items():
+        repo, exclude = repo if isinstance(repo, tuple) else (repo, ())
+        for key, s in read_repo_signals(repo, exclude).items():
             if s["image"]:
                 usage, source = f"컨테이너 이미지 ({s['image_ref']})", s["image_ref"]
             else:
@@ -61,7 +86,14 @@ def build_gate(model, tiers_path, *, real_api=False, call_log=None, limit=None, 
 
 def cmd_classify(a):
     extra = json.loads(Path(a.extra).read_text(encoding="utf-8")) if a.extra else []
-    qs = queries_from_repos(a.repo or [], extra)
+    repos = list(a.repo or [])
+    if a.targets:
+        found, missing, path = load_targets(None if a.targets is True else a.targets)
+        for name, root in missing:
+            print(f"대상 폴더 없음: {name} -> {root}")       # 조용히 빼지 않는다
+        repos += [(root, ex) for _, root, ex in found]
+        print(f"대상 {len(found)}개 읽음 ({path})")
+    qs = queries_from_repos(repos, extra)
     store = TierStore(a.tiers)
     todo = [q for q in qs if store.needs_classify(q) or a.refresh]
     print(f"기술 {len(qs)}개 중 새로 분류할 것 {len(todo)}개 (모델 호출 {len(todo)}회)")
@@ -78,6 +110,38 @@ def cmd_classify(a):
     mism = [r["technology"] for r in store.data["technologies"].values() if r.get("mismatch")]
     print(f"분류 {len(done)}개 · 분류 불가 {len(unresolved)} {unresolved} · 스크립트가 모델을 덮어쓴 것 {len(mism)} {mism}")
     print(f"-> {a.tiers}")
+    return 0
+
+
+def compare_stacks(collector_names, gate_names):
+    """수집기가 보는 이름 vs 관문이 아는 이름 (signals.norm으로 정규화) → {"collector_only", "gate_only", "both"} 정렬 목록."""
+    from .signals import norm
+    c, g = {norm(n) for n in collector_names}, {norm(n) for n in gate_names}
+    return {"collector_only": sorted(c - g), "gate_only": sorted(g - c), "both": sorted(c & g)}
+
+
+def collector_stack_names(targets_path=None):
+    """수집기가 내 대상에서 읽는 의존성 이름 — CLAUDE.md 표(npm 표시 행 제외) + package.json(git 추적 − exclude). 폴더 없는 대상은 (이름, 경로)로 따로."""
+    from collector.sources import github
+    found, missing, _ = load_targets(targets_path)
+    names = []
+    for _, root, ex in found:
+        md = root / "CLAUDE.md"
+        if md.exists():
+            names += github.dependencies_from_claude_md(md.read_text(encoding="utf-8"))
+        names += github.dependencies_from_package_json(root, ex)
+    return names, missing
+
+
+def cmd_stack_diff(a):
+    store = TierStore(a.tiers)
+    gate = [r["technology"] for r in store.data["technologies"].values()] + [o.get("technology", k) for k, o in store.data["overrides"].items()]
+    names, missing = collector_stack_names(None if a.targets is True else a.targets)
+    for name, root in missing:
+        print(f"대상 폴더 없음: {name} -> {root}")
+    d = compare_stacks(names, gate)
+    for label, key in (("수집기만", "collector_only"), ("관문만", "gate_only"), ("양쪽", "both")):
+        print(f"{label} {len(d[key])}: {', '.join(d[key]) or '-'}")
     return 0
 
 
@@ -121,6 +185,7 @@ def main(argv=None):
     sp = ap.add_subparsers(dest="cmd", required=True)
     c = sp.add_parser("classify-stack")
     c.add_argument("--repo", action="append")
+    c.add_argument("--targets", nargs="?", const=True, default=None, help="내 대상 전부(+각자의 exclude) — 경로 생략 시 env RADAR_TARGETS 또는 <부모>/adr/radar-targets.json. --repo와 함께 쓸 수 있다")
     c.add_argument("--extra", help="[{name, usage, source}] — 모델 id·서비스처럼 manifest에 없는 기술")
     c.add_argument("--tiers", required=True)
     c.add_argument("--model", default="stub")
@@ -129,6 +194,10 @@ def main(argv=None):
     c.add_argument("--plan", action="store_true", help="호출 수만 세고 끝")
     c.add_argument("--call-log")
     c.set_defaults(fn=cmd_classify)
+    d = sp.add_parser("stack-diff", help="수집기가 보는 스택 vs 관문(등급 파일)이 아는 스택")
+    d.add_argument("--tiers", required=True)
+    d.add_argument("--targets", nargs="?", const=True, default=None)
+    d.set_defaults(fn=cmd_stack_diff)
     o = sp.add_parser("override")
     o.add_argument("--tiers", required=True)
     o.add_argument("--tech", required=True)

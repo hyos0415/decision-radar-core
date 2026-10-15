@@ -9,6 +9,7 @@ import asyncio
 import json
 import re
 import socket
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -16,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from collector import stack  # noqa: E402
 from pipeline import profile_filter  # noqa: E402
 from pipeline import interest_profile as ip  # noqa: E402
 from pipeline.importance import agents_backend, backends, evaluate, gate as gate_mod, policy, signals, tiers  # noqa: E402
@@ -181,6 +183,7 @@ def test_signals_from_repo():
     assert g("docker.elastic.co/elasticsearch/elasticsearch:9.5.4")["image"]
     assert "base" not in s and "scratch" not in s                       # 스테이지 이름·scratch는 기술이 아니다
     assert not any("other" in k or "git" in k for k in s)               # -r · URL 의존성은 건너뜀
+    assert signals.parse_requirement("httpx>=0.27") == ("httpx", "range") and signals.parse_requirement("https://x/y.whl") is None   # httpx는 URL이 아니다
 
 
 def test_main_group_beats_dev_group():
@@ -188,6 +191,95 @@ def test_main_group_beats_dev_group():
         _write(Path(d) / "requirements.txt", "pytest==8\n")
         _write(Path(d) / "requirements-dev.txt", "pytest==8\n")
         assert signals.read_python_manifests(d)["pytest"]["group"] == "main"     # 운영에 들어가면 운영이다
+
+
+def _git_add(d, *rels):
+    """임시 폴더를 진짜 git repo로 만들고 rels만 추적시킨다 (커밋 없이 — ls-files는 인덱스를 본다)."""
+    subprocess.run(["git", "-C", str(d), "init", "-q"], check=True, capture_output=True)
+    if rels:
+        subprocess.run(["git", "-C", str(d), "add", "--"] + list(rels), check=True, capture_output=True)
+
+
+def _stack_repo(d):
+    """추적: requirements.txt · demo/requirements.txt(제외 대상) · .claude/… · Dockerfile / 미추적: scratch/requirements.txt"""
+    d = Path(d)
+    _write(d / "requirements.txt", "requests\nhttpx\n")
+    _write(d / "demo" / "requirements.txt", "torch\n")
+    _write(d / ".claude" / "worktrees" / "x" / "requirements.txt", "numpy\n")
+    _write(d / "Dockerfile", "FROM python:3.12-slim\n")
+    _write(d / "scratch" / "requirements.txt", "transformers\n")
+    _git_add(d, "requirements.txt", "demo/requirements.txt", ".claude/worktrees/x/requirements.txt", "Dockerfile")
+    return d
+
+
+def test_signals_use_tracked_files_minus_excludes_and_skip_claude():
+    with tempfile.TemporaryDirectory() as d:
+        _stack_repo(d)
+        s = signals.read_repo_signals(d, ["demo"])
+        assert set(s) == {"requests", "httpx", "python:3.12-slim"}, set(s)      # torch(제외) · numpy(.claude) · transformers(미추적)가 없다
+        assert "torch" in signals.read_repo_signals(d)                          # exclude를 안 주면 추적 파일이니 읽힌다
+        assert "transformers" not in signals.read_python_manifests(d) and "numpy" not in signals.read_python_manifests(d)
+        assert set(signals.read_images(d, ["Dockerfile"])) == set()
+
+
+def _targets_file(root):
+    root = Path(root)
+    a = _stack_repo(root / "a")
+    _write(a / "CLAUDE.md", "### 의존성 → component\n| 의존성 | component |\n|---|---|\n| PyYAML | skill |\n")
+    _write(a / "package.json", '{"dependencies": {"react": "19"}}')
+    _git_add(a, "requirements.txt", "demo/requirements.txt", "Dockerfile", "CLAUDE.md", "package.json")
+    b = root / "b"
+    _write(b / "requirements.txt", "pydantic\n")
+    _git_add(b, "requirements.txt")
+    t = root / "adr" / "radar-targets.json"
+    _write(t, json.dumps([{"repo": "a", "path": "../a", "exclude": ["demo"]}, {"repo": "b", "path": "../b"},
+                          {"repo": "ghost", "path": "../ghost"}]))
+    return t
+
+
+def _cli(argv):
+    import contextlib
+    import io
+    from pipeline.importance import cli
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cli.main(argv)
+    return rc, buf.getvalue()
+
+
+def test_classify_stack_targets_reads_all_targets_with_excludes_and_reports_missing():
+    with tempfile.TemporaryDirectory() as d:
+        t = _targets_file(d)
+        rc, out = _cli(["classify-stack", "--targets", str(t), "--tiers", str(Path(d) / "tiers.json"), "--plan"])
+        assert rc == 0 and "대상 폴더 없음: ghost" in out, out
+        assert "기술 4개 중 새로 분류할 것 4개" in out, out                      # requests·httpx·python:3.12-slim(a) + pydantic(b) — torch(제외)는 없다
+        old = os.environ.get("RADAR_TARGETS")
+        os.environ["RADAR_TARGETS"] = str(t)                                      # 값 없는 --targets는 env를 따른다
+        try:
+            rc, out2 = _cli(["classify-stack", "--targets", "--tiers", str(Path(d) / "tiers.json"), "--plan"])
+        finally:
+            os.environ.pop("RADAR_TARGETS") if old is None else os.environ.__setitem__("RADAR_TARGETS", old)
+        assert rc == 0 and "기술 4개" in out2, out2
+
+
+def test_compare_stacks_groups_and_normalizes():
+    from pipeline.importance.cli import compare_stacks
+    r = compare_stacks(["PyYAML", "react", "Typing_Extensions"], ["pyyaml", "requests", "typing-extensions"])
+    assert r == {"collector_only": ["react"], "gate_only": ["requests"], "both": ["pyyaml", "typing-extensions"]}, r
+
+
+def test_stack_diff_command_compares_collector_names_with_tier_file():
+    with tempfile.TemporaryDirectory() as d:
+        t = _targets_file(d)
+        st = TierStore(Path(d) / "tiers.json")
+        st.ensure([TechQuery("PyYAML", usage="u"), TechQuery("requests", usage="u")], StubBackend(tiers={"PyYAML": ["L4"], "requests": ["L4"]}))
+        st.save()
+        rc, out = _cli(["stack-diff", "--tiers", str(Path(d) / "tiers.json"), "--targets", str(t)])
+        lines = {ln.split(" ", 1)[0]: ln for ln in out.splitlines() if ln.startswith(("수집기만", "관문만", "양쪽"))}
+        assert rc == 0 and "대상 폴더 없음: ghost" in out, out
+        assert lines["수집기만"] == "수집기만 1: react", lines                  # CLAUDE.md 표 PyYAML은 양쪽, package.json react는 수집기만
+        assert lines["관문만"] == "관문만 1: requests", lines
+        assert lines["양쪽"] == "양쪽 1: pyyaml", lines
 
 
 def test_verify_script_beats_model():
@@ -1264,6 +1356,11 @@ def mutations():
         ("Jev 허용 목록에 api.openai.com을 섞음", [(jev_backend, "ALLOWED_HOSTS", {"api.typesafe.ai", "api.openai.com"})], test_jev_netguard_allows_only_typesafe_host),
         ("429 retry-after를 무시", [(jev_backend, "parse_retry_after", lambda headers: None)], test_jev_retry_429_respects_retry_after_and_4xx_is_not_retried),
         ("Jev 단가를 10배로", [(jev_backend, "INPUT_USD_PER_MTOK", 0.42)], test_jev_call_log_cost_and_returned_model),
+        ("스택 리더: exclude를 무시", [(stack, "_excluded", lambda p, exclude: False)], test_signals_use_tracked_files_minus_excludes_and_skip_claude),
+        ("스택 리더: exclude를 무시 (--targets)", [(stack, "_excluded", lambda p, exclude: False)], test_classify_stack_targets_reads_all_targets_with_excludes_and_reports_missing),
+        ("스택 리더: git 목록을 못 쓰고 폴더를 걸음 (미추적 사본이 섞임)", [(stack, "_git_files", lambda root: (None, "mutation"))], test_signals_use_tracked_files_minus_excludes_and_skip_claude),
+        ("스택 리더: .claude를 건너뛰지 않음", [(stack, "SKIP_DIRS", {"node_modules", ".git"})], test_signals_use_tracked_files_minus_excludes_and_skip_claude),
+        ("스택 비교: 정규화 없이 견줌", [(signals, "norm", lambda n: n)], test_compare_stacks_groups_and_normalizes),
         ("창: 재배치 없이 앞에서 자르기만", [(prompts, "window_text", lambda text, text_max=3000: (text or "")[:text_max])], test_window_moves_only_risk_sections_from_outside_the_window),
         ("창: 굵은 라벨(R2)을 못 봄", [(prompts, "_R2_LABEL", re.compile(r"(?!x)x"))], test_window_moves_only_risk_sections_from_outside_the_window),
         ("창: 본문 위험 단어 줄도 옮김", [(prompts, "_R4_COMMIT", re.compile(r"(?i)\b(?:migrate|remove)\b"))], test_window_moves_only_risk_sections_from_outside_the_window),
