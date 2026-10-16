@@ -7,6 +7,9 @@
 - 모델 답 = 등급 파일 기록의 `tiers`(스크립트 검증 S1~S3 뒤의 값). 분류 불가면 답 없음(틀림으로 세고 따로도 센다)
 - 정답 = 검토본의 효과 값(TierStore.effective — 자동 분류 위에 사람 수정을 덮은 값). 등급 집합이 같아야 일치
 - 예시 기술(EXAMPLE_TECHS)과 그 밖을 따로 센다 — 예시 기술은 프롬프트에 답이 들어 있다
+
+변경 (2026-10-16, HYO-128 — 결과 0건): `--t3`를 주면 T3(그 밖 분류 불가 평균이 before보다 늘지 않는다)도 판정에 넣는다.
+주지 않으면 HYO-124(§1-4)와 같은 판정이다. 등록: tier-examples.md §3.
 """
 import argparse
 import json
@@ -62,6 +65,7 @@ def main(argv=None):
     ap.add_argument("--before", nargs="+", required=True)
     ap.add_argument("--after", nargs="+", required=True)
     ap.add_argument("--json", help="결과 JSON을 여기에")
+    ap.add_argument("--t3", action="store_true", help="T3도 판정에 넣는다 (HYO-128)")
     a = ap.parse_args(argv)
 
     store = TierStore(a.gold)
@@ -93,11 +97,16 @@ def main(argv=None):
     mb, ma = res["arms"]["before"]["mean"], res["arms"]["after"]["mean"]
     c1 = ma["ex"] > mb["ex"]
     c2 = ma["out"] >= mb["out"] - OUT_TOLERANCE
+    c3 = ma["out_unres"] <= mb["out_unres"]
     k_ok = min(len(before), len(after)) >= 3
     res["criteria"] = {"T1_example_up": c1, "T2_out_no_harm": c2, "k_ok": k_ok,
-                       "adopt": bool(c1 and c2 and k_ok)}
+                       "adopt": bool(c1 and c2 and k_ok and (c3 or not a.t3))}
+    if a.t3:
+        res["criteria"]["T3_out_unres_no_rise"] = c3
     print(f"T1 예시 일치가 오른다: {mb['ex']:.2f} → {ma['ex']:.2f} → {'통과' if c1 else '불통과'}")
     print(f"T2 그 밖 일치가 {OUT_TOLERANCE}개 넘게 떨어지지 않는다: {mb['out']:.2f} → {ma['out']:.2f} → {'통과' if c2 else '불통과'}")
+    if a.t3:
+        print(f"T3 그 밖 분류 불가 평균이 늘지 않는다: {mb['out_unres']:.2f} → {ma['out_unres']:.2f} → {'통과' if c3 else '불통과'}")
     print(f"판정: {'채택' if res['criteria']['adopt'] else ('k<3 — 스모크, 판정하지 않는다' if not k_ok else '채택하지 않는다')}")
 
     print("\n다수결 답이 두 쪽에서 다른 기술 — 기술 | 예시? | before | after | 정답")
