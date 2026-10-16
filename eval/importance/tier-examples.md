@@ -149,3 +149,55 @@
 ### 3-6. 채택되면
 
 판이 `0937e3ec`로 바뀌므로 10/20 주간 `weekly-tiers`가 사람이 고치지 않은 기술을 한 번 다시 분류한다. v1 채택 때 예상한 재분류(§1-6)를 v2 판으로 하는 셈이다. 결과 PR에서 v2 다수결이 검토본과 다른 기술을 보고, 지킬 값은 10/20 전에 overrides로 고정한다(§2-4와 같은 방식).
+
+## 4. v2 결과 (2026-10-16 — before `be45021` 원자료 · after-v2 `c16b117`)
+
+after-v2 실행 3회 모두 95개를 분류했고 호출 오류는 0건이다. 비용은 회당 $0.45, **합계 $1.35**다(상한 $2 — 이번에는 비용 검사가 실제로 누적값 $0.45 → $0.90 → $1.35를 읽었다). 입력 토큰은 v1 149,312 → v2 174,582다. 원자료는 `eval/runs/hyo128/`(gitignore)에 있다. 정답 사본의 sha256은 등록값과 같다.
+
+### 4-1. 채점 (`score_tier_examples.py --t3`, 등록한 그대로)
+
+| 쪽 | 예시 기술 일치 (/24) | 그 밖 일치 (/71) | 분류 불가 — 예시 | 분류 불가 — 그 밖 |
+|---|---|---|---|---|
+| before (`be45021`) | 16 · 16 · 17 (평균 16.33) | 56 · 56 · 56 (56.00) | 3 · 3 · 3 | 7 · 7 · 6 (6.67) |
+| v1 after (§2, 참고) | 22 · 22 · 22 (22.00) | 59 · 56 · 56 (57.00) | 0 · 0 · 0 | 7 · 9 · 10 (8.67) |
+| **v2 after** | **24 · 24 · 24 (24.00)** | **59 · 60 · 60 (59.67)** | 0 · 0 · 0 | **1 · 1 · 1 (1.00)** |
+
+- **T1 통과** (16.33 → 24.00) · **T2 통과** (56.00 → 59.67) · **T3 통과** (6.67 → 1.00) · k=3 → 등록 기준으로 **채택**
+- 예시 기술 24개가 3번 모두 맞았다. v1에서 남았던 langfuse(→ L3+L5)와 python(→ L0)이 고쳐졌다. 둘 다 문구에 이름이 들어간 표적이다(§3-5)
+- 남은 분류 불가 1개는 react-dom이다(3/3, 정답 L4). before·v1에서도 분류 불가였다. 이유는 「devDependencies라 번들되는지 알 수 없다」로, 새 `unsure` 조건(알려진 용도와 usage로도 등급이 정해지지 않을 때)에 맞는 답이다
+
+### 4-2. §2의 부작용 기술 — 분류 불가는 사라졌고, 셋은 다른 등급으로 틀린다
+
+| 기술 | 정답 | v1 after | v2 after (3번) |
+|---|---|---|---|
+| tw-animate-css | L8 | 분류 불가 × 3 | **L8** × 3 |
+| prettier | L7 | L7 × 1 · 분류 불가 × 2 | **L7** × 3 |
+| sonner · class-variance-authority · @fontsource-variable/geist-mono | L6 · L8 · L8 | 분류 불가 × 1씩 | 맞음 × 3 |
+| tailwindcss | L6 | 분류 불가 × 3 | L7 × 3 — 「빌드 시점에 CSS를 생성하는 빌드 도구 성격」 |
+| lucide-react | L8 | L8 × 1 · 분류 불가 × 2 | L6 × 3 — 「아이콘 렌더링이라는 특정 기능 하나」 |
+
+tailwindcss·lucide-react는 이제 이유를 대며 등급을 고른다. 두 답 모두 정의로 설명은 되지만 검토본과 다르다. 둘은 §2-4에서 overrides로 고정했으므로 효과 값은 검토본 그대로다.
+
+### 4-3. 두 쪽 다수결이 다른 기술 (before 대비, 정답과 함께)
+
+- 나아진 것(정답으로 바뀐 것): 예시 기술 jinja2 · pydantic · uvicorn · requests · typesafe-sdk · transformers · langfuse · python. 그 밖 기술은 분류 불가에서 정답으로 바뀐 flagembedding · huggingface-hub · sentence-transformers · sentencepiece와, 다른 등급에서 정답으로 바뀐 @electron-toolkit/utils · langgraph-checkpoint-sqlite · langsmith · pyyaml이다
+- 분류 불가에서 **정답의 일부만** 맞힌 것: numpy · pandas → L6(정답 L6+L7). 「아는 대로 판단」 허락(§3-5)으로 답을 내게 됐지만 L7 쪽은 놓쳤다. 둘 다 overrides에 있다
+- **나빠진 것**(before는 맞았는데 v2는 틀림): @radix-ui/react-slot L6 → L8(「asChild용 작은 유틸 프리미티브」) · langgraph-checkpoint L6 → L4(v1과 같음, overrides에 있음) · tailwindcss · lucide-react(§4-2)
+- 계속 틀린 것: openai-agents — before L4+L5, v1 L4(맞음), v2 L5(정답 L4). 「OpenAI 모델 API를 부르는 에이전트 SDK」라는 이유다. v1 다수결은 맞혔는데 v2는 3번 모두 L5를 냈다
+- 흔들림만: @radix-ui/react-label(L6 × 2 · L4 × 1)
+
+### 4-4. 채택하면 10/20 재분류에서 바뀌는 값 (§3-6)
+
+v2 다수결이 정답과 다른 기술은 11개다. 그중 9개는 이미 overrides에 있어 효과 값이 바뀌지 않는다(@electron-toolkit/preload · electron · langgraph-checkpoint · lucide-react · numpy · openapi-fetch · pandas · react-dom · tailwindcss). **overrides에 없는 2개는 10/20 `weekly-tiers`가 덮는다.**
+
+| 기술 | 검토본 | v2 (3번) |
+|---|---|---|
+| @radix-ui/react-slot | L6 | L8 × 3 |
+| openai-agents | L4 | L5 × 3 |
+
+### 4-5. 판정과 후속 (2026-10-16, 사용자)
+
+- **채택**한다(등록 기준 T1·T2·T3 통과). 등급 프롬프트 v2(판 `0937e3ec`)를 merge한다
+- §4-4의 2개는 10/20 재분류 전에 **검토본 값 그대로 overrides에 고정**했다(`../radar-snapshots/tiers.json` overrides 41 → 43, note 「HYO-128 채택 전 고정」). 고정 전 사본은 `eval/runs/hyo128/tiers-before-pin.json`이다. 고정한 뒤 v2 다수결이 검토본과 다른 기술은 모두 overrides에 있다 — 효과 값은 바뀌지 않는다
+- 10/20 `weekly-tiers`는 지문이 바뀐 **68개**를 다시 분류한다(`--plan`, 2026-10-16. v2 회당 비용으로 약 $0.32). 남은 위험은 한 번짜리 실행의 흔들림이다(이번 k=3에서 흔들린 기술은 @radix-ui/react-label 하나). 주간 요약 첫 줄의 분류 불가 수와 5% 경고로 확인한다
+- 남은 것: 정의로 설명은 되지만 검토본과 다른 답(tailwindcss L7 · lucide-react L6 · numpy·pandas L6만 · openai-agents L5)은 overrides가 막고 있다. 문구를 더 고치지 않는다
