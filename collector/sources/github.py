@@ -79,13 +79,24 @@ _DEP_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$")
 _NPM_NOTE = re.compile(r"\(\s*npm\b", re.I)
 
 
-def dependencies_from_claude_md(text, skipped=None):
-    """대상 repo CLAUDE.md의 「의존성 → component」 표에서 의존성 이름을 뽑는다.
+def names_from_cell(cell):
+    """표 첫 칸 → 이름들. 괄호 설명·백틱 코드를 먼저 지우고(그 안의 `·`로 쪼개지지 않게) `·` `,` ` + `로 나눈 뒤
+    조각마다 첫 단어만 — 버전(`Electron 39`)·설명(`Pretendard 글꼴`)을 뗀다 (HYO-122 ⑥)."""
+    cell = re.sub(r"\(.*?\)", "", cell)
+    cell = re.sub(r"`[^`]*`", "", cell)
+    out = []
+    for part in re.split(r"[·,]|\s\+\s", cell):
+        name = part.strip().split(" ")[0].strip()
+        if name and name not in out:
+            out.append(name)
+    return out
 
-    첫 칸에 `(npm, ...)` 괄호 설명이 있는 행은 건너뛴다 — 그 의존성은 package.json에서 직접 읽는다.
-    건너뛴 행은 skipped 리스트(주어지면)에 쌓는다.
-    """
-    names, in_table = [], False
+
+def dependency_rows_from_claude_md(text):
+    """대상 repo CLAUDE.md 「의존성 → component」 표의 행 → [{"cell", "component", "names", "npm"}].
+    수집기(dependencies_from_claude_md) · 관문(등급 질의, pipeline/importance/cli.py) · 레인 표시(pipeline/lanes.py)가 같이 쓴다 —
+    이름 뽑는 규칙이 셋으로 갈라지지 않게. npm: 첫 칸에 `(npm, ...)` 괄호 설명이 있다 — 그 의존성은 package.json에서 직접 읽는다."""
+    rows, in_table = [], False
     for line in text.splitlines():
         if line.startswith("### "):
             in_table = "의존성" in line
@@ -95,15 +106,25 @@ def dependencies_from_claude_md(text, skipped=None):
         m = _DEP_ROW.match(line.strip())
         if not m or set(m.group(1)) <= set("-: ") or m.group(1).startswith("의존성"):
             continue
-        if _NPM_NOTE.search(m.group(1)):                  # 괄호를 지우기 전에 판정
+        rows.append({"cell": m.group(1), "component": m.group(2), "names": names_from_cell(m.group(1)),
+                     "npm": bool(_NPM_NOTE.search(m.group(1)))})   # 괄호를 지우기 전에 판정
+    return rows
+
+
+def dependencies_from_claude_md(text, skipped=None):
+    """대상 repo CLAUDE.md의 「의존성 → component」 표에서 의존성 이름을 뽑는다.
+
+    첫 칸에 `(npm, ...)` 괄호 설명이 있는 행은 건너뛴다 — 그 의존성은 package.json에서 직접 읽는다.
+    건너뛴 행은 skipped 리스트(주어지면)에 쌓는다.
+    """
+    names = []
+    for row in dependency_rows_from_claude_md(text):
+        if row["npm"]:
             if skipped is not None:
-                skipped.append(m.group(1))
+                skipped.append(row["cell"])
             continue
-        cell = re.sub(r"\(.*?\)", "", m.group(1))      # 괄호 설명 제거
-        cell = re.sub(r"`[^`]*`", "", cell)
-        for part in re.split(r"[·,]", cell):
-            name = part.strip().split(" ")[0].strip()
-            if name and name not in names:
+        for name in row["names"]:
+            if name not in names:
                 names.append(name)
     return names
 

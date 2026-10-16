@@ -57,21 +57,12 @@ def stack_mentions(item, terms):
     return out
 
 
-_CELL = re.compile(r"^\|\s*([^|]+?)\s*\|")
-
-
 def stack_terms_from_claude_md(text):
-    """대상 repo CLAUDE.md 「의존성 → component」 표의 첫 열을 `·`로 쪼갠 이름들."""
-    out, in_table = [], False
-    for line in text.splitlines():
-        if line.startswith("### "):
-            in_table = "의존성" in line
-            continue
-        m = _CELL.match(line.strip()) if in_table else None
-        if not m or set(m.group(1)) <= set("-: ") or m.group(1).startswith("의존성"):
-            continue
-        for part in m.group(1).split("·"):
-            name = re.sub(r"\(.*?\)", "", part).replace("`", "").strip()
+    """대상 repo CLAUDE.md 「의존성 → component」 표의 이름들 (npm 행 포함 — 표시용). 이름 규칙은 수집기와 같은 파서 (HYO-122 ⑥)."""
+    from collector.sources.github import dependency_rows_from_claude_md
+    out = []
+    for row in dependency_rows_from_claude_md(text):
+        for name in row["names"]:
             if len(name) >= 3 and name not in out:
                 out.append(name)
     return out

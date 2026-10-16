@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from collector import stack  # noqa: E402
+from collector.sources import github  # noqa: E402
 from pipeline import profile_filter  # noqa: E402
 from pipeline import interest_profile as ip  # noqa: E402
 from pipeline.importance import agents_backend, backends, cli as cli_mod, evaluate, gate as gate_mod, policy, signals, tiers  # noqa: E402
@@ -252,14 +253,14 @@ def test_classify_stack_targets_reads_all_targets_with_excludes_and_reports_miss
         t = _targets_file(d)
         rc, out = _cli(["classify-stack", "--targets", str(t), "--tiers", str(Path(d) / "tiers.json"), "--plan"])
         assert rc == 0 and "대상 폴더 없음: ghost" in out, out
-        assert "기술 5개 중 새로 분류할 것 5개" in out, out                      # requests·httpx·python:3.12-slim·react(package.json)(a) + pydantic(b) — torch(제외)는 없다
+        assert "기술 6개 중 새로 분류할 것 6개" in out, out                      # requests·httpx·python:3.12-slim·react(package.json)·PyYAML(CLAUDE.md 표)(a) + pydantic(b) — torch(제외)는 없다
         old = os.environ.get("RADAR_TARGETS")
         os.environ["RADAR_TARGETS"] = str(t)                                      # 값 없는 --targets는 env를 따른다
         try:
             rc, out2 = _cli(["classify-stack", "--targets", "--tiers", str(Path(d) / "tiers.json"), "--plan"])
         finally:
             os.environ.pop("RADAR_TARGETS") if old is None else os.environ.__setitem__("RADAR_TARGETS", old)
-        assert rc == 0 and "기술 5개" in out2, out2
+        assert rc == 0 and "기술 6개" in out2, out2
 
 
 def _npm_repo(d):
@@ -298,6 +299,64 @@ def test_package_json_signals_and_dev_dependencies_are_not_s2():
     assert "devDependencies" in qs["electron"].usage and qs["next"].usage == "package.json 직접 의존성 (main)"
 
 
+DESKTOP_ROW = ("Electron 39 · electron-vite 5 · React 19 · shadcn/ui(Radix) · Geist · Pretendard 글꼴 · react-markdown + remark-gfm · "
+               "remark-frontmatter (npm, `desktop/package.json`)")
+
+
+def _md(*rows, title="의존성 → component", head="의존성"):
+    return f"### {title}\n| {head} | component |\n|---|---|\n" + "".join(f"| {a} | {b} |\n" for a, b in rows)
+
+
+def test_table_cell_names_drop_parens_versions_and_notes():
+    """⑥ 표 첫 칸 → 이름: 괄호 안의 `·`로 쪼개지지 않고, 버전·설명 단어가 이름에 붙지 않는다 (예전 run.json: `Electron 39` · `tokenizers (+ ranx가 끄는 numpy` · `numba)`)."""
+    assert github.names_from_cell("ranx · tokenizers (+ ranx가 끄는 numpy·scipy·pandas·numba)") == ["ranx", "tokenizers"]
+    assert github.names_from_cell(DESKTOP_ROW) == ["Electron", "electron-vite", "React", "shadcn/ui", "Geist", "Pretendard",
+                                                   "react-markdown", "remark-gfm", "remark-frontmatter"]
+    assert github.names_from_cell("llama.cpp `llama-server`") == ["llama.cpp"]
+    assert github.names_from_cell("Elasticsearch (docker `infra/`, 9.5.4 + analysis-nori, basic)") == ["Elasticsearch"]
+    md = _md((DESKTOP_ROW, "desktop"), ("litellm (별도 venv)", "product"), head="의존성 (`requirements.txt`)")
+    rows = github.dependency_rows_from_claude_md(md)
+    assert [(r["npm"], r["names"][0], r["component"]) for r in rows] == [(True, "Electron", "desktop"), (False, "litellm", "product")], rows
+    from pipeline import lanes
+    assert lanes.stack_terms_from_claude_md(md)[:3] == ["Electron", "electron-vite", "React"]      # 레인 표시도 같은 파서 (npm 행 포함)
+
+
+def _table_repos(d):
+    """a: requirements(langfuse · typesafe-sdk) + CLAUDE.md(langfuse 행 · llama.cpp 행 · npm 행 · 외부 서비스 표) / b: CLAUDE.md만 (langfuse 다른 쓰임 · typesafe_sdk)."""
+    d = Path(d)
+    a, b = d / "a", d / "b"
+    _write(a / "requirements.txt", "langfuse\ntypesafe-sdk\n")
+    _write(a / "package.json", json.dumps({"devDependencies": {"react": "19.0.0"}}))
+    _write(a / "CLAUDE.md", _md(("langfuse", "obs (트레이싱)"), ("llama.cpp `llama-server`", "analysis"), (DESKTOP_ROW, "desktop"))
+           + _md(("Langfuse Cloud", "obs"), title="외부 모델·서비스", head="모델·서비스"))
+    _git_add(a, "requirements.txt", "package.json", "CLAUDE.md")
+    _write(b / "CLAUDE.md", _md(("langfuse", "verifier, eval"), ("typesafe_sdk", "eval")))
+    _git_add(b, "CLAUDE.md")
+    return a, b
+
+
+def test_queries_read_claude_md_table_usage_and_table_only_names():
+    """③ 매니페스트에 있는 이름은 표의 행을 usage에 덧붙이고(repo마다, npm 행 포함), ④ 매니페스트 밖 이름은 표의 행으로 질의를 만든다 — npm 행 · 「외부 모델·서비스」 표는 아니다."""
+    from pipeline.importance.cli import queries_from_repos
+    with tempfile.TemporaryDirectory() as d:
+        a, b = _table_repos(d)
+        qs = {q.name: q for q in queries_from_repos([(a, (), "repo-a"), (b, (), "repo-b")])}
+        bare = {q.name: q for q in queries_from_repos([(a, ())])}
+    assert set(qs) == {"langfuse", "typesafe-sdk", "react", "llama.cpp"}, set(qs)  # typesafe_sdk(b 표) = typesafe-sdk(a 매니페스트) · npm 행의 Electron 등 · Langfuse Cloud는 없다
+    assert qs["react"].signals["group"] == signals.NPM_DEV and "Electron 39" in qs["react"].usage and "→ desktop" in qs["react"].usage   # npm 행은 쓰임새만 준다
+    lf = qs["langfuse"]
+    assert lf.usage.startswith("requirements.txt 직접 의존성 (main) · ") and lf.signals["manifest"] == "requirements.txt", lf
+    assert "repo-a CLAUDE.md 「의존성 → component」: langfuse → obs (트레이싱)" in lf.usage, lf.usage
+    assert "repo-b CLAUDE.md 「의존성 → component」: langfuse → verifier, eval" in lf.usage, lf.usage
+    assert "repo-b" in qs["typesafe-sdk"].usage and qs["typesafe-sdk"].signals["group"] == "main"
+    ll = qs["llama.cpp"]
+    assert ll.signals == {} and ll.source == "repo-a/CLAUDE.md", ll
+    assert ll.usage == "repo-a CLAUDE.md 「의존성 → component」: llama.cpp `llama-server` → analysis", ll.usage
+    plain = TechQuery(lf.name, usage="requirements.txt 직접 의존성 (main)", signals=lf.signals)
+    assert tiers.fingerprint(lf) != tiers.fingerprint(plain)                       # 표의 쓰임이 바뀌면 다시 분류된다
+    assert "a CLAUDE.md" in bare["langfuse"].usage                                  # repo 이름을 안 주면 폴더 이름
+
+
 def test_gate_other_stack_is_counted_apart_and_needs_no_model_call():
     st = _store(pydantic={"tiers": ["L4"]})
     be = StubBackend(changes={"p": ["breaking"]})
@@ -322,8 +381,9 @@ def test_gate_counts_and_warning_ratio():
     c = policy.gate_counts(entries)
     assert (c["lane_a"], c["kept"], c["unknown"], c["unresolved"], c["other_stack"], c["error"]) == (10, 2, 1, 1, 3, 1), c
     assert abs(c["ratio"] - 2 / 7) < 1e-12 and c["warn"] and c["warn_ratio"] == policy.UNKNOWN_WARN_RATIO   # 분모에서 팀원 스택을 뺀다
-    assert not policy.gate_counts([_ga("unclassified")] + [_ga("ok")] * 4)["warn"]          # 정확히 20%는 경고 아님 (넘어야)
-    assert policy.gate_counts([_ga("unclassified")] + [_ga("ok")] * 3)["warn"]
+    assert policy.UNKNOWN_WARN_RATIO == 0.05                                                 # 변경 (2026-10-15): 20% 잠정 → 5% (다시 잰 정상 비율 W41 0.9% · W42 0.8%)
+    assert not policy.gate_counts([_ga("unclassified")] + [_ga("ok")] * 19)["warn"]         # 정확히 5%는 경고 아님 (넘어야)
+    assert policy.gate_counts([_ga("unclassified")] + [_ga("ok")] * 18)["warn"]
     allother = policy.gate_counts([_ga("other-stack")] * 2)
     assert allother["ratio"] is None and not allother["warn"]
     assert policy.gate_counts([], 0.5)["ratio"] is None
@@ -487,7 +547,9 @@ def test_resolve_technologies():
     assert r(_item("3", "Release of pydantic v3"), names) == ["pydantic"]                   # 제목에 이름
     assert r(_item("4", "pydanticx v3"), names) == []                                       # 단어 경계
     assert r(_item("5", "nothing here"), names) == []
-    assert r(_item("6", "Python and pydantic", tech="pydantic"), names) == ["pydantic", "Python"]
+    assert r(_item("6", "Python and pydantic", tech="pydantic"), names) == ["pydantic"]         # 의존성 릴리스는 그 의존성으로만 (제목의 Python은 안 붙는다)
+    assert r(_item("7", "openai/openai-python v3", tech="openai"), names) == []                # 모르는 의존성의 릴리스는 제목으로 다른 기술에 넘기지 않는다
+    assert r(_item("8", "Python and pydantic"), names) == ["pydantic", "Python"]               # 의존성 릴리스가 아니면 제목의 기술을 전부
 
 
 def test_gate_keep_drop_and_reasons():
@@ -1507,7 +1569,7 @@ def test_classify_report_new_changed_removed_and_no_key_skip():
         t = _targets_file(d)
         tiers_path = Path(d) / "tiers.json"
         r1 = cli_mod.classify(tiers_path, "stub", targets=t)
-        assert r1["technologies"] == 5 and len(r1["new"]) == 5 and r1["changed"] == [] and len(r1["classified"]) == 5 and r1["calls"]["model_calls"] == 5
+        assert r1["technologies"] == 6 and len(r1["new"]) == 6 and r1["changed"] == [] and len(r1["classified"]) == 6 and r1["calls"]["model_calls"] == 6
         assert [m["repo"] for m in r1["missing_targets"]] == ["ghost"]
         st = TierStore(tiers_path)
         st.data["technologies"]["gone"] = {"technology": "gone", "tiers": ["L8"], "unresolved": False}
@@ -1656,7 +1718,24 @@ def _counts_other_in_base(entries, warn_ratio=None):
 
 def _other_by_title_even_with_dependency(self, item, mine):
     mine_n = {signals.norm(n) for n in mine}
-    return gate_mod.resolve_technologies(item, [n for n in self.other_stack if signals.norm(n) not in mine_n], self.vendor_terms)
+    no_dep = {**item, "meta": {k: v for k, v in (item.get("meta") or {}).items() if k != "dependency"}}   # resolve_technologies가 의존성 규칙을 지키니 떼고 제목으로
+    return gate_mod.resolve_technologies(no_dep, [n for n in self.other_stack if signals.norm(n) not in mine_n], self.vendor_terms)
+
+
+_ORIG_RESOLVE = gate_mod.resolve_technologies
+
+
+def _resolve_dependency_plus_title(item, names, vendor_terms=None):
+    """예전 규칙: 의존성 릴리스에도 제목에 나온 기술을 덧붙인다."""
+    dep = (item.get("meta") or {}).get("dependency")
+    out = _ORIG_RESOLVE(item, names, vendor_terms)
+    rest = {**item, "meta": {k: v for k, v in (item.get("meta") or {}).items() if k != "dependency"}}
+    return out + [n for n in _ORIG_RESOLVE(rest, names, vendor_terms) if n not in out] if dep else out
+
+
+def _old_lanes_split(cell):
+    """예전 레인 표시 방식: `·`로 먼저 쪼갠 뒤 괄호를 지운다 (괄호 안의 `·`에서 이름이 깨진다)."""
+    return [re.sub(r"\(.*?\)", "", part).replace("`", "").strip() for part in cell.split("·") if part.strip()]
 
 
 def mutations():
@@ -1666,6 +1745,10 @@ def mutations():
         ("Claude effort를 high로 (등록: medium)", [(claude_backend, "DEFAULT_EFFORT", "high")], test_claude_backend_request_shape_labels_and_cost),
         ("한 기술 실패가 주간 재분류 전체를 멈춤", [(TierStore, "ensure", lambda self, queries, backend, refresh=False, failures=None: _ORIG_ENSURE(self, queries, backend, refresh))], test_ensure_records_failures_and_continues_but_boundary_stops),
         ("package.json devDependencies에 S2(→ L7)를 건다", [(signals, "NPM_DEV", "dev")], test_package_json_signals_and_dev_dependencies_are_not_s2),
+        ("관문이 CLAUDE.md 의존성 표를 안 읽는다 (③ ④)", [(cli_mod, "claude_md_rows", lambda root: [])], test_queries_read_claude_md_table_usage_and_table_only_names),
+        ("의존성 릴리스에 제목의 다른 기술을 덧붙임", [(gate_mod, "resolve_technologies", _resolve_dependency_plus_title)], test_resolve_technologies),
+        ("관문이 npm 행도 질의로 만든다", [(github, "_NPM_NOTE", re.compile(r"(?!x)x"))], test_queries_read_claude_md_table_usage_and_table_only_names),
+        ("표 파서: 쪼갠 뒤 괄호를 지움 (⑥ 예전 방식)", [(github, "names_from_cell", _old_lanes_split)], test_table_cell_names_drop_parens_versions_and_notes),
         ("관문이 package.json을 안 읽는다", [(signals, "read_package_json", lambda repo, exclude=(), out=None: {} if out is None else out)], test_package_json_signals_and_dev_dependencies_are_not_s2),
         ("팀원 스택을 따로 세지 않음 (모르는 기술로 섞임)", [(gate_mod.Gate, "_other_stack", lambda self, item, mine: [])], test_gate_other_stack_is_counted_apart_and_needs_no_model_call),
         ("의존성 릴리스도 제목으로 팀원 스택을 고름", [(gate_mod.Gate, "_other_stack", _other_by_title_even_with_dependency)], test_gate_other_stack_is_counted_apart_and_needs_no_model_call),
