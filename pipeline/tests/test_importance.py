@@ -357,6 +357,19 @@ def test_queries_read_claude_md_table_usage_and_table_only_names():
     assert "a CLAUDE.md" in bare["langfuse"].usage                                  # repo 이름을 안 주면 폴더 이름
 
 
+def test_fingerprint_follows_tier_prompt_version():
+    q = TechQuery("pydantic", usage="requirements.txt 직접 의존성 (main)", signals={"manifest": "requirements.txt", "group": "main"})
+    before = tiers.fingerprint(q)
+    real = tiers.TIER_PROMPT_VERSION
+    try:
+        tiers.TIER_PROMPT_VERSION = "changed0"
+        assert tiers.fingerprint(q) != before                                       # 프롬프트를 고치면 다시 분류된다 (HYO-124)
+    finally:
+        tiers.TIER_PROMPT_VERSION = real
+    assert tiers.TIER_PROMPT_VERSION == prompts.TIER_PROMPT_VERSION
+    assert "| L4 | 앱 프레임워크 | 앱의 뼈대 — 바꾸면 코드 전반이 바뀜 | fastapi · pydantic · uvicorn · jinja2 |" in prompts.TIER_INSTRUCTIONS   # §2-1 예 열
+
+
 def test_gate_other_stack_is_counted_apart_and_needs_no_model_call():
     st = _store(pydantic={"tiers": ["L4"]})
     be = StubBackend(changes={"p": ["breaking"]})

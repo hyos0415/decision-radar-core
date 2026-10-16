@@ -20,6 +20,7 @@ from pathlib import Path
 
 from . import policy
 from .backends import TechQuery
+from .prompts import TIER_PROMPT_VERSION
 from .signals import norm
 
 NOT_IMPLEMENTED = [
@@ -59,7 +60,9 @@ def verify(model_tiers, model_unsure, signals):
 
 
 def fingerprint(q: TechQuery):
-    return hashlib.sha1(json.dumps({"n": q.name, "u": q.usage, "s": q.signals}, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+    """이름 · 쓰임새 · 신호 · 등급 프롬프트 판. 넷 중 하나가 바뀌면 다시 분류한다 (프롬프트 판은 HYO-124)."""
+    return hashlib.sha1(json.dumps({"n": q.name, "u": q.usage, "s": q.signals, "p": TIER_PROMPT_VERSION},
+                                   sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
 
 
 class TierStore:
