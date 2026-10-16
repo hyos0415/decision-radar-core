@@ -4,6 +4,7 @@
   python -m pipeline.importance evaluate --gold ... --model gpt-6-luna --k 3 --plan                   # 호출 수만 센다
   python -m pipeline.importance evaluate --gold ... --model gpt-6-luna --k 3 --real-api               # 실제 API (과금) — 플래그 없으면 거부
   python -m pipeline.importance evaluate --gold ... --model jev-1.13.0 --k 3 --plan                   # Jev: 요청 수 (요청 하나가 질문 여럿 — 비용은 입력 토큰당 $0.042/Mtok)
+  python -m pipeline.importance evaluate --gold ... --model gpt-6-luna --fixed-tiers tiers.json ...   # 운영 형태: 등급은 고정 파일, 모델은 변화 종류만 (HYO-130)
   (같은 것: python pipeline/importance/evaluate.py ...)
 
 ## 정답지 형식 (JSON) — eval/importance/gold.example.json 참고
@@ -24,6 +25,7 @@ C2·C3은 k번 **각각** 통과선을 넘어야 한다 (평균은 같이 보고
 오류(호출 실패)·분류 불가는 버림으로 센다 — 기준을 느슨하게 만들지 않는다 (C1에서 안전 실패로 집계된다).
 """
 import argparse
+import hashlib
 import importlib.util
 import json
 import sys
@@ -178,8 +180,30 @@ def run_tier_diag(backend, diag_sets):
     return out
 
 
-def run_once(backend, gold):
-    """한 번의 실행: 정답지 기술의 등급 분류(+스크립트 검증) → 소식마다 관문. 등급은 실행마다 새로 매긴다 (등급 분류의 변동도 잰다)."""
+def fixed_store(path, gold):
+    """고정 등급 파일(운영의 tiers.json — 사람 수정 포함 효과 값) → 정답지 기술만 담은 메모리 TierStore. 파일은 고치지 않는다.
+    파일에 없거나 분류 불가인 기술은 정답지 등급(gold_tiers·gold_path·gold_pin)으로 보충하고 목록을 돌려준다 (사용자 2026-10-16 —
+    보강 세트의 가상 기술은 실제 스택에 없다). gold_tiers가 비었으면 분류 불가로 둔다."""
+    src, store, supplemented = TierStore(path), TierStore(), []
+    for t in gold["technologies"]:
+        e = src.effective(t["name"])
+        if e is not None and not e.get("unresolved") and e.get("tiers"):
+            rec = {k: e.get(k) for k in ("tiers", "path", "pin", "sensitive", "local")}
+            rec.update({"technology": t["name"], "unresolved": False, "source": "fixed"})
+        else:
+            supplemented.append(t["name"])
+            gt = list(t.get("gold_tiers") or [])
+            rec = {"technology": t["name"], "tiers": gt, "unresolved": not gt, "path": t.get("gold_path") or "prod",
+                   "pin": t.get("gold_pin"), "sensitive": False, "local": False, "source": "gold-supplement"}
+        store.data["technologies"][norm(t["name"])] = rec
+    return store, supplemented
+
+
+def run_once(backend, gold, fixed=None):
+    """한 번의 실행: 정답지 기술의 등급 분류(+스크립트 검증) → 소식마다 관문. 등급은 실행마다 새로 매긴다 (등급 분류의 변동도 잰다).
+    fixed(=fixed_store의 TierStore)가 있으면 등급을 부르지 않고 그 값을 쓴다 — 모델은 변화 종류만 짚는다."""
+    if fixed is not None:
+        return _gate_items(backend, gold, fixed)
     store = TierStore()
     for t in gold["technologies"]:
         q = TechQuery(name=t["name"], usage=t.get("usage", ""), source=t.get("source", ""), signals=t.get("signals") or {})
@@ -190,6 +214,10 @@ def run_once(backend, gold):
         except Exception as e:  # noqa: BLE001 — 등급을 못 매기면 분류 불가로 둔다 (그 기술의 소식은 버려진다 = 안전 실패로 센다)
             store.data["technologies"][norm(q.name)] = {
                 "technology": q.name, "tiers": [], "unresolved": True, "path": "prod", "pin": None, "error": f"{type(e).__name__}: {str(e)[:120]}"}
+    return _gate_items(backend, gold, store)
+
+
+def _gate_items(backend, gold, store):
     gate = Gate(backend, store)
     preds = {}
     for it in gold["items"]:
@@ -200,8 +228,8 @@ def run_once(backend, gold):
     return preds, store.data["technologies"]
 
 
-def plan(gold, k, diag):
-    n_tech, n_items = len(gold["technologies"]), len(gold["items"])
+def plan(gold, k, diag, fixed=False):
+    n_tech, n_items = (0 if fixed else len(gold["technologies"])), len(gold["items"])
     per_run = n_tech + n_items + (sum(len(q) for _, q, _ in diag) if diag else 0)
     return {"per_run": {"tier_calls": n_tech, "change_calls": n_items, "tier_diag_calls": per_run - n_tech - n_items}, "k": k, "total_calls": per_run * k}
 
@@ -215,10 +243,10 @@ def subsets(gold_items):
     return {"실데이터": [it for it in gold_items if not it.get("synthetic")], "보강": syn}
 
 
-def evaluate(backend, gold, k, diag=None):
+def evaluate(backend, gold, k, diag=None, fixed=None):
     runs, all_preds, techs, diags, parts = [], [], [], [], {}
     for _ in range(k):
-        preds, tech_recs = run_once(backend, gold)
+        preds, tech_recs = run_once(backend, gold, fixed)
         runs.append(score_run(preds, gold["items"]))
         for name, items in subsets(gold["items"]).items():
             parts.setdefault(name, []).append(score_run(preds, items))
@@ -269,6 +297,7 @@ def main(argv=None):
     ap.add_argument("--no-tier-diag", action="store_true", help="등급 정확도 진단(tier-screen 49개)을 건너뛴다")
     ap.add_argument("--flex", action="store_true", help="GPT: service_tier=flex (Batch와 같은 반값, 느리다). Jev에는 없다")
     ap.add_argument("--out", help="결과 폴더 (기본 eval/runs/<시각>-importance-<모델>/)")
+    ap.add_argument("--fixed-tiers", help="고정 등급 파일 — 등급을 부르지 않고 이 파일(효과 값)로 판정한다. 없는 기술은 정답지 등급으로 보충")
     a = ap.parse_args(argv)
     if a.model != "stub" and not a.real_api and not a.plan:
         print(f"거부: {a.model}은 실제 API를 부른다. 호출 수는 --plan, 실행은 --real-api로 명시한다", file=sys.stderr)
@@ -278,7 +307,14 @@ def main(argv=None):
         return 2
     gold = load_gold(a.gold)
     diag = None if a.no_tier_diag else tier_diag_sets()
-    pl = plan(gold, a.k, diag)
+    fixed, fixed_info = None, None
+    if a.fixed_tiers:
+        fixed, sup = fixed_store(a.fixed_tiers, gold)
+        sup_items = sum(1 for it in gold["items"] if it["technology"] in sup)
+        fixed_info = {"path": str(a.fixed_tiers), "sha256": hashlib.sha256(Path(a.fixed_tiers).read_bytes()).hexdigest(),
+                      "supplemented_from_gold": sup, "supplemented_items": sup_items}
+        print(f"고정 등급 파일 {a.fixed_tiers} (sha256 {fixed_info['sha256'][:12]}…) · 정답지 등급으로 보충 {len(sup)}개 {sup} — 소식 {sup_items}건")
+    pl = plan(gold, a.k, diag, fixed is not None)
     print(f"호출 계획: 실행당 등급 {pl['per_run']['tier_calls']} + 변화 {pl['per_run']['change_calls']} + 진단 {pl['per_run']['tier_diag_calls']}"
           f" = {sum(pl['per_run'].values())}회 × k={a.k} = {pl['total_calls']}회")
     if a.plan:
@@ -287,13 +323,13 @@ def main(argv=None):
     out.mkdir(parents=True, exist_ok=True)
     backend = make_backend(a.model, allow_real=a.real_api, log=CallLog(out / "calls.jsonl"), **({"service_tier": "flex"} if a.flex else {}))
     try:
-        res = evaluate(backend, gold, a.k, diag)
+        res = evaluate(backend, gold, a.k, diag, fixed)
     finally:
         trace = backend.trace_info() if hasattr(backend, "trace_info") else None
         info = backend.run_info() if hasattr(backend, "run_info") else None
         backend.close()
     calls = backend.log.totals()
-    (out / "summary.json").write_text(json.dumps({"model": a.model, "gold": str(a.gold), "plan": pl, "calls": calls, "trace": trace, "backend_info": info, **res},
+    (out / "summary.json").write_text(json.dumps({"model": a.model, "gold": str(a.gold), "fixed_tiers": fixed_info, "plan": pl, "calls": calls, "trace": trace, "backend_info": info, **res},
                                                  ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
     print(format_report(a.model, res, calls, trace))
     if info:
