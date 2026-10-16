@@ -193,7 +193,7 @@ class JevBackend(Backend):
     def classify_changes(self, q):
         def parse(answers):
             per = {}
-            for kind in policy.CHANGES:
+            for kind in policy.MODEL_CHANGES:
                 a = answers.get(kind)
                 if not isinstance(a, dict) or a.get("type") != "noul":
                     raise JevResponseError(f"{kind}: noul 답이 없다")
@@ -201,7 +201,7 @@ class JevBackend(Backend):
                 per[kind] = {"yes": p >= THRESHOLD, "prob": p}
             return per
         per, call = self._call("changes", jev_change_state(q), jev_change_questions(), parse)
-        labels = check_labels(labels_from_scores(per, THRESHOLD, policy.CHANGES), CHANGE_SET, "changes")
+        labels = check_labels(labels_from_scores(per, THRESHOLD, policy.MODEL_CHANGES), CHANGE_SET, "changes")
         return LabelAnswer(labels=labels, per_label=per, reason=None, calls=[call])
 
     # -- 등급: L0~L8 선택지 한 질문. 고른 등급 + (두 번째 등급의 확률 ≥ THRESHOLD면 그것도)

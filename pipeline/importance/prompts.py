@@ -97,7 +97,7 @@ _TIER_RULE = ("기술(state.technology)이 이 프로젝트에서 쓰이는 방�
 
 
 def jev_change_questions():
-    """변화 종류마다 예/아니오(noul) 질문 하나 — 한 요청에 병렬로 묻는다. 키 = policy.CHANGES의 이름."""
+    """변화 종류마다 예/아니오(noul) 질문 하나 — 한 요청에 병렬로 묻는다. 키 = policy.MODEL_CHANGES의 이름."""
     out = {}
     for kind, meaning in CHANGE_MEANING.items():
         out[kind] = {"type": "noul",

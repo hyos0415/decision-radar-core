@@ -2,7 +2,7 @@
 
 `pipeline/lanes.py`가 비워 둔 `gate: null` 자리를 채운다. profile_filter.run_filter(gate=Gate(...))가 레인 A 항목마다 부른다.
 모델은 변화 종류만 부른다(소식 하나당 1회). 등급은 `TierStore`가 이미 갖고 있다 (스택이 바뀔 때만 따로 분류: `python -m pipeline.importance classify-stack`).
-판정(남김/버림·두 등급·보정·5/N)은 policy.py — 모델이 아니라 코드 (규율 1).
+판정(남김/버림·두 등급·보정·5/N)은 policy.py — 모델이 아니라 코드 (규율 1). 후속 모델(successor_model)도 모델이 아니라 successor.py가 제목으로 붙인다 (HYO-129).
 
 status: ok(판정함) · unclassified(소식이 걸린 기술을 모르거나 등급이 분류 불가 — v1.1 U4: 후보에서 빼고 기록) · error(변화 분류 호출 실패 — 안전 실패, 버림 + 기록)
         · other-stack(내 스택에 없고 팀원 스택 — 수집 전용 대상 — 에만 있는 기술. 내 관문 밖이라 버리되 「모르는 기술」과 따로 센다, HYO-122 결정 1)
@@ -10,7 +10,7 @@ unclassified 중 technologies가 비었으면 「모르는 기술」, 있으면 
 """
 import re
 
-from . import policy
+from . import policy, successor
 from .backends import BoundaryError, NewsQuery
 from .signals import norm
 
@@ -63,11 +63,18 @@ class Gate:
             return [n for n in other if norm(n) == norm(dep)][:1]
         return resolve_technologies(item, other, self.vendor_terms)
 
+    def _successors(self, item, names):
+        """제목에 우리 L2 모델의 같은 계열 더 높은 버전이 나오면 {기술: 표기} (§3 변경 2026-10-16, HYO-129 — 모델이 아니라 스크립트)."""
+        l2 = [n for n in names if "L2" in ((self.store.effective(n) or {}).get("tiers") or [])]
+        return successor.find(item.get("title") or "", l2)
+
     def __call__(self, item, reasons=None):
         names = self.store.names() + [n for n in self.store.data["overrides"] if norm(n) not in {norm(x) for x in self.store.names()}]
         techs = resolve_technologies(item, names, self.vendor_terms)
+        succ = self._successors(item, names)
+        techs += [t for t in succ if t not in techs]
         base = {"keep": False, "status": "unclassified", "technologies": techs, "tiers": {}, "changes": [], "rows": [], "kept_by": [],
-                "defaulted_change": False, "skipped": []}
+                "defaulted_change": False, "skipped": [], "successor": [{"technology": t, "mentioned": m} for t, m in succ.items()]}
         if not techs:
             other = self._other_stack(item, names)
             if other:
@@ -94,8 +101,11 @@ class Gate:
         rows, kept_by, defaulted = [], [], False
         for t, e in effs.items():
             ctx = policy.Context(path=e.get("path", "prod"), pin=e.get("pin"), sensitive=e.get("sensitive"), local=e.get("local"))
-            d = policy.decide(e["tiers"], ans.labels, ctx)
-            defaulted = d["defaulted_change"]
+            labels = list(ans.labels)
+            if t in succ:      # 모델 라벨이 비었을 때의 기본(minor·patch) 행은 그대로 두고 후속 모델 행을 더한다 — 기존 판정을 바꾸지 않게
+                labels = (labels or ["minor_patch"]) + ["successor_model"]
+            d = policy.decide(e["tiers"], labels, ctx)
+            defaulted = not ans.labels
             rows += [{**r, "technology": t} for r in d["rows"]]
             kept_by += [{**r, "technology": t} for r in d["kept_by"]]
         keep = bool(kept_by)
@@ -103,7 +113,8 @@ class Gate:
                          for r in kept_by) if keep else
                "남기는 행 없음: " + ", ".join(sorted({f"{r['tier']}×{policy.CHANGE_LABEL[r['change']]}={r['base']}" for r in rows})))
         return {"keep": keep, "status": "ok", "technologies": techs, "tiers": {t: e["tiers"] for t, e in effs.items()}, "changes": ans.labels,
-                "rows": rows, "kept_by": kept_by, "defaulted_change": defaulted, "skipped": base["skipped"], "reason": why}
+                "rows": rows, "kept_by": kept_by, "defaulted_change": defaulted, "skipped": base["skipped"], "successor": base["successor"],
+                "reason": why}
 
 
 def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT):
