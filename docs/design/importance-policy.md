@@ -193,3 +193,10 @@ tier-screen v2(`eval/tier-screen/results-v2.md`)에서 Elasticsearch·Neo4j 서�
 - 분류기 프롬프트(`prompts.py` GPT 표·Jev 질문)의 breaking·security·major 정의에 D1~D3을 넣었다 — 정답지가 쓰는 정의를 분류기도 받게 한다 (규율 2: 정의를 안 알려 주고 정직을 벌하지 않는다)
 - 남은 것: 분류기는 본문 앞 3,000자만 읽는다(`change_prompt(text_max=3000)`) — vLLM 0.31.0의 Security(3,117자)·Breaking(3,507자)이 창 밖이다. 고칠지는 따로 정한다
   → **결정 (같은 날, 사용자): 창 3,000자는 그대로 두고(비용), 창 밖에서 시작하는 위험 절만 맨 앞으로 옮긴다 — 순서 재배치, 글자 수 상한 없음** (`prompts.window_text`, GPT·Jev 공용). 규칙은 문서 구조의 표시만 본다: R1 위험 제목(Breaking·Security·Deprecat·Removal·Migration — 다음 같은·상위 제목까지) · R2 굵은 라벨 글머리(`* **Security**:`) · R3 CVE·GHSA 줄 · R4 커밋 표기(`type(scope)!:` · `(security)`). 본문 줄의 위험 단어는 쓰지 않는다 — W41 창 밖 42줄이 전부 소음이었다(테스트 이전·후원 정리 등). W41 레인 A 222건 중 재배치되는 것은 vLLM 0.31.0 · transformers 5.18.0 두 건이고, 둘 다 원문 첫머리가 창에 남는다. breaking 정의에 커밋의 `!:` 표시를 넣었다(litellm 3건 — 정답지도 고침, 남김은 그대로)
+
+**변경 (2026-10-16, 사용자 — 결과 0건, ADR 0007 c1 · adr issue #7)**: 비교 대상에 ④ **Claude Haiku 5.5 `claude-haiku-5-5`**를 더한다 — ADR 0007 c1(「Haiku 5.x 출시 → 같은 표본으로 다시 잰다」)이 2026-10-12에 충족됐다.
+- **같은 조건**: 정답지 W41 102건(`eval/importance/gold-w41.json`, 보강 포함) · 같은 프롬프트(`prompts.py`) · C1~C3·판정 세부 그대로 · k=3 · 등급은 실행마다 모델이 매긴다(Luna·Jev·Sol 표와 같은 방식). 등급만 정답으로 바꿔 끼운 진단(`results-w41.md` §2 방식, API 호출 없음)도 같이 보고한다
+- **대조군: 같은 커밋에서 GPT-6 Luna를 다시 돌린다.** 지난 실측(`7f1eef5`) 뒤 HYO-122 PR 2·4가 관문 코드(`gate.py` 「의존성 릴리스는 그 의존성으로만」 · `policy.py` · `signals.py`)를 바꿨다 — 정답지·프롬프트는 그대로. 예전 표와 바로 견주면 모델 차이와 관문 차이를 가를 수 없으므로, 판정·비교는 같은 커밋의 Haiku ↔ Luna 짝으로 하고 예전 표는 참고로만 쓴다
+- **설정**: Haiku effort `medium`(Haiku 기본값 · Sonnet 운영값) 고정, 구조화 출력, 서버 쪽 대체 모델 없음. 거절(refusal)은 오류로 기록하고 버림으로 센다(판정 세부). Luna는 지난 실측과 같은 설정(Standard 등급, Flex 안 씀)
+- **편향 표시**: 정답지 초안은 Claude가 썼다(사용자 확인). 채점 대상이 같은 회사 모델이므로, GPT·Jev와 달리 「초안 작성자와 회사가 같다」를 결과에 적는다
+- **판정 뒤**: C1~C3를 통과하면 레인 A 운영 모델 후보 — 비용은 「운영 한 주」 환산(`results-w41.md` §4-6)으로 Luna·Sol과 비교한다. ADR 0007의 status 변경 여부는 사람이 정한다
