@@ -10,9 +10,14 @@
 """
 
 TIERS = [f"L{i}" for i in range(9)]
-CHANGES = ["breaking", "deprecation", "eol", "security", "yanked", "major", "minor_patch", "model_retirement", "pricing"]
+CHANGES = ["breaking", "deprecation", "eol", "security", "yanked", "major", "minor_patch", "model_retirement", "pricing", "successor_model"]
+# 모델이 아니라 스크립트가 붙이는 변화 (§3 변경 2026-10-16, HYO-129) — 후속 모델은 successor.py가 제목으로 판정한다.
+# 모델에게 묻는 목록(MODEL_CHANGES)은 이전과 같다: 프롬프트·스키마·Jev 질문이 바뀌지 않는다
+SCRIPT_CHANGES = frozenset({"successor_model"})
+MODEL_CHANGES = [c for c in CHANGES if c not in SCRIPT_CHANGES]
 CHANGE_LABEL = {"breaking": "breaking", "deprecation": "deprecation", "eol": "우리 버전 EOL", "security": "security", "yanked": "yanked",
-                "major": "major", "minor_patch": "minor·patch", "model_retirement": "모델 은퇴", "pricing": "가격·한도 변경"}
+                "major": "major", "minor_patch": "minor·patch", "model_retirement": "모델 은퇴", "pricing": "가격·한도 변경",
+                "successor_model": "후속 모델"}
 TIER_LABEL = {"L0": "언어 런타임", "L1": "실행 기반", "L2": "호스팅 모델", "L3": "호스팅 서비스", "L4": "앱 프레임워크",
               "L5": "공급자 SDK", "L6": "도메인 라이브러리", "L7": "개발·테스트 도구", "L8": "유틸"}
 
@@ -20,20 +25,21 @@ KEEP, DROP, NA = "✅", "❌", "—"
 
 # 열 순서 = CHANGES
 _ROWS = {
-    "L0": "✅ ✅ ✅ ✅ — ❌ ❌ — —",
-    "L1": "✅ ✅ ✅ ✅ ✅ ✅ ❌ — —",
-    "L2": "✅ ✅ — — — — ❌ ✅ ✅",
-    "L3": "✅ ✅ — ✅ — — ❌ — ✅",
-    "L4": "✅ ✅ ✅ ✅ ✅ ✅ ❌ — —",
-    "L5": "✅ ✅ ❌ ✅ ✅ ✅ ❌ — —",
-    "L6": "✅ ✅ ❌ ✅ ✅ ❌ ❌ — —",
-    "L7": "❌ ❌ ❌ ✅ ❌ ❌ ❌ — —",
-    "L8": "❌ ❌ ❌ ✅ ✅ ❌ ❌ — —",
+    "L0": "✅ ✅ ✅ ✅ — ❌ ❌ — — —",
+    "L1": "✅ ✅ ✅ ✅ ✅ ✅ ❌ — — —",
+    "L2": "✅ ✅ — — — — ❌ ✅ ✅ ✅",
+    "L3": "✅ ✅ — ✅ — — ❌ — ✅ —",
+    "L4": "✅ ✅ ✅ ✅ ✅ ✅ ❌ — — —",
+    "L5": "✅ ✅ ❌ ✅ ✅ ✅ ❌ — — —",
+    "L6": "✅ ✅ ❌ ✅ ✅ ❌ ❌ — — —",
+    "L7": "❌ ❌ ❌ ✅ ❌ ❌ ❌ — — —",
+    "L8": "❌ ❌ ❌ ✅ ✅ ❌ ❌ — — —",
 }
 TABLE = {t: dict(zip(CHANGES, row.split())) for t, row in _ROWS.items()}
 
-# 변화 심각도 (낮을수록 먼저): security > breaking > 우리 버전 EOL·모델 은퇴 > deprecation > 나머지 (§4 주당 상한)
-SEVERITY = {"security": 0, "breaking": 1, "eol": 2, "model_retirement": 2, "deprecation": 3}
+# 변화 심각도 (낮을수록 먼저): security > breaking > 우리 버전 EOL·모델 은퇴 > deprecation > 나머지 > 후속 모델 (§4 주당 상한)
+# 후속 모델은 「선택 실험」 — 지금 모델은 계속 돈다. 맨 뒤 (§4 변경 2026-10-16, HYO-129)
+SEVERITY = {"security": 0, "breaking": 1, "eol": 2, "model_retirement": 2, "deprecation": 3, "successor_model": 5}
 SEVERITY_REST = 4
 WEEKLY_LIMIT = 5
 

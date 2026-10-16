@@ -28,7 +28,7 @@ TIER_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["ti
                "properties": {"tiers": {"type": "array", "items": {"type": "string", "enum": list(policy.TIERS)}},
                               "unsure": {"type": "boolean"}, "reason": {"type": "string"}}}
 CHANGE_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["changes", "reason"],
-                 "properties": {"changes": {"type": "array", "items": {"type": "string", "enum": list(policy.CHANGES)}},
+                 "properties": {"changes": {"type": "array", "items": {"type": "string", "enum": list(policy.MODEL_CHANGES)}},
                                 "reason": {"type": "string"}}}
 
 
@@ -123,7 +123,7 @@ class ClaudeBackend(Backend):
 
     def classify_changes(self, q):
         out = self._run("changes", CHANGE_INSTRUCTIONS, change_prompt(q), CHANGE_SCHEMA)
-        return LabelAnswer(labels=check_labels(_canon(out["changes"], policy.CHANGES), CHANGE_SET, "changes"), reason=out["reason"])
+        return LabelAnswer(labels=check_labels(_canon(out["changes"], policy.MODEL_CHANGES), CHANGE_SET, "changes"), reason=out["reason"])
 
     def close(self):
         if self.guard:

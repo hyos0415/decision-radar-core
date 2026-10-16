@@ -103,7 +103,7 @@ class Backend(ABC):
 
     @abstractmethod
     def classify_changes(self, q: NewsQuery) -> LabelAnswer:
-        """소식 하나 → 변화 종류 (policy.CHANGES 중 해당하는 것 전부)."""
+        """소식 하나 → 변화 종류 (policy.MODEL_CHANGES 중 해당하는 것 전부)."""
 
     def close(self):
         pass
@@ -189,4 +189,4 @@ def check_labels(labels, universe, what):
     return labels
 
 
-TIER_SET, CHANGE_SET = set(policy.TIERS), set(policy.CHANGES)
+TIER_SET, CHANGE_SET = set(policy.TIERS), set(policy.MODEL_CHANGES)   # 모델이 고를 수 있는 것만 (후속 모델은 스크립트)

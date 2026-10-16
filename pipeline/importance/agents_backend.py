@@ -213,7 +213,7 @@ class AgentsBackend(Backend):
 
     def classify_changes(self, q):
         out = self._run("changes", "change-classifier", CHANGE_INSTRUCTIONS, change_prompt(q), ChangeOut)
-        return LabelAnswer(labels=check_labels(_canon(out.changes, policy.CHANGES), CHANGE_SET, "changes"), reason=out.reason)
+        return LabelAnswer(labels=check_labels(_canon(out.changes, policy.MODEL_CHANGES), CHANGE_SET, "changes"), reason=out.reason)
 
     def trace_info(self):
         return {"traces": self.counter.traces, "spans": self.counter.spans,

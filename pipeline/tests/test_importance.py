@@ -21,7 +21,7 @@ from collector import stack  # noqa: E402
 from collector.sources import github  # noqa: E402
 from pipeline import profile_filter  # noqa: E402
 from pipeline import interest_profile as ip  # noqa: E402
-from pipeline.importance import agents_backend, backends, cli as cli_mod, evaluate, gate as gate_mod, policy, signals, tiers  # noqa: E402
+from pipeline.importance import agents_backend, backends, cli as cli_mod, evaluate, gate as gate_mod, policy, signals, successor, tiers  # noqa: E402
 from pipeline.importance.backends import (Backend, BoundaryError, CallLog, LabelAnswer, NewsQuery, StubBackend,  # noqa: E402
                                            TechQuery, labels_from_scores, make_backend)
 from pipeline.importance.tiers import TierStore  # noqa: E402
@@ -384,6 +384,52 @@ def test_gate_other_stack_is_counted_apart_and_needs_no_model_call():
     assert gate_mod.Gate(be, st)(_item("t", "x", tech="google-auth-library"))["status"] == "unclassified"   # 팀원 스택을 안 주면 예전 그대로
 
 
+def test_successor_parse_and_find():
+    """후속 모델 (§3 변경 2026-10-16, HYO-129): 같은 계열 + 더 높은 버전만. 날짜 스냅숏·끝의 0은 버전이 아니다."""
+    names = ["claude-haiku-4-5-20251001", "claude-sonnet-5-5", "gpt-6-luna", "gpt-6-sol", "Amazon Bedrock"]
+    assert successor.parse("claude-haiku-4-5-20251001")[1] == (4, 5) and successor.parse("gpt-6-luna")[1] == (6,)
+    assert successor.parse("Amazon Bedrock") is None and successor.parse("Jev") is None and successor.parse("2026") is None
+    hits = {"Claude Haiku 5.5": {"claude-haiku-4-5-20251001": "Claude Haiku 5.5"},
+            "Claude Sonnet 6 released": {"claude-sonnet-5-5": "Claude Sonnet 6"},
+            "OpenAI GPT-6.1 Luna is now generally available": {"gpt-6-luna": "GPT-6.1 Luna"}}
+    for title, want in hits.items():
+        assert successor.find(title, names) == want, title
+    for title in ["Claude Sonnet 5.5 now available on AWS",                                    # 같은 버전 — 이미 쓰는 모델
+                  "OpenAI GPT-6 Sol and GPT-6 Luna are now generally available on Amazon Bedrock",
+                  "We've launched Claude Fable 5",                                            # 다른 계열
+                  "Claude Haiku 4.5", "claude-haiku-4-5-20251001 retirement",                 # 날짜는 버전이 아니다
+                  "GPT-6.0 Luna", "Claude Haiku 3.7", "anthropics/anthropic-sdk-python v1.10.0"]:
+        assert successor.find(title, names) == {}, title
+
+
+def test_gate_successor_model_is_script_judged_l2_only_and_last():
+    st = _store(**{"claude-haiku-4-5-20251001": {"tiers": ["L2"]}, "gpt-6-sol": {"tiers": ["L2"]}, "pydantic-2": {"tiers": ["L4"]}})
+    st.data["overrides"]["gpt-6-sol"] = {"technology": "gpt-6-sol", "path": "dev"}                  # judge — 개발 경로
+    be = StubBackend(changes={"h": [], "d": ["deprecation"]})
+    g = gate_mod.Gate(be, st)
+    r = g(_item("h", "Claude Haiku 5.5"))                                                            # 제목이 기술 이름을 직접 말하지 않아도 걸린다
+    assert r["status"] == "ok" and r["keep"] and r["technologies"] == ["claude-haiku-4-5-20251001"], r
+    assert [(k["tier"], k["change"]) for k in r["kept_by"]] == [("L2", "successor_model")], r
+    assert r["changes"] == [] and r["successor"] == [{"technology": "claude-haiku-4-5-20251001", "mentioned": "Claude Haiku 5.5"}]   # 모델 라벨은 그대로
+    assert r["defaulted_change"] and {x["change"] for x in r["rows"]} == {"minor_patch", "successor_model"}   # 기본 minor·patch 행도 남는다
+    st.data["overrides"]["claude-haiku-4-5-20251001"] = {"technology": "claude-haiku-4-5-20251001", "pin": "floating"}
+    fl = g(_item("h", "Claude Haiku 5.5"))                                                           # 떠 있는 태그 보정이 그대로 걸린다
+    assert {k["change"] for k in fl["kept_by"]} == {"minor_patch", "successor_model"}, fl
+    del st.data["overrides"]["claude-haiku-4-5-20251001"]
+    same = g(_item("s", "Claude Haiku 4.5 now on AWS"))
+    assert same["status"] == "unclassified" and not same["keep"] and same["successor"] == []
+    dev = g(_item("v", "GPT-6.1 Sol is now generally available"))                                    # 개발 경로는 security만 (§4 보정)
+    assert dev["status"] == "ok" and not dev["keep"] and dev["successor"][0]["technology"] == "gpt-6-sol", dev
+    assert g(_item("p", "pydantic-3 is out"))["successor"] == []                                    # L2만 본다
+    d = g(_item("d", "Claude Haiku 5.5 · Haiku 4.5 deprecated", tech="claude-haiku-4-5-20251001"))
+    assert {k["change"] for k in d["kept_by"]} == {"deprecation", "successor_model"}
+    shown, cut, label = policy.apply_cap([{"id": "a", "kept_by": r["kept_by"]}, {"id": "b", "kept_by": [{"tier": "L2", "change": "minor_patch"}]},
+                                          {"id": "c", "kept_by": [{"tier": "L2", "change": "deprecation"}]}], limit=2)
+    assert [s["id"] for s in shown] == ["c", "b"] and [c["id"] for c in cut] == ["a"]              # 같은 등급이면 후속 모델이 맨 뒤
+    assert "successor_model" not in policy.MODEL_CHANGES and "successor_model" not in backends.CHANGE_SET   # 모델은 고를 수 없다
+    assert policy.MODEL_CHANGES == ["breaking", "deprecation", "eol", "security", "yanked", "major", "minor_patch", "model_retirement", "pricing"]
+
+
 def _ga(status, keep=False, techs=()):
     return {"id": status, "gate": {"keep": keep, "status": status, "technologies": list(techs)}}
 
@@ -697,7 +743,7 @@ class JevLike(Backend):
         return self._answer(self.tp[q.name], policy.TIERS)
 
     def classify_changes(self, q):
-        return self._answer(self.cp[q.id], policy.CHANGES)
+        return self._answer(self.cp[q.id], policy.MODEL_CHANGES)
 
 
 def test_labels_from_scores():
@@ -926,7 +972,7 @@ from pipeline.importance import jev_backend, prompts  # noqa: E402
 
 
 def _noul_answers(**p):
-    return {k: {"type": "noul", "noul": p.get(k, 0.0)} for k in policy.CHANGES}
+    return {k: {"type": "noul", "noul": p.get(k, 0.0)} for k in policy.MODEL_CHANGES}
 
 
 def _ok(answers, model="jev-1.13.0", i=1234, o=9):
@@ -990,7 +1036,7 @@ def test_jev_request_shape_and_parallel_questions():
         assert r["path"] == "/v1/systemone" and r["headers"]["authorization"] == "Bearer sk-test"
         assert r["headers"]["content-type"] == "application/json" and r["headers"]["accept"] == "application/json"
         assert sorted(r["body"]) == ["model", "questions", "state"] and r["body"]["model"] == "jev-1.13.0"
-        assert list(r["body"]["questions"]) == policy.CHANGES                              # 변화 종류 9개가 한 요청에 병렬
+        assert list(r["body"]["questions"]) == policy.MODEL_CHANGES                              # 변화 종류 9개가 한 요청에 병렬
         assert r["body"]["state"] == {"technology": "pydantic", "title": "pydantic v3 — breaking", "body": "Breaking changes: validators removed."}
         for kind, qn in r["body"]["questions"].items():
             assert qn["type"] == "noul" and kind in qn["instructions"] and prompts.CHANGE_MEANING[kind] in qn["instructions"]
@@ -1201,7 +1247,7 @@ def test_jev_prompts_carry_same_definitions_as_gpt():
         assert f"| {kind} | {meaning} |" in prompts.CHANGE_INSTRUCTIONS, kind                    # GPT 프롬프트 표와 같은 문구
     for t, (name, meaning) in prompts.TIER_MEANING.items():
         assert f"| {t} | {name} | {meaning} |" in prompts.TIER_INSTRUCTIONS, t
-    assert list(prompts.CHANGE_MEANING) == policy.CHANGES and list(prompts.TIER_MEANING) == policy.TIERS
+    assert list(prompts.CHANGE_MEANING) == policy.MODEL_CHANGES and list(prompts.TIER_MEANING) == policy.TIERS
 
 
 def test_jev_end_to_end_lane_a_and_evaluate():
@@ -1798,6 +1844,10 @@ def mutations():
         ("팀원 스택에서 관문 manifest 신호를 안 뺌 (CLI)", [(cli_mod, "read_repo_signals", lambda repo, exclude=(): {})], test_cli_run_reads_team_stack_from_collect_only_targets),
         ("팀원 스택이 exclude를 무시 (CLI)", [(stack, "_excluded", lambda p, exclude: False)], test_cli_run_reads_team_stack_from_collect_only_targets),
         ("두 등급인데 첫 등급 행만 적용", [(policy, "decide", _first_tier_only)], test_two_tiers_any_row_keeps_and_records_which),
+        ("후속 모델: 버전을 안 견줌 (같은 계열이면 다 후속)", [(successor, "_version", lambda parts: (len(parts),) if len(parts) > 3 else (0,))], test_successor_parse_and_find),
+        ("후속 모델: 날짜 스냅숏을 버전으로 셈", [(successor, "_DATE_DIGITS", 99)], test_successor_parse_and_find),
+        ("후속 모델: L2가 아닌 기술도 봄", [(gate_mod.Gate, "_successors", lambda self, item, names: successor.find(item.get("title") or "", names))], test_gate_successor_model_is_script_judged_l2_only_and_last),
+        ("후속 모델을 심각도 「나머지」와 같게", [(policy, "SEVERITY", {k: v for k, v in policy.SEVERITY.items() if k != "successor_model"})], test_gate_successor_model_is_script_judged_l2_only_and_last),
         ("두 등급인데 첫 등급 행만 적용 (관문)", [(policy, "decide", _first_tier_only)], test_lane_a_gate_wiring_and_cap),
         ("모델 은퇴 ✅를 ❌로", [(policy, "TABLE", _widened_table())], test_every_cell_default_context),
         ("모델 은퇴 ✅를 ❌로 (문서 대조)", [(policy, "TABLE", _widened_table())], test_table_matches_policy_doc),
