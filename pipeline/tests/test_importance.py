@@ -1359,6 +1359,34 @@ def test_evaluate_end_to_end_with_stub_oracle():
     assert res["predictions"][0]["ex-2"]["keep"] is False and res["technologies"][0]["pytest"]["mismatch"]["rule"].startswith("S2")
 
 
+def test_evaluate_fixed_tiers_skips_tier_calls_and_supplements_from_gold():
+    gold, _, changes = _gold_oracle()
+    gold_tiers = {"pydantic": (["L4"], "prod", "pinned"), "pytest": (["L7"], "dev", "range"), "gpt-6-luna": (["L2"], "prod", None),
+                  "python:3.12-slim": (["L1"], "prod", "pinned")}
+    for t in gold["technologies"]:                                                   # W41 정답지처럼 기술마다 정답 등급을 단다
+        t["gold_tiers"], t["gold_path"], t["gold_pin"] = gold_tiers[t["name"]]
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "tiers.json"
+        st = TierStore(path)
+        st.data["technologies"][signals.norm("pydantic")] = {"technology": "pydantic", "tiers": ["L6"], "unresolved": False, "path": "prod", "pin": "pinned"}
+        st.data["technologies"][signals.norm("pytest")] = {"technology": "pytest", "tiers": [], "unresolved": True, "path": "dev", "pin": None}
+        st.data["overrides"][signals.norm("pydantic")] = {"technology": "pydantic", "tiers": ["L4"], "sensitive": True}   # 사람 수정이 이긴다
+        st.save()
+        before = path.read_bytes()
+        fx, sup = evaluate.fixed_store(path, gold)
+        assert path.read_bytes() == before                                           # 고정 파일은 건드리지 않는다
+    gt = {t["name"]: t for t in gold["technologies"]}
+    assert sorted(sup) == sorted(n for n in gt if n != "pydantic"), sup              # 없는 기술 · 분류 불가(pytest)는 정답지 등급으로 보충
+    pyd = fx.effective("pydantic")
+    assert pyd["tiers"] == ["L4"] and pyd["sensitive"] is True and pyd["source"] == "fixed"
+    assert fx.effective("pytest")["tiers"] == ["L7"] and fx.effective("pytest")["path"] == "dev" and fx.effective("pytest")["source"] == "gold-supplement"
+    be = StubBackend(tiers={"pydantic": ["L8"]}, changes=changes)                    # 등급을 부르면 틀린 값이 나온다 — 부르지 않아야 한다
+    res = evaluate.evaluate(be, gold, 3, None, fx)
+    assert be.log.totals()["model_calls"] == 3 * len(gold["items"]), be.log.totals()   # 변화 분류만
+    assert all(r["c1_miss_count"] == 0 and r["c3_agree"] == 1.0 for r in res["runs"])
+    assert evaluate.plan(gold, 3, None, True)["per_run"]["tier_calls"] == 0
+
+
 def _long_note():
     """정리형 노트 모양: 앞에 긴 Highlights, 창 밖에 굵은 라벨 Security·Breaking과 제목 절, 소음 단어 줄."""
     filler = "".join(f"* **Perf {i}**: faster kernels for model family {i} with fused attention paths\n" for i in range(60))
