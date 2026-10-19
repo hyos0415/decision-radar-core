@@ -128,9 +128,15 @@ class ActionResult(BaseModel):
 
 # ── capture ───────────────────────────────────────────────────────
 
+class TopicRef(BaseModel):
+    id: str = Field(description="화제 id (GET /topics의 TopicRow.id)")
+    week: str = Field(description="화제가 속한 주차 (예 2026-W42)")
+
+
 class CaptureRequest(BaseModel):
     conversation: str = Field(description="조사 대화 원문 (20만 자까지)")
     repo: Optional[str] = Field(default=None, description="사람이 정한 대상 repo (GET /targets 중 하나). 없으면 「자동」 — 모델이 대화에서 찾는다 (HYO-95)")
+    topic: Optional[TopicRef] = Field(default=None, description="화제 탭에서 연 capture면 그 토픽 — 행동 로그(capture_submitted)에만 남는다. capture 동작은 그대로")
 
 
 class Target(BaseModel):
@@ -257,6 +263,7 @@ JobKind = Literal["capture", "detect", "revisit"]
 class JobRequest(BaseModel):
     conversation: Optional[str] = Field(default=None, description="capture만")
     repo: Optional[str] = Field(default=None, description="capture만 — CaptureRequest.repo와 같다")
+    topic: Optional[TopicRef] = Field(default=None, description="capture만 — CaptureRequest.topic과 같다")
 
 
 class Job(BaseModel):
@@ -286,7 +293,7 @@ class JobList(BaseModel):
 # ── 행동 로그 ─────────────────────────────────────────────────────
 
 class EventRequest(BaseModel):
-    event: str = Field(description="app_opened · item_opened · notification_shown · notification_clicked · capture_opened · decision_opened")
+    event: str = Field(description="app_opened · item_opened · notification_shown · notification_clicked · capture_opened · decision_opened · topics_opened(화제 탭을 엶) · topic_opened(화제의 링크를 누름, item=화제 id)")
     item: Optional[str] = None
     detail: Optional[dict[str, Any]] = Field(default=None, description="notification_shown·notification_clicked는 GET /notifications가 읽는 칸: "
                                                                         "kind · title · body(OS 알림 문구) · items(묶은 알림의 항목 id 목록 — 없으면 [item]) · "
@@ -325,3 +332,64 @@ class NotificationEntry(BaseModel):
 
 class NotificationList(BaseModel):
     items: list[NotificationEntry] = Field(description="최근 것 먼저")
+
+
+# ── 화제 (레인 C, HYO-127) ───────────────────────────────────────
+
+class TopicPost(BaseModel):
+    source: str = Field(description="hn · reddit · github · huggingface")
+    title: str
+    url: str
+    signal: str = Field(description="인기 한 마디 (예 `HN 2,123점` · `r/LocalLLaMA 주간 3위`) — 없으면 빈 문자열")
+
+
+class TopicRow(BaseModel):
+    id: str = Field(description="토픽 id (t-<해시>) — 같은 글 묶음이면 주를 다시 만들어도 같다")
+    week: str
+    rank: int = Field(description="그 주의 순위 (1부터)")
+    section: Literal["multi", "single"] = Field(description="multi: 여러 출처에 나온 화제 자리 · single: 한 출처 화제 자리")
+    title: str = Field(description="가장 인기 있는 글의 제목")
+    url: str = Field(description="그 글의 링크")
+    n_sources: int
+    sources: dict[str, int] = Field(description="출처별 글 수 (크로스포스트는 한 글)")
+    n_items: int
+    signal: str = Field(description="대표 글의 인기 한 마디")
+    posts: list[TopicPost] = Field(description="토픽에 묶인 모든 글 (파일 순서 = 인기 순)")
+    saved: bool = Field(description="저장한 화제인가")
+    capture_seed: str = Field(description="이 화제에서 capture 창을 열 때 미리 채울 글 — 결정 질문은 사람이 이어 쓴다")
+
+
+class TopicList(BaseModel):
+    week: Optional[str] = Field(description="보여 주는 주차. 화제 파일이 하나도 없으면 null")
+    weeks: list[str] = Field(description="있는 주차 — 새 것 먼저")
+    method: Optional[str] = Field(description="묶기 방법 이름 (예 link+crosspost@v1)")
+    k: int = Field(description="이 주차가 보이는 상위 개수")
+    counts: Optional[dict[str, Any]] = Field(description="그 주 건수 (후보 · 토픽 · 출처를 넘은 토픽 …) — 파이프라인이 쓴 그대로")
+    items: list[TopicRow] = Field(description="상위 k개, 순위대로")
+
+
+class SavedTopic(BaseModel):
+    """저장한 화제 — 복사본이라 주차 파일이 다시 만들어지거나 지워져도 남는다."""
+    id: str
+    week: str
+    title: str
+    url: str
+    n_sources: int
+    sources: dict[str, int]
+    n_items: int
+    posts: list[TopicPost]
+    saved_at: str
+
+
+class SavedTopicList(BaseModel):
+    items: list[SavedTopic] = Field(description="최근에 저장한 것 먼저")
+
+
+class TopicSaveRequest(BaseModel):
+    week: str = Field(description="화제가 속한 주차 — 그 주 파일에서 복사해 저장한다")
+
+
+class TopicActionResult(BaseModel):
+    ok: bool
+    saved: bool = Field(description="지금 저장된 상태인가")
+    message: str

@@ -53,9 +53,13 @@ STATE_FILE = "capture-checkpoint.sqlite"
 META_FILE = "app-meta.json"
 EVENTS_FILE = "events.jsonl"
 RUNS_FILE = "runs.jsonl"
+TOPICS_SAVED_FILE = "topics-saved.json"  # 저장한 화제 {"items": [...]} — 주차 파일과 따로 둔 복사본
+WEEK_NAME = re.compile(r"^\d{4}-W\d{2}$")  # 화제 주차 파일 이름 (pipeline.topics의 `<주차>.json`)
+CAPTURE_SEED_POSTS = 5  # capture 창에 미리 채우는 글 수
 ALERTS_FILE = "alerts.json"  # revisit 충족 알림 — Inbox 항목 (화면 설계 ③). 앱 데이터에만, ADR repo에는 안 쓴다
 DEFAULT_STUB = "JHS-014"  # 2턴 스텁 대본 — 2턴에서는 도구 결과 순서만 보고 끝내므로 항목마다 달라도 같다 (stub_policy.capture_step)
-UI_EVENTS = ("app_opened", "item_opened", "notification_shown", "notification_clicked", "capture_opened", "decision_opened")
+UI_EVENTS = ("app_opened", "item_opened", "notification_shown", "notification_clicked", "capture_opened", "decision_opened",
+             "topics_opened", "topic_opened")
 FLOWS = ("detect", "revisit")
 MAX_CONVERSATION = 200_000
 OK_OUTCOMES = ("written", "rejected", "discarded", "rejudge", "recovered")
@@ -116,6 +120,9 @@ class RadarService:
         self.events_path = os.path.join(self.data_dir, EVENTS_FILE)
         self.runs_path = os.path.join(self.data_dir, RUNS_FILE)
         self.alerts_path = os.path.join(self.data_dir, ALERTS_FILE)
+        # 레인 C 화제 (HYO-127) — `python -m pipeline.topics run --out <폴더>`가 쓴 `<주차>.json`을 읽기만 한다. 저장한 화제는 따로 (복사본)
+        self.topics_dir = os.path.abspath(os.environ.get("RADAR_TOPICS_DIR") or os.path.join(self.data_dir, "topics"))
+        self.topics_saved_path = os.path.join(self.data_dir, TOPICS_SAVED_FILE)
         self.jobs = None  # jobs.Jobs가 붙는다 (접수된 capture를 Inbox에)
         self.snapshot_dir = os.path.join(self.data_dir, "snapshots")
         self.tmp = os.path.join(self.data_dir, "tmp")
@@ -634,7 +641,7 @@ class RadarService:
             raise ServiceError(400, f"레이더 대상이 아닌 repo {repo!r} — {self.target_repos()}")
         return repo
 
-    def submit_capture(self, conversation, repo=None):
+    def submit_capture(self, conversation, repo=None, topic=None):
         """화면의 빠른 capture 창 — 대화 → 1턴. 스텁 대본은 대화에 나온 기술로 고른다 (`pick_stub`). 데모면 실제 모델이 대화를 읽는다."""
         self.check_conversation(conversation)
         repo = self.check_repo(repo)
@@ -651,8 +658,96 @@ class RadarService:
             res = {"outcome": "no_draft", "item": None, "link_candidates": [], "message": rep.get("note") or "초안이 나오지 않았어요"}
         res["usage"] = rep.get("usage")
         self.log("capture_submitted", res["item"], outcome=res["outcome"], chars=len(conversation), stub=stub, usage=res["usage"], repo=repo,
+                 **({"topic": {"id": topic["id"], "week": topic["week"]}} if topic else {}),
                  **({"link_candidates": res["link_candidates"]} if res["link_candidates"] else {}))
         return res
+
+    # ── 화제 (레인 C, HYO-127) ───────────────────────────────────
+
+    def _topic_weeks(self):
+        """화제 폴더의 주차 이름 — 새 것 먼저. 주차 이름이 아닌 파일은 무시한다."""
+        try:
+            names = os.listdir(self.topics_dir)
+        except OSError:
+            return []
+        return sorted((n[:-5] for n in names if n.endswith(".json") and WEEK_NAME.match(n[:-5])), reverse=True)
+
+    def _topic_file(self, week):
+        if not WEEK_NAME.match(week or "") or week not in self._topic_weeks():
+            raise ServiceError(404, f"화제 주차 {week!r}가 없다 — {self._topic_weeks()}")
+        try:
+            return json.load(open(os.path.join(self.topics_dir, week + ".json"), encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise ServiceError(500, f"화제 파일 {week}.json을 못 읽었다: {e}")
+
+    def _saved_topics(self):
+        try:
+            return json.load(open(self.topics_saved_path, encoding="utf-8")).get("items") or []
+        except (OSError, ValueError):
+            return []
+
+    def _put_saved_topics(self, items):
+        tmp = self.topics_saved_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"items": items}, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, self.topics_saved_path)
+
+    @staticmethod
+    def _topic_posts(t):
+        return [{"source": it["source"], "title": it.get("title") or "", "url": it.get("url") or "", "signal": it.get("signal") or ""}
+                for it in t.get("items") or []]
+
+    @staticmethod
+    def _capture_seed(week, title, posts):
+        """화제 카드에서 capture 창을 열 때 미리 채우는 글 — 결정 질문과 대화는 사람이 이어 쓴다."""
+        lines = [f"화제 ({week}): {title}"]
+        lines += [f"- {p['signal'] + ' · ' if p['signal'] else ''}{p['title']} {p['url']}".rstrip() for p in posts[:CAPTURE_SEED_POSTS]]
+        return "\n".join(lines) + "\n\n결정 질문: "
+
+    def topics(self, week=None):
+        """주차의 상위 k 토픽 (k는 파일이 정한다). 파일이 하나도 없으면 빈 목록 — 오류가 아니다."""
+        weeks = self._topic_weeks()
+        if not weeks:
+            return {"week": None, "weeks": [], "method": None, "k": 0, "counts": None, "items": []}
+        week = week or weeks[0]
+        f = self._topic_file(week)
+        k = int(f.get("k") or 0)
+        saved = {x["id"] for x in self._saved_topics()}
+        rows = []
+        for t in (f.get("topics") or [])[:k]:
+            posts = self._topic_posts(t)
+            rows.append({"id": t["id"], "week": week, "rank": t["rank"], "section": t["section"], "title": t["title"], "url": t["url"],
+                         "n_sources": t["n_sources"], "sources": t["sources"], "n_items": t["n_items"],
+                         "signal": posts[0]["signal"] if posts else "", "posts": posts, "saved": t["id"] in saved,
+                         "capture_seed": self._capture_seed(week, t["title"], posts)})
+        return {"week": week, "weeks": weeks, "method": f.get("method"), "k": k, "counts": f.get("counts"), "items": rows}
+
+    def saved_topics(self):
+        return list(reversed(self._saved_topics()))  # 저장한 순서대로 쌓이므로 뒤집으면 최근 것 먼저
+
+    def save_topic(self, topic_id, week):
+        """화제를 저장한다 — 주차 파일이 다시 만들어져도 남도록 복사본을 둔다. 두 번 눌러도 한 번만 (멱등)."""
+        t = next((x for x in self._topic_file(week).get("topics") or [] if x["id"] == topic_id), None)
+        if t is None:
+            raise ServiceError(404, f"{week}에 화제 {topic_id}가 없다")
+        with self.lock:
+            items = self._saved_topics()
+            if any(x["id"] == topic_id for x in items):
+                return {"ok": True, "saved": True, "message": "이미 저장한 화제예요"}
+            items.append({"id": topic_id, "week": week, "title": t["title"], "url": t["url"], "n_sources": t["n_sources"],
+                          "sources": t["sources"], "n_items": t["n_items"], "posts": self._topic_posts(t), "saved_at": now_iso()})
+            self._put_saved_topics(items)
+        self.log("topic_saved", topic_id, week=week)
+        return {"ok": True, "saved": True, "message": "저장했어요"}
+
+    def unsave_topic(self, topic_id):
+        with self.lock:
+            items = self._saved_topics()
+            if not any(x["id"] == topic_id for x in items):
+                raise ServiceError(404, f"저장한 화제 {topic_id}가 없다")
+            self._put_saved_topics([x for x in items if x["id"] != topic_id])
+        self.log("topic_unsaved", topic_id)
+        return {"ok": True, "saved": False, "message": "저장을 뺐어요"}
 
     # ── Decisions (읽기만 — R8) ──────────────────────────────────
 

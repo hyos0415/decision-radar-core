@@ -51,6 +51,26 @@ def ensure_snapshots(data_dir, profile=None):
     return True
 
 
+TOPICS_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "topics_example.jsonl")
+TOPICS_FIXTURE_WEEK = "2026-W42"
+
+
+def ensure_topics(data_dir):
+    """화제 탭용 예시 — `<data>/topics`에 주차 파일이 없으면 합성 항목(topics_example.jsonl, 전부 [예시])으로 만든다. 만들었으면 True.
+    비공개 스냅숏 repo 없이도 스텁 모드에서 화제 탭이 보이게 하려는 것이다. 모양은 `python -m pipeline.topics run`이 쓰는 것과 같다."""
+    dst = os.path.join(data_dir, "topics")
+    if os.path.isdir(dst) and any(n.endswith(".json") for n in os.listdir(dst)):
+        return False
+    from pipeline import topics as pt
+    items = pt.read_items(TOPICS_FIXTURE)
+    res = pt.build_topics(items, week=TOPICS_FIXTURE_WEEK, k=pt.K_DEFAULT)
+    os.makedirs(dst, exist_ok=True)
+    with open(os.path.join(dst, f"{TOPICS_FIXTURE_WEEK}.json"), "w", encoding="utf-8", newline="\n") as f:
+        json.dump(res, f, ensure_ascii=False, indent=1)
+        f.write("\n")
+    return True
+
+
 def seed_profile(data_dir, profile):
     """프로필 폴더 → 데이터 폴더. ADR 사본(adr-fixture) · 대상 repo 사본 · 스냅숏 · 스텁 capture 대기 항목."""
     meta = devprofiles.load_json(profile, "profile.json")
@@ -60,6 +80,7 @@ def seed_profile(data_dir, profile):
         shutil.copytree(devprofiles.path(profile, "repos", r), os.path.join(data_dir, r))
     devprofiles.write_marker(data_dir, profile)  # 서비스가 어느 프로필 대본을 쓸지 — 폴더가 기억한다
     ensure_snapshots(data_dir, profile)
+    ensure_topics(data_dir)
     svc = RadarService(data_dir)
     convs = devprofiles.load_json(profile, "conversations.json")
     out = []
@@ -78,6 +99,7 @@ def seed(data_dir, profile=devprofiles.DEFAULT):
     for r in ("finance-verifier", "medical-mate"):  # radar-targets.json이 ../<repo>로 가리킨다
         shutil.copytree(os.path.join(FIX, "repos", r), os.path.join(data_dir, r))
     ensure_snapshots(data_dir)
+    ensure_topics(data_dir)
     svc = RadarService(data_dir)
     convs = json.load(open(os.path.join(FIX, "conversations.json"), encoding="utf-8"))
     out = []
