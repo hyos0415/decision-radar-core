@@ -59,7 +59,7 @@ class Jobs:
             raise ServiceError(404, f"모르는 작업 {kind!r} — {list(KINDS)}")
         if kind == "capture":
             self.svc.check_conversation(body.get("conversation"))
-            payload = {"conversation": body["conversation"], "repo": self.svc.check_repo(body.get("repo"))}
+            payload = {"conversation": body["conversation"], "repo": self.svc.check_repo(body.get("repo")), "topic": body.get("topic")}
             first = next((x.strip() for x in body["conversation"].splitlines() if x.strip()), "")
             preview = first[:80] + ("…" if len(first) > 80 else "")
         else:
@@ -116,7 +116,7 @@ class Jobs:
         self._update(job_id, state="running", started=now_iso(), message="실행 중")
         try:
             if kind == "capture":
-                res = self.svc.submit_capture(payload["conversation"], repo=payload.get("repo"))
+                res = self.svc.submit_capture(payload["conversation"], repo=payload.get("repo"), topic=payload.get("topic"))
                 done = {"result": res, "message": res.get("message"), "item": res.get("item")}
             else:
                 res = self.svc.run(kind, trigger="job")

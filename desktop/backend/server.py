@@ -13,6 +13,7 @@ FastAPI가 동기 함수를 스레드 풀에서 돌리므로 이벤트 루프가
 import argparse
 import os
 import sys
+from typing import Optional
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -80,7 +81,24 @@ def create_app(svc: RadarService = None, scheduler_on: bool = False, jobs: Jobs 
 
     @app.post("/capture", response_model=S.CaptureResult, operation_id="capture")
     def capture(body: S.CaptureRequest):
-        return svc.submit_capture(body.conversation, repo=body.repo)
+        return svc.submit_capture(body.conversation, repo=body.repo, topic=body.topic.model_dump() if body.topic else None)
+
+    @app.get("/topics", response_model=S.TopicList, operation_id="topics")
+    def topics(week: Optional[str] = Query(default=None, description="주차 (예 2026-W42). 없으면 가장 새 주차")):
+        """화제 탭 (레인 C, HYO-127) — 그 주의 상위 k 토픽. 화제 파일이 없으면 빈 목록. 읽기만."""
+        return svc.topics(week)
+
+    @app.get("/topics/saved", response_model=S.SavedTopicList, operation_id="savedTopics")
+    def saved_topics():
+        return {"items": svc.saved_topics()}
+
+    @app.post("/topics/{topic_id}/save", response_model=S.TopicActionResult, operation_id="saveTopic")
+    def save_topic(topic_id: str, body: S.TopicSaveRequest):
+        return svc.save_topic(topic_id, body.week)
+
+    @app.post("/topics/{topic_id}/unsave", response_model=S.TopicActionResult, operation_id="unsaveTopic")
+    def unsave_topic(topic_id: str):
+        return svc.unsave_topic(topic_id)
 
     @app.get("/targets", response_model=S.TargetList, operation_id="targets")
     def targets():
@@ -172,8 +190,11 @@ def main(argv=None):
     if not devdata.is_seeded(a.data_dir):
         print(f"개발 데이터를 만든다: {a.data_dir} (프로필 {profile})", flush=True)
         print(devdata.seed(a.data_dir, profile), flush=True)
-    elif devdata.ensure_snapshots(a.data_dir):
-        print("개발 데이터에 스냅숏을 더했다", flush=True)
+    else:
+        if devdata.ensure_snapshots(a.data_dir):
+            print("개발 데이터에 스냅숏을 더했다", flush=True)
+        if devdata.ensure_topics(a.data_dir):
+            print("개발 데이터에 화제 예시를 더했다", flush=True)
     try:
         svc = RadarService(a.data_dir, profile=profile)  # 폴더를 만든 프로필과 다르면 거부한다
     except ServiceError as e:

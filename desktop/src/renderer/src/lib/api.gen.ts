@@ -143,6 +143,77 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/topics': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * Topics
+     * @description 화제 탭 (레인 C, HYO-127) — 그 주의 상위 k 토픽. 화제 파일이 없으면 빈 목록. 읽기만.
+     */
+    get: operations['topics']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/topics/saved': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** Saved Topics */
+    get: operations['savedTopics']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/topics/{topic_id}/save': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Save Topic */
+    post: operations['saveTopic']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/topics/{topic_id}/unsave': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Unsave Topic */
+    post: operations['unsaveTopic']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/targets': {
     parameters: {
       query?: never
@@ -447,6 +518,8 @@ export interface components {
        * @description 사람이 정한 대상 repo (GET /targets 중 하나). 없으면 「자동」 — 모델이 대화에서 찾는다 (HYO-95)
        */
       repo?: string | null
+      /** @description 화제 탭에서 연 capture면 그 토픽 — 행동 로그(capture_submitted)에만 남는다. capture 동작은 그대로 */
+      topic?: components['schemas']['TopicRef'] | null
     }
     /** CaptureResult */
     CaptureResult: {
@@ -579,7 +652,7 @@ export interface components {
     EventRequest: {
       /**
        * Event
-       * @description app_opened · item_opened · notification_shown · notification_clicked · capture_opened · decision_opened
+       * @description app_opened · item_opened · notification_shown · notification_clicked · capture_opened · decision_opened · topics_opened(화제 탭을 엶) · topic_opened(화제의 링크를 누름, item=화제 id)
        */
       event: string
       /** Item */
@@ -866,6 +939,8 @@ export interface components {
        * @description capture만 — CaptureRequest.repo와 같다
        */
       repo?: string | null
+      /** @description capture만 — CaptureRequest.topic과 같다 */
+      topic?: components['schemas']['TopicRef'] | null
     }
     /**
      * NotificationEntry
@@ -1148,6 +1223,40 @@ export interface components {
       /** @description 이 실행의 모델 사용량. 실행이 죽어도 그때까지 부른 만큼 남는다 */
       usage?: components['schemas']['Usage'] | null
     }
+    /**
+     * SavedTopic
+     * @description 저장한 화제 — 복사본이라 주차 파일이 다시 만들어지거나 지워져도 남는다.
+     */
+    SavedTopic: {
+      /** Id */
+      id: string
+      /** Week */
+      week: string
+      /** Title */
+      title: string
+      /** Url */
+      url: string
+      /** N Sources */
+      n_sources: number
+      /** Sources */
+      sources: {
+        [key: string]: number
+      }
+      /** N Items */
+      n_items: number
+      /** Posts */
+      posts: components['schemas']['TopicPost'][]
+      /** Saved At */
+      saved_at: string
+    }
+    /** SavedTopicList */
+    SavedTopicList: {
+      /**
+       * Items
+       * @description 최근에 저장한 것 먼저
+       */
+      items: components['schemas']['SavedTopic'][]
+    }
     /** Schedule */
     Schedule: {
       /** Enabled */
@@ -1197,6 +1306,153 @@ export interface components {
       op: '<' | '<=' | '>' | '>=' | '=='
       /** Value */
       value: number
+    }
+    /** TopicActionResult */
+    TopicActionResult: {
+      /** Ok */
+      ok: boolean
+      /**
+       * Saved
+       * @description 지금 저장된 상태인가
+       */
+      saved: boolean
+      /** Message */
+      message: string
+    }
+    /** TopicList */
+    TopicList: {
+      /**
+       * Week
+       * @description 보여 주는 주차. 화제 파일이 하나도 없으면 null
+       */
+      week: string | null
+      /**
+       * Weeks
+       * @description 있는 주차 — 새 것 먼저
+       */
+      weeks: string[]
+      /**
+       * Method
+       * @description 묶기 방법 이름 (예 link+crosspost@v1)
+       */
+      method: string | null
+      /**
+       * K
+       * @description 이 주차가 보이는 상위 개수
+       */
+      k: number
+      /**
+       * Counts
+       * @description 그 주 건수 (후보 · 토픽 · 출처를 넘은 토픽 …) — 파이프라인이 쓴 그대로
+       */
+      counts: {
+        [key: string]: unknown
+      } | null
+      /**
+       * Items
+       * @description 상위 k개, 순위대로
+       */
+      items: components['schemas']['TopicRow'][]
+    }
+    /** TopicPost */
+    TopicPost: {
+      /**
+       * Source
+       * @description hn · reddit · github · huggingface
+       */
+      source: string
+      /** Title */
+      title: string
+      /** Url */
+      url: string
+      /**
+       * Signal
+       * @description 인기 한 마디 (예 `HN 2,123점` · `r/LocalLLaMA 주간 3위`) — 없으면 빈 문자열
+       */
+      signal: string
+    }
+    /** TopicRef */
+    TopicRef: {
+      /**
+       * Id
+       * @description 화제 id (GET /topics의 TopicRow.id)
+       */
+      id: string
+      /**
+       * Week
+       * @description 화제가 속한 주차 (예 2026-W42)
+       */
+      week: string
+    }
+    /** TopicRow */
+    TopicRow: {
+      /**
+       * Id
+       * @description 토픽 id (t-<해시>) — 같은 글 묶음이면 주를 다시 만들어도 같다
+       */
+      id: string
+      /** Week */
+      week: string
+      /**
+       * Rank
+       * @description 그 주의 순위 (1부터)
+       */
+      rank: number
+      /**
+       * Section
+       * @description multi: 여러 출처에 나온 화제 자리 · single: 한 출처 화제 자리
+       * @enum {string}
+       */
+      section: 'multi' | 'single'
+      /**
+       * Title
+       * @description 가장 인기 있는 글의 제목
+       */
+      title: string
+      /**
+       * Url
+       * @description 그 글의 링크
+       */
+      url: string
+      /** N Sources */
+      n_sources: number
+      /**
+       * Sources
+       * @description 출처별 글 수 (크로스포스트는 한 글)
+       */
+      sources: {
+        [key: string]: number
+      }
+      /** N Items */
+      n_items: number
+      /**
+       * Signal
+       * @description 대표 글의 인기 한 마디
+       */
+      signal: string
+      /**
+       * Posts
+       * @description 토픽에 묶인 모든 글 (파일 순서 = 인기 순)
+       */
+      posts: components['schemas']['TopicPost'][]
+      /**
+       * Saved
+       * @description 저장한 화제인가
+       */
+      saved: boolean
+      /**
+       * Capture Seed
+       * @description 이 화제에서 capture 창을 열 때 미리 채울 글 — 결정 질문은 사람이 이어 쓴다
+       */
+      capture_seed: string
+    }
+    /** TopicSaveRequest */
+    TopicSaveRequest: {
+      /**
+       * Week
+       * @description 화제가 속한 주차 — 그 주 파일에서 복사해 저장한다
+       */
+      week: string
     }
     /**
      * Usage
@@ -1785,6 +2041,304 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['CaptureResult']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  topics: {
+    parameters: {
+      query?: {
+        /** @description 주차 (예 2026-W42). 없으면 가장 새 주차 */
+        week?: string | null
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['TopicList']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  savedTopics: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['SavedTopicList']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  saveTopic: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        topic_id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['TopicSaveRequest']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['TopicActionResult']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  unsaveTopic: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        topic_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['TopicActionResult']
         }
       }
       /** @description 서비스 오류 — detail 한 줄 */

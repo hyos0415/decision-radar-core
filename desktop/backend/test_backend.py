@@ -7,6 +7,7 @@ edit(검사 실패는 쓰지 않음, status 칸 거부) · 거부 · 버림 · �
 개발 데이터 프로필(andbread — 선택·폴더 분리·시드·실행, default는 그대로) ·
 HYO-85: 로컬 내보내기로 detect 초안 승인·수정·거부 · 「왜 왔나」 · 작업+폴링 · 데모 모드(대역 모델 — 사본에만 쓰기, 원본 무변경, 안전장치).
 HYO-110: 지난 알림 목록(클릭 짝 · 열어 봄 · 항목의 지금 상태 · 묶은 알림).
+HYO-127: 화제 탭(레인 C) — 주차 목록 · k 자르기 · 저장/저장 빼기 · capture의 topic · 개발 예시.
 """
 
 import glob
@@ -177,6 +178,7 @@ def main():
         scenario_hyo92(tmp)
         scenario_hyo95(tmp)
         scenario_hyo110(tmp)
+        scenario_hyo127(tmp)
     finally:
         os.environ.pop("RADAR_EXPORT", None)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -562,7 +564,7 @@ def scenario_hyo92(tmp):
     check("① 두 번 확인함 404", c.post(f"/inbox/{j2['id']}/ack").status_code == 404)
     # 실패한 접수
     orig = svc.submit_capture
-    svc.submit_capture = lambda conv, repo=None: (_ for _ in ()).throw(RuntimeError("모델 연결 실패"))
+    svc.submit_capture = lambda conv, repo=None, topic=None: (_ for _ in ()).throw(RuntimeError("모델 연결 실패"))
     j3 = c.post("/jobs/capture", json={"conversation": "아무 대화"}).json()["job"]
     step()
     svc.submit_capture = orig
@@ -737,6 +739,135 @@ def scenario_hyo110(tmp):
     with open(svc.events_path, "a", encoding="utf-8") as f:
         f.write('{"at": "2026-10-13T00:00:00+09:00", "event": "notification_sh')
     check("깨진 줄은 건너뜀", len(notes()) == 9)
+
+def scenario_hyo127(tmp):
+    """HYO-127 — 화제 탭(레인 C): 주차 목록·k 자르기·404·빈 상태 · 저장/저장 빼기(멱등·복사본) · capture의 topic · 새 UI 이벤트 · 개발 예시."""
+    print("\n— HYO-127: 화제 탭 —")
+    import jobs as jobs_mod
+    from pipeline import topics as pt
+    data = os.path.join(tmp, "data127")
+    os.makedirs(data)
+    svc = RadarService(data)
+    c = TestClient(server.create_app(svc, jobs=jobs_mod.Jobs(svc, start=False)))
+
+    r = c.get("/topics")
+    check("파일 없음 → 빈 목록 (오류 아님)", r.status_code == 200 and r.json() == {"week": None, "weeks": [], "method": None, "k": 0, "counts": None, "items": []}, r.text)
+    check("파일 없음 → 저장 목록도 빈 목록", c.get("/topics/saved").json() == {"items": []})
+    check("파일 없음 → 주차를 줘도 빈 목록", c.get("/topics", params={"week": "2026-W41"}).json()["items"] == [])
+
+    # 개발 예시 — 합성 항목으로 만든다. 다시 불러도 덮어쓰지 않는다
+    check("ensure_topics: 처음엔 만든다", devdata.ensure_topics(data) is True)
+    check("ensure_topics: 있으면 다시 만들지 않는다", devdata.ensure_topics(data) is False)
+    res = json.load(open(os.path.join(data, "topics", devdata.TOPICS_FIXTURE_WEEK + ".json"), encoding="utf-8"))
+    items = pt.read_items(devdata.TOPICS_FIXTURE)
+    check("예시 항목은 전부 [예시] 제목", items and all(i["title"].startswith("[예시]") for i in items))
+    multi = [t for t in res["topics"] if t["n_sources"] > 1]
+    check("예시: 여러 출처 토픽 2개 이상 (HN+Reddit · GitHub+HF)", len(multi) >= 2, [t["title"] for t in multi])
+    xp = [t for t in res["topics"] if t["n_sources"] == 1 and any(i["source"] == "reddit" and "벤치마크" in i["title"] for i in t["items"])]
+    check("예시: 크로스포스트는 한 글로 센다", len(xp) == 1 and xp[0]["n_items"] == 1 and xp[0]["sources"] == {"reddit": 1}, xp)
+    check("예시: 한 출처 토픽이 hn·github·huggingface·reddit에 걸친다",
+          {s for t in res["topics"] if t["n_sources"] == 1 for s in t["sources"]} == {"hn", "github", "huggingface", "reddit"})
+
+    d = c.get("/topics").json()
+    check("GET /topics: 가장 새 주차 · k개 · 순위대로", d["week"] == "2026-W42" and d["weeks"] == ["2026-W42"] and d["k"] == 10 and len(d["items"]) == 10
+          and [t["rank"] for t in d["items"]] == list(range(1, 11)) and d["method"] == res["method"] and d["counts"] == res["counts"], d["weeks"])
+    top = d["items"][0]
+    check("TopicRow: 글 목록 · 대표 인기 · 저장 안 됨", top["posts"] and top["signal"] == top["posts"][0]["signal"] and top["saved"] is False
+          and top["n_items"] == len(top["posts"]) and top["week"] == "2026-W42", top)
+    check("capture_seed: 제목 · 글 줄 · 결정 질문", top["capture_seed"].startswith(f"화제 (2026-W42): {top['title']}\n- ")
+          and top["capture_seed"].endswith("\n\n결정 질문: ") and top["posts"][0]["url"] in top["capture_seed"], top["capture_seed"])
+    print("  예시 상위 10:")
+    for t in d["items"]:
+        print(f"   {t['rank']:>2}. {t['section']:<6} {t['sources']} {t['title']}")
+
+    # 주차 목록 — 새 것 먼저, 주차 이름이 아닌 파일은 무시, k 자르기
+    older = {**res, "week": "2026-W41", "k": 3}
+    json.dump(older, open(os.path.join(data, "topics", "2026-W41.json"), "w", encoding="utf-8"), ensure_ascii=False)
+    open(os.path.join(data, "topics", "notes.json"), "w", encoding="utf-8").write("{}")
+    open(os.path.join(data, "topics", "2026-W5.json"), "w", encoding="utf-8").write("{}")
+    d = c.get("/topics").json()
+    check("주차 목록은 새 것 먼저 · 주차 이름 아닌 파일은 무시", d["weeks"] == ["2026-W42", "2026-W41"] and d["week"] == "2026-W42", d["weeks"])
+    d41 = c.get("/topics", params={"week": "2026-W41"}).json()
+    check("week 지정 · k 자르기 (파일 k=3)", d41["week"] == "2026-W41" and d41["k"] == 3 and len(d41["items"]) == 3
+          and [t["id"] for t in d41["items"]] == [t["id"] for t in res["topics"][:3]] and d41["items"][0]["week"] == "2026-W41")
+    check("모르는 주차 → 404", c.get("/topics", params={"week": "2026-W01"}).status_code == 404
+          and c.get("/topics", params={"week": "../x"}).status_code == 404)
+
+    # 저장 · 저장 빼기
+    tid = top["id"]
+    s1 = c.post(f"/topics/{tid}/save", json={"week": "2026-W42"})
+    check("저장 → saved", s1.status_code == 200 and s1.json()["ok"] and s1.json()["saved"] is True, s1.text)
+    s2 = c.post(f"/topics/{tid}/save", json={"week": "2026-W42"}).json()
+    check("두 번 저장 → 멱등 (이미 저장함)", s2["saved"] is True and "이미" in s2["message"] and len(c.get("/topics/saved").json()["items"]) == 1, s2)
+    check("GET /topics의 saved 표시", {t["id"]: t["saved"] for t in c.get("/topics").json()["items"]}[tid] is True
+          and sum(t["saved"] for t in c.get("/topics").json()["items"]) == 1)
+    check("없는 화제 저장 → 404 · 모르는 주차 → 404", c.post("/topics/t-nope/save", json={"week": "2026-W42"}).status_code == 404
+          and c.post(f"/topics/{tid}/save", json={"week": "2026-W01"}).status_code == 404)
+    check("week 빠짐 → 422", c.post(f"/topics/{tid}/save", json={}).status_code == 422)
+    second = d["items"][1]["id"]
+    second_save = c.post(f"/topics/{second}/save", json={"week": "2026-W42"})
+    sv = c.get("/topics/saved").json()["items"]
+    check("저장 목록: 최근 저장 먼저 · 복사본 모양", [x["id"] for x in sv] == [second, tid] and sv[1]["posts"] == top["posts"] and sv[1]["title"] == top["title"]
+          and sv[1]["week"] == "2026-W42" and sv[1]["saved_at"] and sv[1]["n_items"] == top["n_items"] and sv[1]["sources"] == top["sources"], sv)
+    check("저장 파일은 {items} 한 벌 · 임시 파일 안 남음", set(json.load(open(svc.topics_saved_path, encoding="utf-8"))) == {"items"}
+          and not os.path.exists(svc.topics_saved_path + ".tmp") and second_save.status_code == 200)
+    os.remove(os.path.join(data, "topics", "2026-W42.json"))
+    check("주차 파일을 지워도 저장한 복사본은 남는다", [x["id"] for x in c.get("/topics/saved").json()["items"]] == [second, tid]
+          and c.get("/topics").json()["week"] == "2026-W41")
+    u = c.post(f"/topics/{tid}/unsave").json()
+    check("저장 빼기 → saved false · 목록에서 사라짐", u["ok"] and u["saved"] is False and [x["id"] for x in c.get("/topics/saved").json()["items"]] == [second], u)
+    check("저장하지 않은 화제 빼기 → 404", c.post(f"/topics/{tid}/unsave").status_code == 404)
+    evs = events(svc)
+    check("행동 로그: topic_saved(week) · topic_unsaved",
+          any(e["event"] == "topic_saved" and e["item"] == tid and e["detail"] == {"week": "2026-W42"} for e in evs)
+          and any(e["event"] == "topic_unsaved" and e["item"] == tid for e in evs)
+          and sum(e["event"] == "topic_saved" and e["item"] == tid for e in evs) == 1)  # 멱등 두 번째는 기록하지 않는다
+
+    # 화제 폴더 환경 변수
+    alt = os.path.join(tmp, "alt-topics")
+    os.makedirs(alt)
+    shutil.copy(os.path.join(data, "topics", "2026-W41.json"), os.path.join(alt, "2026-W40.json"))
+    os.environ["RADAR_TOPICS_DIR"] = alt
+    try:
+        svc2 = RadarService(data)
+        check("RADAR_TOPICS_DIR이 화제 폴더를 바꾼다", svc2.topics_dir == os.path.abspath(alt) and svc2.topics()["weeks"] == ["2026-W40"])
+    finally:
+        del os.environ["RADAR_TOPICS_DIR"]
+    check("기본 화제 폴더 = <data>/topics", svc.topics_dir == os.path.abspath(os.path.join(data, "topics")))
+
+    # capture 연결 — 동작은 그대로, 행동 로그에만 남는다
+    convs = json.load(open(os.path.join(devdata.FIX, "conversations.json"), encoding="utf-8"))
+    cdata = os.path.join(tmp, "data127c")
+    devdata.seed(cdata)
+    csvc = RadarService(cdata)
+    jj = jobs_mod.Jobs(csvc, start=False)
+    cc = TestClient(server.create_app(csvc, jobs=jj))
+    ref = {"id": tid, "week": "2026-W42"}
+    r = cc.post("/capture", json={"conversation": convs["V8"], "topic": ref})
+    check("capture(topic) → 접수", r.status_code == 200 and r.json()["outcome"] == "awaiting", r.text)
+    ce = [e for e in events(csvc) if e["event"] == "capture_submitted"]
+    check("capture_submitted detail에 topic", ce and ce[-1]["detail"]["topic"] == ref, ce)
+    cc.post("/capture", json={"conversation": convs["V4"]})
+    check("topic 없으면 detail에 topic 칸 없음", "topic" not in [e for e in events(csvc) if e["event"] == "capture_submitted"][-1]["detail"])
+    check("topic 모양이 틀리면 422", cc.post("/capture", json={"conversation": convs["V8"], "topic": {"id": "x"}}).status_code == 422)
+    j = cc.post("/jobs/capture", json={"conversation": convs["V8"], "topic": ref})
+    jid = j.json()["job"]["id"]
+    jj.run_one(*jj.q.get_nowait())
+    check("작업 capture도 topic을 넘긴다", j.status_code == 202 and jj.get(jid)["state"] == "done"
+          and [e for e in events(csvc) if e["event"] == "capture_submitted"][-1]["detail"]["topic"] == ref)
+
+    # UI 이벤트
+    ok = [c.post("/events", json={"event": ev, "item": it}).status_code for ev, it in (("topics_opened", None), ("topic_opened", tid))]
+    check("새 UI 이벤트 topics_opened · topic_opened 접수", ok == [200, 200]
+          and any(e["event"] == "topic_opened" and e["item"] == tid and e["source"] == "app" for e in events(svc)))
+
+    # 개발 데이터 시드가 예시를 만든다 (기본 프로필 · 다른 프로필)
+    check("개발 데이터 시드가 화제 예시 주차를 만든다", os.path.exists(os.path.join(cdata, "topics", devdata.TOPICS_FIXTURE_WEEK + ".json"))
+          and cc.get("/topics").json()["week"] == devdata.TOPICS_FIXTURE_WEEK)
+    adata = os.path.join(tmp, "data127a")
+    devdata.seed(adata, "andbread")
+    check("프로필 시드도 화제 예시를 만든다", os.path.exists(os.path.join(adata, "topics", devdata.TOPICS_FIXTURE_WEEK + ".json")))
+
 
 if __name__ == "__main__":
     sys.exit(main())

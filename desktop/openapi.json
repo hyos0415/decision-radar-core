@@ -695,6 +695,361 @@
         }
       }
     },
+    "/topics": {
+      "get": {
+        "summary": "Topics",
+        "description": "화제 탭 (레인 C, HYO-127) — 그 주의 상위 k 토픽. 화제 파일이 없으면 빈 목록. 읽기만.",
+        "operationId": "topics",
+        "parameters": [
+          {
+            "name": "week",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "주차 (예 2026-W42). 없으면 가장 새 주차",
+              "title": "Week"
+            },
+            "description": "주차 (예 2026-W42). 없으면 가장 새 주차"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/saved": {
+      "get": {
+        "summary": "Saved Topics",
+        "operationId": "savedTopics",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedTopicList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/{topic_id}/save": {
+      "post": {
+        "summary": "Save Topic",
+        "operationId": "saveTopic",
+        "parameters": [
+          {
+            "name": "topic_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Topic Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopicSaveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicActionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/{topic_id}/unsave": {
+      "post": {
+        "summary": "Unsave Topic",
+        "operationId": "unsaveTopic",
+        "parameters": [
+          {
+            "name": "topic_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Topic Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicActionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/targets": {
       "get": {
         "summary": "Targets",
@@ -1878,6 +2233,17 @@
             ],
             "title": "Repo",
             "description": "사람이 정한 대상 repo (GET /targets 중 하나). 없으면 「자동」 — 모델이 대화에서 찾는다 (HYO-95)"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TopicRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "화제 탭에서 연 capture면 그 토픽 — 행동 로그(capture_submitted)에만 남는다. capture 동작은 그대로"
           }
         },
         "type": "object",
@@ -2312,7 +2678,7 @@
           "event": {
             "type": "string",
             "title": "Event",
-            "description": "app_opened · item_opened · notification_shown · notification_clicked · capture_opened · decision_opened"
+            "description": "app_opened · item_opened · notification_shown · notification_clicked · capture_opened · decision_opened · topics_opened(화제 탭을 엶) · topic_opened(화제의 링크를 누름, item=화제 id)"
           },
           "item": {
             "anyOf": [
@@ -2993,6 +3359,17 @@
             ],
             "title": "Repo",
             "description": "capture만 — CaptureRequest.repo와 같다"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TopicRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "capture만 — CaptureRequest.topic과 같다"
           }
         },
         "type": "object",
@@ -3642,6 +4019,83 @@
         ],
         "title": "RunResult"
       },
+      "SavedTopic": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "week": {
+            "type": "string",
+            "title": "Week"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "n_sources": {
+            "type": "integer",
+            "title": "N Sources"
+          },
+          "sources": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Sources"
+          },
+          "n_items": {
+            "type": "integer",
+            "title": "N Items"
+          },
+          "posts": {
+            "items": {
+              "$ref": "#/components/schemas/TopicPost"
+            },
+            "type": "array",
+            "title": "Posts"
+          },
+          "saved_at": {
+            "type": "string",
+            "title": "Saved At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "week",
+          "title",
+          "url",
+          "n_sources",
+          "sources",
+          "n_items",
+          "posts",
+          "saved_at"
+        ],
+        "title": "SavedTopic",
+        "description": "저장한 화제 — 복사본이라 주차 파일이 다시 만들어지거나 지워져도 남는다."
+      },
+      "SavedTopicList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SavedTopic"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "최근에 저장한 것 먼저"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "SavedTopicList"
+      },
       "Schedule": {
         "properties": {
           "enabled": {
@@ -3771,6 +4225,259 @@
           "value"
         ],
         "title": "Threshold"
+      },
+      "TopicActionResult": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "saved": {
+            "type": "boolean",
+            "title": "Saved",
+            "description": "지금 저장된 상태인가"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "saved",
+          "message"
+        ],
+        "title": "TopicActionResult"
+      },
+      "TopicList": {
+        "properties": {
+          "week": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Week",
+            "description": "보여 주는 주차. 화제 파일이 하나도 없으면 null"
+          },
+          "weeks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Weeks",
+            "description": "있는 주차 — 새 것 먼저"
+          },
+          "method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method",
+            "description": "묶기 방법 이름 (예 link+crosspost@v1)"
+          },
+          "k": {
+            "type": "integer",
+            "title": "K",
+            "description": "이 주차가 보이는 상위 개수"
+          },
+          "counts": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counts",
+            "description": "그 주 건수 (후보 · 토픽 · 출처를 넘은 토픽 …) — 파이프라인이 쓴 그대로"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TopicRow"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "상위 k개, 순위대로"
+          }
+        },
+        "type": "object",
+        "required": [
+          "week",
+          "weeks",
+          "method",
+          "k",
+          "counts",
+          "items"
+        ],
+        "title": "TopicList"
+      },
+      "TopicPost": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "hn · reddit · github · huggingface"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "signal": {
+            "type": "string",
+            "title": "Signal",
+            "description": "인기 한 마디 (예 `HN 2,123점` · `r/LocalLLaMA 주간 3위`) — 없으면 빈 문자열"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "title",
+          "url",
+          "signal"
+        ],
+        "title": "TopicPost"
+      },
+      "TopicRef": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "화제 id (GET /topics의 TopicRow.id)"
+          },
+          "week": {
+            "type": "string",
+            "title": "Week",
+            "description": "화제가 속한 주차 (예 2026-W42)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "week"
+        ],
+        "title": "TopicRef"
+      },
+      "TopicRow": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "토픽 id (t-<해시>) — 같은 글 묶음이면 주를 다시 만들어도 같다"
+          },
+          "week": {
+            "type": "string",
+            "title": "Week"
+          },
+          "rank": {
+            "type": "integer",
+            "title": "Rank",
+            "description": "그 주의 순위 (1부터)"
+          },
+          "section": {
+            "type": "string",
+            "enum": [
+              "multi",
+              "single"
+            ],
+            "title": "Section",
+            "description": "multi: 여러 출처에 나온 화제 자리 · single: 한 출처 화제 자리"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "description": "가장 인기 있는 글의 제목"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "그 글의 링크"
+          },
+          "n_sources": {
+            "type": "integer",
+            "title": "N Sources"
+          },
+          "sources": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Sources",
+            "description": "출처별 글 수 (크로스포스트는 한 글)"
+          },
+          "n_items": {
+            "type": "integer",
+            "title": "N Items"
+          },
+          "signal": {
+            "type": "string",
+            "title": "Signal",
+            "description": "대표 글의 인기 한 마디"
+          },
+          "posts": {
+            "items": {
+              "$ref": "#/components/schemas/TopicPost"
+            },
+            "type": "array",
+            "title": "Posts",
+            "description": "토픽에 묶인 모든 글 (파일 순서 = 인기 순)"
+          },
+          "saved": {
+            "type": "boolean",
+            "title": "Saved",
+            "description": "저장한 화제인가"
+          },
+          "capture_seed": {
+            "type": "string",
+            "title": "Capture Seed",
+            "description": "이 화제에서 capture 창을 열 때 미리 채울 글 — 결정 질문은 사람이 이어 쓴다"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "week",
+          "rank",
+          "section",
+          "title",
+          "url",
+          "n_sources",
+          "sources",
+          "n_items",
+          "signal",
+          "posts",
+          "saved",
+          "capture_seed"
+        ],
+        "title": "TopicRow"
+      },
+      "TopicSaveRequest": {
+        "properties": {
+          "week": {
+            "type": "string",
+            "title": "Week",
+            "description": "화제가 속한 주차 — 그 주 파일에서 복사해 저장한다"
+          }
+        },
+        "type": "object",
+        "required": [
+          "week"
+        ],
+        "title": "TopicSaveRequest"
       },
       "Usage": {
         "properties": {
