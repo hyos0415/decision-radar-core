@@ -99,6 +99,23 @@ python pipeline/tests/test_detect_feed.py      # 오프라인 — radar.py feed�
 - manifest는 수집기와 같은 리더(`collector/stack.py`)로 읽는다 — git 추적 파일만, 대상별 `exclude`(radar-targets.json) 적용. `--repo`만 주면 exclude 없이 그 폴더의 추적 파일을 읽는다 (HYO-122)
 - 등급 파일은 `classify-stack`으로 만든다. 등급 스크립트 집행(HYO-67)은 데모 뒤
 
+## 레인 C 화제 (HYO-127: `topics.py`)
+
+분야를 가리지 않고 그 주에 인기 있던 소식을 토픽으로 묶어 상위 k (doc-pipeline §2-3 변경 2026-10-19). A·B와 점수를 합치지 않는다. 네트워크·모델 호출 없음.
+
+```bash
+python -m pipeline.topics run --snapshot ../radar-snapshots/2026-W42 --out pipeline/out/topics     # → pipeline/out/topics/2026-W42.json
+python pipeline/tests/test_topics.py           # 오프라인 + 변이 5개
+```
+
+- **1단계 묶기 = 같은 링크 + 크로스포스트만** (`link+crosspost@v1`). 링크 키는 정규화한다: arXiv abs·pdf·HF papers → `arxiv:<id>` · GitHub은 repo 단위(issues·pull·release는 따로) · HF 모델·데이터셋·스페이스 · YouTube `v`. 토론 페이지(HN·Reddit)·이미지 업로더·사이트 첫 화면·localhost는 키가 아니다. 링크가 `MAX_LINKS`(3)개를 넘는 글은 모음 글로 보고 링크로 묶지 않는다. 같은 글쓴이 + 같은 제목의 Reddit 글은 한 글
+- **인기 = 출처 안 순위의 백분위** `1 − (순위 − 0.5)/pool 크기` — pool은 HN points · GitHub stars(new-repos·slow-growers 따로) · HF 논문 upvotes · Reddit·HF의 피드 순위(`rank:*`). 항목은 가장 높은 pool을 쓰고, 화면용 한 마디(`signal`, 예 「HN 2,123점」 「r/LocalLLaMA 주간 3위」)를 붙인다
+- **순위 = 자리 나눔**: 상위 k(잠정 10)의 절반은 여러 출처 토픽(출처 수 → 인기), 나머지는 한 출처 토픽(인기). 한쪽이 모자라면 다른 쪽으로 채운다. 파일에는 전체 순위(`rank` · `section`)가 들어간다
+- 후보 = 레인 B 중 인기 신호가 있는 것. 레인 A(의존성 릴리스 · 벤더)는 관문의 일이라 넣지 않는다
+- 토픽 id = 묶인 항목 id들의 해시 — 같은 주를 다시 돌리면 같다 (저장 버튼이 쓴다)
+- W41·W42: 후보 2,062 · 1,993 → 토픽 1,988 · 1,908, 출처를 넘어 묶인 토픽 28 · 31. **묶기 정밀도는 아직 재지 않았다** — 2단계 손 묶음 정답지(HYO-127)에서. 눈으로 본 느슨한 묶음: 한 Reddit 글이 다른 앱 repo를 같이 링크해 두 앱이 한 토픽(W42 DigUp) · 모델 카드와 그 모델을 쓰는 도구 글(GLM-5.3-Flash + Project Maya)
+- 같은 소식이 링크가 달라 두 토픽으로 남을 수 있다(W42 Strata 둘) — precision 우선이라 의도한 쪽이다
+
 ## 알려진 한계
 
 - 한국어 `not`·`excludes`(「이미지 생성」「이미지·영상 생성 도구」)는 영어 항목에 걸리지 않는다 — 감점이 거의 안 일어난다. 번역·질의 변환 전략의 몫
