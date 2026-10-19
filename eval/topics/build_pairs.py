@@ -10,6 +10,7 @@
   name   이름 토큰 공유 — 글자+숫자가 섞인 4자 이상 토큰, repo·모델 이름(URL의 owner/name 중 name)을 이어 붙인 형태로 비교
   emb    BGE-M3 dense 코사인 상위 EMB_TOP 이웃 (제목)
   char   제목 글자 3-gram TF-IDF 코사인 상위 CHAR_TOP 이웃
+  owner  같은 GitHub 계정 · OWNER_DAYS일 안 · repo 이름 앞뒤 OWNER_AFFIX자 이상 같음 (v2 후보를 재려고 W41부터 — 2026-10-19)
 + 감사용 짝 (판정하는 사람에게는 구분 없이 섞는다)
   (이웃 신호 emb · char만 걸린 짝은 emb ≥ EMB_MIN 또는 char ≥ CHAR_MIN일 때만 — 나머지는 「떨어낸 이웃」)
   random 떨어낸 이웃에서 RANDOM_N/2 + 아무 신호 없는 짝에서 RANDOM_N/2 — 후보가 놓친 짝이 있는지 (재현율 추정)
@@ -42,6 +43,8 @@ EMB_TOP = 3
 CHAR_TOP = 3
 EMB_MIN = 0.6           # 이웃 신호(emb · char)만 걸린 짝은 이 유사도 이상만 판정 — 상위 이웃은 늘 있어서 대부분 뻔한 「다름」이다
 CHAR_MIN = 0.35
+OWNER_DAYS = 14         # owner 신호는 v2 후보(D=7, A=5)보다 넓게 — 판정 짝에 그 규칙이 묶을 짝이 다 들어오게
+OWNER_AFFIX = 4
 RANDOM_N = 80           # 절반은 떨어낸 이웃 짝, 절반은 아무 신호 없는 짝에서
 REPEAT_FRAC = 0.1
 SEED = 20261019
@@ -179,6 +182,10 @@ def main(argv=None):
             if N[i] & N[j] or any(x in S[j] for x in N[i]) or any(x in S[i] for x in N[j]):
                 add(i, j, "name")
 
+    import v2_methods
+    for i, j in v2_methods.owner_series_edges(its, OWNER_DAYS, OWNER_AFFIX):
+        add(i, j, "owner")
+
     titles = [it.get("title") or "" for it in its]
     cv = char_vectors(titles)
     for i in range(n):
@@ -192,7 +199,7 @@ def main(argv=None):
             add(i, j, "emb")
 
     rng = random.Random(SEED)
-    strong = {"link", "xpost", "rare", "name"}
+    strong = {"link", "xpost", "rare", "name", "owner"}
 
     def keep(p):
         i, j = p
@@ -236,6 +243,7 @@ def main(argv=None):
     meta_counts = {"candidate": len(cand), "dropped_neighbor": len(dropped), "no_signal": len(none)}
     kmeta = {**meta, "universe": meta_counts, "params": {"TOP": TOP, "RARE_DF": RARE_DF, "EMB_TOP": EMB_TOP, "CHAR_TOP": CHAR_TOP,
                                 "EMB_MIN": EMB_MIN, "CHAR_MIN": CHAR_MIN, "RANDOM_N": RANDOM_N,
+                                "OWNER_DAYS": OWNER_DAYS, "OWNER_AFFIX": OWNER_AFFIX,
                                 "REPEAT_FRAC": REPEAT_FRAC}, "embedding": {"model": "BAAI/bge-m3", "revision": emb_rev, "text": "title"}}
     (out / "pairs-key.json").write_text(json.dumps({"meta": kmeta, "pairs": key}, ensure_ascii=False, indent=1) + "\n",
                                         encoding="utf-8", newline="\n")
