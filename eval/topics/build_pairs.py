@@ -149,7 +149,9 @@ def main(argv=None):
     ap.add_argument("--snapshot", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--device", default=None)
+    ap.add_argument("--top", type=int, default=TOP, help=f"출처별 인기 상위 몇 개를 풀에 넣나 (기본 {TOP} — W42·W41 정답지)")
     a = ap.parse_args(argv)
+    globals()["TOP"] = a.top          # pool_items가 모듈 상수를 읽는다
 
     items = topics.read_items(a.snapshot)
     week = topics.week_of(a.snapshot)
