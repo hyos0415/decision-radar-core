@@ -1575,7 +1575,7 @@ def test_claude_backend_request_shape_labels_and_cost():
     rec = b.log.calls[0]
     assert rec["model"] == rec["served_model"] == "claude-sonnet-5-5" and rec["input_tokens"] == 1000 and rec["attempts"] == 1
     assert abs(rec["cost_usd"] - (1000 * 2.00 + 200 * 10.00) / 1e6) < 1e-12 and b.log.totals()["unpriced_calls"] == 0
-    assert claude_backend.cost_usd("claude-opus-5-5", 1, 1) is None                                  # 단가표에 없는 모델은 모름(None)
+    assert claude_backend.cost_usd("claude-unknown-0", 1, 1) is None                                  # 단가표에 없는 모델은 모름(None)
 
 
 def test_claude_backend_retry_refusal_and_gating():
