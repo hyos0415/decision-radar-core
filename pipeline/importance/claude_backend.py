@@ -19,7 +19,8 @@ from .prompts import CHANGE_INSTRUCTIONS, TIER_INSTRUCTIONS, change_prompt, tier
 
 ALLOWED_HOSTS = {"api.anthropic.com"}
 PRICES = {"claude-sonnet-5-5": (2.00, 10.00),   # $/MTok 입력·출력 — claude-api 스킬 모델 표 (cached 2026-10-06)
-          "claude-haiku-5-5": (0.10, 0.50)}     # 프롬프트 100K 토큰 이하 단가 (분류 프롬프트는 그보다 훨씬 짧다)
+          "claude-haiku-5-5": (0.10, 0.50),
+          "claude-opus-5-5": (4.00, 20.00)}     # claude-api 스킬 모델 표 (cached 2026-10-06) — 정답지 초안 비교용(HYO-131, draft_gold.py --model)     # 프롬프트 100K 토큰 이하 단가 (분류 프롬프트는 그보다 훨씬 짧다)
 DEFAULT_MODEL = "claude-sonnet-5-5"
 DEFAULT_EFFORT = "medium"
 MAX_TOKENS = 16000
