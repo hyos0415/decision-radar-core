@@ -67,6 +67,17 @@ class Usage(BaseModel):
     estimated: bool = Field(description="스텁 — 토큰이 글자 수/4 추정이고 비용 0 (배관 확인용)")
 
 
+class CardAction(BaseModel):
+    """남김 카드의 행동 표시 (HYO-132) — 모델이 아니라 코드가 관문 kept_by의 변화 종류로 정한다."""
+    kind: Literal["forced_migration", "optional_trial"] = Field(description="forced_migration(강제 이전: 모델 은퇴·EOL) · optional_trial(선택 실험: 후속 모델)")
+    label: str = Field(description="배지 글자 (강제 이전 · 선택 실험)")
+    reason: str = Field(description="한 줄 이유 (예 `anthropic · 모델 은퇴 공지 → 날짜부터 호출 실패`)")
+    deadline: Optional[str] = Field(description="본문에서 뽑은 마감일 YYYY-MM-DD. 못 뽑았거나 날짜가 여럿이면 null (강제 이전만)")
+    days_left: Optional[int] = Field(description="오늘부터 마감일까지 남은 일수 (D-day). 마감일이 없으면 null")
+    deadline_quote: Optional[str] = Field(description="마감일을 뽑은 본문 줄 (근거)")
+    deadline_note: Optional[str] = Field(description="마감일이 없을 때의 안내 (「마감일 확인 필요」). 있으면 null")
+
+
 class InboxItem(BaseModel):
     """Inbox 한 줄. kind: capture(승인 대기 초안) · detect(검토 대기 초안) · pending(접수된 capture — 처리 중이거나 초안 없이 끝남, 화면 설계 ①) ·
     revisit(재검토 조건 충족 알림, 화면 설계 ③). pending·revisit의 답은 「확인함」(ack)뿐 — Inbox에서 치울 뿐 ADR은 안 바꾼다 (R8)."""
@@ -81,6 +92,8 @@ class InboxItem(BaseModel):
                                          "pending: queued · running · error · linked · no_draft / revisit: met (판정 결과)")
     actions: list[Action] = Field(description="이 항목에 할 수 있는 답. 빈 목록이면 보기만")
     why: Optional[str] = Field(description="detect만: 왜 왔나 — 관문 판정 (예 `anthropic L5 × deprecation`). 관문 없이 만든 입력·capture는 null")
+    action: Optional[CardAction] = Field(default=None, description="detect만: 남김 카드 표시 (HYO-132) — 관문 kept_by로 코드가 정한다 "
+                                         "(모델 은퇴·EOL → 강제 이전 + 마감일 · 후속 모델 → 선택 실험). 그 밖은 null")
     adr: Optional[str] = Field(default=None, description="revisit: 조건이 충족된 ADR 번호 (「ADR 열기」 → /decisions/{adr})")
     message: Optional[str] = Field(default=None, description="pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장")
 
