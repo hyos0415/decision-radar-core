@@ -53,10 +53,22 @@ def main(argv=None):
     log = CallLog()
     be = ClaudeBackend(MODEL, log=log)
     by_id = {it["id"]: it for it in seed["items"]}
+    def ask(group):
+        prompt = json.dumps([{k: it.get(k) for k in ("id", "source", "title", "url", "links", "snippet")} for it in group], ensure_ascii=False)
+        return be._run("ko-notes", INSTRUCTIONS, prompt, SCHEMA)["notes"]
+
     for b in batches:
-        prompt = json.dumps([{k: it.get(k) for k in ("id", "source", "title", "url", "links", "snippet")} for it in b], ensure_ascii=False)
-        out = be._run("ko-notes", INSTRUCTIONS, prompt, SCHEMA)
-        for n in out["notes"]:
+        try:
+            notes = ask(b)
+        except Exception:  # noqa: BLE001 — 묶음에 거절(refusal·cyber 등)될 항목이 하나 있으면 묶음 전체가 실패한다 → 하나씩 다시
+            notes = []
+            for it in b:
+                try:
+                    notes += ask([it])
+                except Exception as e:  # noqa: BLE001
+                    by_id[it["id"]]["ko"] = {"ko_title": it.get("title", ""), "what": "(모델이 설명을 거절했다 — 원문 제목을 보세요)",
+                                             "kind": "", "by": MODEL, "refused": f"{type(e).__name__}: {str(e)[:80]}"}
+        for n in notes:
             if n["id"] in by_id:
                 by_id[n["id"]]["ko"] = {"ko_title": n["ko_title"], "what": n["what"], "kind": n["kind"], "by": MODEL}
         path.write_text(json.dumps(seed, ensure_ascii=False), encoding="utf-8")
