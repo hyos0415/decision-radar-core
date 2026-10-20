@@ -71,5 +71,25 @@ ok.events.append({"type": "llm_call", "flow": "detect", "model": "stub", "input_
 check("tool_uses·tool_calls가 llm_call을 세지 않음", len(rc.tool_uses(ok.events)) == 2 and ok.tool_calls() == 2)
 check("read_calls가 llm_call만 거름", len(llm_log.read_calls(ok.events)) == 1)
 
+print("5. 열기·검색 가드 (HYO-137) — 보인 적 없는 URL 거절 · 예산 넘으면 거절")
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
+from radar.tools import CAPTURE_TOOLS, LOOKUP_BUDGET, REVISIT_TOOLS, lookup_guard  # noqa: E402
+
+cond = HumanMessage(content='확인할 조건:\n<condition>{"source_hint": "docs.cloudvendor.example/guardrails/languages"}</condition>')
+st = {"messages": [cond]}
+check("source_hint는 연다 (scheme 붙여도)", lookup_guard(st, "https://docs.cloudvendor.example/guardrails/languages/") is None)
+check("지어낸 URL은 not_offered", (lookup_guard(st, "https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html") or {}).get("status") == "not_offered")
+check("빈 URL은 not_offered", (lookup_guard(st, "") or {}).get("status") == "not_offered")
+found = ToolMessage(content='{"ok": true, "results": [{"url": "https://cloudvendor.example/blog/korean"}]}', name="snapshot_search", tool_call_id="t1")
+check("검색 결과에 나온 URL은 연다", lookup_guard({"messages": [cond, found]}, "cloudvendor.example/blog/korean") is None)
+check("AI가 스스로 쓴 URL은 근거가 아니다", (lookup_guard({"messages": [cond, AIMessage(content="github.com/x/y 를 열어 보자")]}, "github.com/x/y") or {}).get("status") == "not_offered")
+used = [cond] + [ToolMessage(content='{"ok": false, "status": 403}', name="snapshot_fetch", tool_call_id=f"f{i}") for i in range(LOOKUP_BUDGET)]
+check("예산을 다 쓰면 열기·검색 모두 거절", all((x or {}).get("status") == "lookup_budget_exhausted"
+                                         for x in (lookup_guard({"messages": used}, "docs.cloudvendor.example/guardrails/languages"), lookup_guard({"messages": used}))))
+other = [cond] + [ToolMessage(content="{}", name="read_repo_file", tool_call_id=f"r{i}") for i in range(LOOKUP_BUDGET)]
+check("read_repo_file은 예산에 안 든다", lookup_guard({"messages": other}) is None)
+check("revisit·capture 도구 이름 그대로 · capture에 열기 추가", [t.name for t in REVISIT_TOOLS] == ["snapshot_fetch", "snapshot_search", "read_repo_file"]
+      and [t.name for t in CAPTURE_TOOLS] == ["snapshot_fetch", "match_adr", "propose_adr"])
+
 print(f"\n{'FAILED ' + str(len(fails)) if fails else 'all passed'}")
 sys.exit(1 if fails else 0)
