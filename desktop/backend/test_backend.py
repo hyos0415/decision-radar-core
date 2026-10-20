@@ -179,6 +179,7 @@ def main():
         scenario_hyo95(tmp)
         scenario_hyo110(tmp)
         scenario_hyo127(tmp)
+        scenario_hyo132(tmp)
     finally:
         os.environ.pop("RADAR_EXPORT", None)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -739,6 +740,87 @@ def scenario_hyo110(tmp):
     with open(svc.events_path, "a", encoding="utf-8") as f:
         f.write('{"at": "2026-10-13T00:00:00+09:00", "event": "notification_sh')
     check("깨진 줄은 건너뜀", len(notes()) == 9)
+
+def scenario_hyo132(tmp):
+    """HYO-132 — 남김 카드 표시: 관문 kept_by로 강제 이전(+마감일) · 선택 실험 · 표시 없음. 코드가 정한다 (모델 아님)."""
+    print("\n— HYO-132: 남김 카드 표시 —")
+    import datetime as dt
+    from pipeline.detect_feed import url_key
+    data = os.path.join(tmp, "data132")
+    devdata.seed(data)
+    svc = RadarService(data)
+    app = server.create_app(svc)
+    c, jobs = TestClient(app), app.state.jobs
+    c.post("/jobs/detect", json={})
+    jobs.join()
+    rows = [i for i in c.get("/inbox").json()["items"] if i["kind"] == "detect"]
+    check("준비: detect 항목 2개 이상 · 관문 없으면 action null", len(rows) >= 2 and all(i["action"] is None for i in rows), rows)
+    check("capture 항목은 action null", all(i["action"] is None for i in c.get("/inbox").json()["items"] if i["kind"] == "capture"))
+
+    def evidence(row):
+        md = c.get(f"/inbox/{row['id']}").json()["markdown"]
+        return [e["url"] for e in service._front_matter(md).get("evidence") or [] if isinstance(e, dict) and e.get("url")]
+
+    snap = svc.snapshot_dir
+    index = json.load(open(os.path.join(snap, "index.json"), encoding="utf-8"))
+    os.makedirs(os.path.join(snap, "items"), exist_ok=True)
+    today = dt.datetime.fromisoformat(service.now_iso()).date()
+    due = today + dt.timedelta(days=30)
+
+    def setup(url, change, body):
+        """url의 관문 항목(kept_by = change)과 전문 파일을 쓴다. body None이면 파일 없음 (index는 가리키는데 파일이 없는 경우)."""
+        gate = json.load(open(os.path.join(snap, "gate.json"), encoding="utf-8")) if os.path.exists(os.path.join(snap, "gate.json")) else {}
+        gate[url] = {"id": "x", "reason": f"anthropic L2 × {change}", "kept_by": [{"technology": "anthropic", "tier": "L2", "change": change}] if change else []}
+        json.dump(gate, open(os.path.join(snap, "gate.json"), "w", encoding="utf-8"))
+        name = f"items/H132-{abs(hash(url)) % 10**6}.md"
+        if body is None:
+            if os.path.exists(os.path.join(snap, name)):
+                os.remove(os.path.join(snap, name))
+        else:
+            open(os.path.join(snap, name), "w", encoding="utf-8", newline="\n").write(body)
+        index[url_key(url)] = {"source_type": "official_doc", "file": name}
+        json.dump(index, open(os.path.join(snap, "index.json"), "w", encoding="utf-8"))
+
+    u0, u1 = evidence(rows[0])[0], evidence(rows[1])[0]
+    body = f"# claude-x\n\nclaude-x will be retired on {due.isoformat()}.\nSee migration guide.\n"
+    setup(u0, "model_retirement", body)
+    setup(u1, "successor_model", "# claude-y\n\nclaude-y is available.\n")
+    got = {i["id"]: i for i in c.get("/inbox").json()["items"]}
+    a0, a1 = got[rows[0]["id"]]["action"], got[rows[1]["id"]]["action"]
+    check("모델 은퇴 + 본문에 날짜 하나 → 강제 이전 · 마감일 · D-day",
+          a0 and a0["kind"] == "forced_migration" and a0["label"] == "강제 이전" and a0["deadline"] == due.isoformat() and a0["days_left"] == 30
+          and a0["deadline_note"] is None and "retired" in a0["deadline_quote"], a0)
+    check("후속 모델 → 선택 실험 · 마감 없음", a1 and a1["kind"] == "optional_trial" and a1["label"] == "선택 실험" and a1["deadline"] is None
+          and a1["days_left"] is None, a1)
+    d0 = c.get(f"/inbox/{rows[0]['id']}").json()
+    check("상세에도 action이 실린다", d0["action"] == a0, d0["action"])
+
+    setup(u1, "breaking", "# z\n\nretired on 2099-01-01\n")
+    check("breaking만 → action null", {i["id"]: i for i in c.get("/inbox").json()["items"]}[rows[1]["id"]]["action"] is None)
+    setup(u1, "deprecation", "# z\n\nretired on 2099-01-01\n")
+    check("deprecation만 → 강제 아님 · action null", {i["id"]: i for i in c.get("/inbox").json()["items"]}[rows[1]["id"]]["action"] is None)
+    setup(u0, "eol", None)
+    a = {i["id"]: i for i in c.get("/inbox").json()["items"]}[rows[0]["id"]]["action"]
+    check("관문 항목은 있는데 전문 파일이 없다 → 강제 이전 · 마감일 null · 「마감일 확인 필요」",
+          a and a["kind"] == "forced_migration" and a["deadline"] is None and a["days_left"] is None and a["deadline_note"] == "마감일 확인 필요"
+          and "EOL" in a["reason"], a)
+    setup(u0, "model_retirement", f"# x\n\nretired on 2027-01-01 and shutdown on 2027-03-01\n")
+    a = {i["id"]: i for i in c.get("/inbox").json()["items"]}[rows[0]["id"]]["action"]
+    check("본문에 날짜가 여럿 → 마감일 null", a and a["deadline"] is None and a["deadline_note"] == "마감일 확인 필요", a)
+
+    # 근거가 둘이면: 강제 이전이 선택 실험보다 · 강제끼리는 마감일 있는 쪽이 먼저
+    def text_of(*urls):
+        return "---\nevidence:\n" + "".join(f"  - url: {u}\n" for u in urls) + "---\n# t\n"
+    urls = ["https://example.test/a", "https://example.test/b", "https://example.test/c"]
+    setup(urls[0], "successor_model", "# a\n")
+    setup(urls[1], "eol", "# b\n\nEOL date\n")
+    setup(urls[2], "model_retirement", f"# c\n\nretired on {due.isoformat()}\n")
+    check("근거 둘: 선택 실험 + 강제 이전 → 강제 이전", svc._card_action(text_of(urls[0], urls[1]))["kind"] == "forced_migration")
+    check("근거 둘: 마감일 없는 강제 + 있는 강제 → 마감일 있는 쪽", svc._card_action(text_of(urls[1], urls[2]))["deadline"] == due.isoformat())
+    check("근거 url에 관문 항목이 없으면 None", svc._card_action(text_of("https://example.test/none")) is None and svc._card_action("본문만") is None)
+    out = c.get("/openapi.json").json()
+    check("OpenAPI에 CardAction이 있다", "CardAction" in out["components"]["schemas"])
+
 
 def scenario_hyo127(tmp):
     """HYO-127 — 화제 탭(레인 C): 주차 목록·k 자르기·404·빈 상태 · 저장/저장 빼기(멱등·복사본) · capture의 topic · 새 UI 이벤트 · 개발 예시."""

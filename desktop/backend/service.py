@@ -42,7 +42,8 @@ from radar.detect import detect  # noqa: E402
 from radar.revisit import revisit  # noqa: E402
 from radar.stub_model import StubChat  # noqa: E402
 from common import ops  # noqa: E402
-from pipeline.detect_feed import funnel_line  # noqa: E402
+from pipeline.detect_feed import funnel_line, url_key  # noqa: E402
+from pipeline.importance.card_action import card_action  # noqa: E402
 from common.core import SKILL_RADAR, Ctx, RadarError, radar  # noqa: E402
 from common.env import MODEL as REAL_MODEL  # noqa: E402
 from common.schemas import AdrDraft, RevisitCondition  # noqa: E402
@@ -363,7 +364,7 @@ class RadarService:
         changes = self._changes(ctx, c["fp"], c["scope"])
         row = {"id": c["id"], "kind": "capture", "title": d.get("title"), "technology": d.get("technology"),
                "affected": d.get("affected") or [], "since": c["since"], "waiting_days": _days(c["since"]),
-               "state": "stale" if changes else "awaiting_approval", "actions": ["approve", "edit", "reject"], "why": None}
+               "state": "stale" if changes else "awaiting_approval", "actions": ["approve", "edit", "reject"], "why": None, "action": None}
         return row, changes
 
     def _item_usage(self, item_id):
@@ -383,7 +384,7 @@ class RadarService:
         row = {"id": q["item"], "kind": q["kind"], "title": m.group(1).strip() if m else q["item"],
                "technology": scope.get("technology"), "affected": scope.get("affected") or [], "since": since,
                "waiting_days": _days(since), "state": q["export"].get("state"),
-               "actions": ["approve", "edit", "reject"] if hitl.exporter_for(ctx).active else [], "why": self._why(text)}
+               "actions": ["approve", "edit", "reject"] if hitl.exporter_for(ctx).active else [], "why": self._why(text), "action": self._card_action(text)}
         return row, text
 
     def _why(self, text):
@@ -394,6 +395,33 @@ class RadarService:
             if g and g.get("reason") and g["reason"] not in reasons:
                 reasons.append(g["reason"])
         return "; ".join(reasons) or None
+
+    def _item_body(self, url):
+        """스냅숏에서 항목 전문 (index.json: url_key → file). 없으면 빈 문자열."""
+        try:
+            idx = json.load(open(os.path.join(self.snapshot_dir, "index.json"), encoding="utf-8"))
+            f = (idx.get(url_key(url)) or {}).get("file")
+            return open(os.path.join(self.snapshot_dir, f), encoding="utf-8").read() if f else ""
+        except (OSError, ValueError, AttributeError):
+            return ""
+
+    def _card_action(self, text):
+        """남김 카드 표시 (HYO-132) — 관문 kept_by의 변화 종류로 코드가 정한다 (pipeline.importance.card_action). 근거 url마다 구해
+        강제 이전 > 선택 실험, 강제끼리는 마감일 있는 것(가장 이른 것) 먼저. 관문 항목이 없으면 None."""
+        gate, today = self._gate_why(), dt.datetime.fromisoformat(now_iso()).date()
+        acts = []
+        for e in _front_matter(text).get("evidence") or []:
+            url = e.get("url") if isinstance(e, dict) else None
+            g = gate.get(url) if url else None
+            if not isinstance(g, dict):
+                continue
+            a = card_action(g.get("kept_by") or [], self._item_body(url), today)
+            if a:
+                acts.append(a)
+        forced = [a for a in acts if a["kind"] == "forced_migration"]
+        if forced:
+            return min(forced, key=lambda a: (a["deadline"] is None, a["deadline"] or ""))
+        return acts[0] if acts else None
 
     def inbox(self):
         ctx = self.ctx()  # 읽기 — 쓰기 잠금을 기다리지 않는다 (머리말)
@@ -412,7 +440,7 @@ class RadarService:
         done = st in ("error", "linked", "no_draft")
         return {"id": j["id"], "kind": "pending", "title": j.get("preview") or "capture", "technology": None, "affected": [],
                 "since": j["created"], "waiting_days": _days(j["created"]), "state": st, "actions": ["ack"] if done else [],
-                "why": None, "adr": None, "message": self.PENDING_MSG.get(st) or j.get("error") or j.get("message")}
+                "why": None, "action": None, "adr": None, "message": self.PENDING_MSG.get(st) or j.get("error") or j.get("message")}
 
     def _alerts(self):
         try:
@@ -457,7 +485,7 @@ class RadarService:
         return {"id": a["id"], "kind": "revisit", "title": f"재검토 조건 충족 — {a['title']}", "technology": a.get("technology"),
                 "affected": a.get("affected") or [], "since": a["since"], "waiting_days": _days(a["since"]),
                 "state": a["result"] if a["result"] in ("met", "not_met", "undetermined") else "met", "actions": ["ack"],
-                "why": None, "adr": a["adr"], "message": f"{a['condition']}: {a['message']}" if a.get("message") else a["condition"]}
+                "why": None, "action": None, "adr": a["adr"], "message": f"{a['condition']}: {a['message']}" if a.get("message") else a["condition"]}
 
     def ack(self, item_id):
         """「확인함」 — Inbox에서 치운다. ADR 파일·status는 건드리지 않는다 (R8). 승인·거부할 초안(capture·detect)에는 쓰지 않는다."""

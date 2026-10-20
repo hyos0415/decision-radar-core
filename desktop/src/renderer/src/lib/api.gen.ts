@@ -543,6 +543,48 @@ export interface components {
       /** @description capture 1턴(대화 읽기·초안)의 모델 사용량 */
       usage?: components['schemas']['Usage'] | null
     }
+    /**
+     * CardAction
+     * @description 남김 카드의 행동 표시 (HYO-132) — 모델이 아니라 코드가 관문 kept_by의 변화 종류로 정한다.
+     */
+    CardAction: {
+      /**
+       * Kind
+       * @description forced_migration(강제 이전: 모델 은퇴·EOL) · optional_trial(선택 실험: 후속 모델)
+       * @enum {string}
+       */
+      kind: 'forced_migration' | 'optional_trial'
+      /**
+       * Label
+       * @description 배지 글자 (강제 이전 · 선택 실험)
+       */
+      label: string
+      /**
+       * Reason
+       * @description 한 줄 이유 (예 `anthropic · 모델 은퇴 공지 → 날짜부터 호출 실패`)
+       */
+      reason: string
+      /**
+       * Deadline
+       * @description 본문에서 뽑은 마감일 YYYY-MM-DD. 못 뽑았거나 날짜가 여럿이면 null (강제 이전만)
+       */
+      deadline: string | null
+      /**
+       * Days Left
+       * @description 오늘부터 마감일까지 남은 일수 (D-day). 마감일이 없으면 null
+       */
+      days_left: number | null
+      /**
+       * Deadline Quote
+       * @description 마감일을 뽑은 본문 줄 (근거)
+       */
+      deadline_quote: string | null
+      /**
+       * Deadline Note
+       * @description 마감일이 없을 때의 안내 (「마감일 확인 필요」). 있으면 null
+       */
+      deadline_note: string | null
+    }
     /** Decision */
     Decision: {
       /** Id */
@@ -758,6 +800,8 @@ export interface components {
        * @description detect만: 왜 왔나 — 관문 판정 (예 `anthropic L5 × deprecation`). 관문 없이 만든 입력·capture는 null
        */
       why: string | null
+      /** @description detect만: 남김 카드 표시 (HYO-132) — 관문 kept_by로 코드가 정한다 (모델 은퇴·EOL → 강제 이전 + 마감일 · 후속 모델 → 선택 실험). 그 밖은 null */
+      action?: components['schemas']['CardAction'] | null
       /**
        * Adr
        * @description revisit: 조건이 충족된 ADR 번호 (「ADR 열기」 → /decisions/{adr})
@@ -848,6 +892,8 @@ export interface components {
        * @description detect만: 왜 왔나 — 관문 판정 (예 `anthropic L5 × deprecation`). 관문 없이 만든 입력·capture는 null
        */
       why: string | null
+      /** @description detect만: 남김 카드 표시 (HYO-132) — 관문 kept_by로 코드가 정한다 (모델 은퇴·EOL → 강제 이전 + 마감일 · 후속 모델 → 선택 실험). 그 밖은 null */
+      action?: components['schemas']['CardAction'] | null
       /**
        * Adr
        * @description revisit: 조건이 충족된 ADR 번호 (「ADR 열기」 → /decisions/{adr})
