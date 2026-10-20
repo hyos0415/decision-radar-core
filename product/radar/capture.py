@@ -1,6 +1,6 @@
 """capture 그래프 — HITL·체크포인트·재개 (설계 docs/design/hitl-state.md, HYO-44).
 
-create_agent(match_adr · propose_adr) + HumanInTheLoopMiddleware(propose_adr: approve/edit/reject) + SqliteSaver
+create_agent(snapshot_fetch(가드) · match_adr · propose_adr) + HumanInTheLoopMiddleware(propose_adr: approve/edit/reject) + SqliteSaver
   1턴  승인 대기에서 interrupt → 체크포인트가 SQLite 파일에 남는다. 이 시점의 지문(Fingerprint)도 같은 파일의 별도 표에 남는다
        — 별도 파일(.radar/items)은 아직 없다 (R9: 승인 전 ADR repo 쓰기 0, 설계 §3-1)
   2턴  (새 프로세스, resume.py) 같은 파일·같은 thread_id → 재개 검사(hitl.check_resume) → Command(resume=...)
@@ -27,7 +27,7 @@ from common.schemas import AdrDraft, CaptureResult
 
 from . import hitl, llm_log
 from .revisit import limit
-from .tools import match_adr, propose_adr
+from .tools import CAPTURE_TOOLS
 
 DECISIONS = ["approve", "edit", "reject"]  # 결정 6 — 스파이크는 approve/reject였다
 
@@ -69,7 +69,7 @@ class PinRepo(AgentMiddleware):
 def capture_agent(model, checkpointer, gate=True, repo=None):
     mw = [HumanInTheLoopMiddleware(interrupt_on={"propose_adr": {"allowed_decisions": DECISIONS}})] if gate else []
     mw.append(PinRepo(repo))
-    return create_agent(model, tools=[match_adr, propose_adr], system_prompt=CAPTURE_INSTRUCTIONS,
+    return create_agent(model, tools=CAPTURE_TOOLS, system_prompt=CAPTURE_INSTRUCTIONS,
                         response_format=ProviderStrategy(CaptureResult), middleware=mw, checkpointer=checkpointer,
                         context_schema=Ctx, name="capture")
 
