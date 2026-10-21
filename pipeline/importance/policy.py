@@ -9,6 +9,8 @@
 주당 상한: 등급 높은 순(L0→L8) → 변화 심각도 순. 잘린 것은 `truncated`로 돌려줘 로그에 남기게 한다.
 """
 
+import re
+
 TIERS = [f"L{i}" for i in range(9)]
 CHANGES = ["breaking", "deprecation", "eol", "security", "yanked", "major", "minor_patch", "model_retirement", "pricing", "successor_model"]
 # 모델이 아니라 스크립트가 붙이는 변화 (§3 변경 2026-10-16, HYO-129) — 후속 모델은 successor.py가 제목으로 판정한다.
@@ -92,6 +94,24 @@ def cell(tier, change, ctx=None):
         keep = True
         steps.append("민감 경로 → security·deprecation 남김")
     return {"tier": tier, "change": change, "base": base, "keep": keep, "adjusted_by": steps}
+
+
+# 프리릴리스 버전 표기 — 제목에서 찾는다. `v45.0.0-beta.2` · `2.14.0b1` · `5.0.0rc1` · `1.79.1.dev2` · `v1.80.12-nightly` · `3.1.0a1`
+_PRERELEASE = re.compile(r"\d(?:[-.]?(?:alpha|beta|rc|dev|pre|preview|canary|next|nightly)\.?\d*|(?:a|b)\d+)(?![\w.])|\bnightly\b", re.I)
+
+
+def is_prerelease(title):
+    return bool(_PRERELEASE.search(title or ""))
+
+
+def normalize_changes(changes, title=""):
+    """모델이 짚은 변화 종류 → 정의대로 정리한 목록 (§3 변경 2026-10-21 ③④를 스크립트로 집행 — 규율 1, HYO-131).
+    ③ 제목이 프리릴리스(alpha·beta·rc·dev·nightly)면 major를 뺀다 ④ 다른 종류가 있으면 minor_patch를 뺀다. 순서는 그대로.
+    둘 다 빼기만 한다 — 모델이 안 짚은 종류를 더하지 않는다. 다 빠져 비면 [] (decide가 minor·patch로 친다)."""
+    out = [c for c in changes if not (c == "major" and is_prerelease(title))]
+    if any(c != "minor_patch" for c in out):
+        out = [c for c in out if c != "minor_patch"]
+    return out
 
 
 def decide(tiers, changes, ctx=None):

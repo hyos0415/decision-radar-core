@@ -430,6 +430,30 @@ def test_gate_successor_model_is_script_judged_l2_only_and_last():
     assert policy.MODEL_CHANGES == ["breaking", "deprecation", "eol", "security", "yanked", "major", "minor_patch", "model_retirement", "pricing"]
 
 
+def test_normalize_changes_prerelease_major_and_lone_minor_patch():
+    # §3 변경 2026-10-21 ③④ — 정답지(gold-w42 · gold-backfill)의 프리릴리스 제목 표기를 그대로 쓴다
+    for t in ["electron/electron electron v45.0.0-beta.2", "pydantic/pydantic v2.14.0b1 2026-08-06", "huggingface/transformers Release candidate 5.0.0rc1",
+              "BerriAI/litellm v1.79.1.dev2", "BerriAI/litellm v1.80.12-nightly", "BerriAI/litellm v1.80.10.rc.2", "langgraph-checkpoint-postgres==3.1.0a1",
+              "grafana/k6 v2.0.0-rc1", "vitejs/vite-plugin-react plugin-react@6.0.0-beta.0", "langchain-ai/langsmith-sdk v0.6.0rc0"]:
+        assert policy.is_prerelease(t), t
+    for t in ["openai/openai-python v3.0.0", "grafana/k6 v2.0.0", "googleapis/python-genai v2.0.0", "langfuse v4.0.0", "BerriAI/litellm v1.105.0",
+              "Claude Haiku 5.5", "ggml-org/llama.cpp b6512", "Python 3.12 EOL", "vllm v0.11.0", "Bedrock adds model betas"]:
+        assert not policy.is_prerelease(t), t
+    n = policy.normalize_changes
+    assert n(["major", "breaking"], "electron v45.0.0-alpha.15") == ["breaking"]                 # 프리릴리스는 major 아님, 본문 breaking은 남김
+    assert n(["major"], "grafana/k6 v2.0.0-rc1") == []                                           # 다 빠지면 빈 목록 (decide가 minor·patch로 친다)
+    assert n(["major", "breaking"], "grafana/k6 v2.0.0") == ["major", "breaking"]                # 정식은 그대로
+    assert n(["breaking", "minor_patch"], "x v1.2.3") == ["breaking"] and n(["minor_patch"], "x v1.2.3") == ["minor_patch"]
+    assert n(["minor_patch", "major"], "x v2.0.0-beta.1") == ["minor_patch"]                    # major가 빠지면 minor_patch만 남는다
+    assert n([], "x") == []
+    st = _store(electron={"tiers": ["L1"]})
+    g = gate_mod.Gate(StubBackend(changes={"e": ["major", "minor_patch"]}), st)
+    r = g(_item("e", "electron/electron electron v45.0.0-beta.2", tech="electron"))
+    assert r["changes"] == ["minor_patch"] and r["model_changes"] == ["major", "minor_patch"] and not r["keep"], r   # L1 × major ✅가 프리릴리스로 사라진다
+    r2 = gate_mod.Gate(StubBackend(changes={"e": ["major", "minor_patch"]}), st)(_item("e", "electron/electron electron v45.0.0", tech="electron"))
+    assert r2["changes"] == ["major"] and r2["keep"], r2
+
+
 def _ga(status, keep=False, techs=()):
     return {"id": status, "gate": {"keep": keep, "status": status, "technologies": list(techs)}}
 
@@ -1848,6 +1872,8 @@ def mutations():
         ("후속 모델: 날짜 스냅숏을 버전으로 셈", [(successor, "_DATE_DIGITS", 99)], test_successor_parse_and_find),
         ("후속 모델: L2가 아닌 기술도 봄", [(gate_mod.Gate, "_successors", lambda self, item, names: successor.find(item.get("title") or "", names))], test_gate_successor_model_is_script_judged_l2_only_and_last),
         ("후속 모델을 심각도 「나머지」와 같게", [(policy, "SEVERITY", {k: v for k, v in policy.SEVERITY.items() if k != "successor_model"})], test_gate_successor_model_is_script_judged_l2_only_and_last),
+        ("프리릴리스 major를 안 뺌", [(policy, "is_prerelease", lambda title: False)], test_normalize_changes_prerelease_major_and_lone_minor_patch),
+        ("관문이 변화 종류 정리를 안 함 (모델 라벨 그대로)", [(policy, "normalize_changes", lambda changes, title="": list(changes))], test_normalize_changes_prerelease_major_and_lone_minor_patch),
         ("두 등급인데 첫 등급 행만 적용 (관문)", [(policy, "decide", _first_tier_only)], test_lane_a_gate_wiring_and_cap),
         ("모델 은퇴 ✅를 ❌로", [(policy, "TABLE", _widened_table())], test_every_cell_default_context),
         ("모델 은퇴 ✅를 ❌로 (문서 대조)", [(policy, "TABLE", _widened_table())], test_table_matches_policy_doc),
