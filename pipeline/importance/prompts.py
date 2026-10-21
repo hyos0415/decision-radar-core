@@ -1,6 +1,7 @@
 """분류 프롬프트. 정의 문구는 importance-policy §2-1(+v1.1~v1.3)·§3에서 가져왔다 — 바꾸면 정책 쪽을 먼저 본다.
 등급 표의 「예」 칸은 §2-1 예 열과 §4 두 등급 예(langfuse)다 (HYO-124 — 모델이 예시 등급을 따르지 않았다). Jev 질문(TIER_MEANING)에는 넣지 않았다.
 v2(HYO-128): 예에 없는 기술을 분류 불가로 내던 부작용 · langfuse L5만 · python L0+L1을 고치는 규칙 세 줄 — eval/importance/tier-examples.md §3.
+변화 종류 정의(CHANGE_INSTRUCTIONS · CHANGE_MEANING) v4(HYO-131): 정답지 판정 기준(importance-policy §3 변경 2026-10-21 · eval/importance/lanea-rules-2026-10-21.md)과 같은 뜻 — breaking = 이번에 없앴거나 바꿔 고쳐야 하는 것 · deprecation = 아직 동작하는 예고 · 프리릴리스는 major 아님 · minor_patch는 다른 종류 없을 때만. 뒤 두 가지는 관문이 policy.normalize_changes로도 집행한다(규율 1). 이전 문구(v1)는 커밋 4a80191의 이 파일.
 
 백엔드가 GPT면 이 프롬프트를 그대로 쓴다. Jev는 문장을 읽고 답하는 모델이 아니라 선택지 + 확률을 내므로,
 같은 정의를 질문의 `instructions`·`criteria`로 나눠 담게 된다 (같은 판정 기준이지 같은 프롬프트가 아니다 — finance_verifier run_eval_jev.py와 같은 단서).
@@ -45,18 +46,19 @@ CHANGE_INSTRUCTIONS = """당신은 기술 소식(릴리스 노트·공지·페�
 
 | 종류 | 뜻 |
 |---|---|
-| breaking | 사용하는 코드가 깨질 수 있는 변경 (릴리스 노트의 Breaking changes·커밋 제목의 `!:` 표시, 또는 업그레이드하려면 마이그레이션이 필요하다는 안내) |
-| deprecation | 곧 없어질 예정인 기능·API |
+| breaking | 이번 릴리스에서 API·옵션·플래그·설정을 이미 없앴거나 이름·기본 동작을 바꿔서, 쓰던 코드·설정을 고쳐야 계속 동작하는 변경 — 옵션 하나만 바꾸면 되는 경우도, 예전에 deprecated였던 것을 이번에 없앤 것도 포함 (단서: Breaking changes 절·커밋 제목의 `!:` 표시·마이그레이션 안내). 잘못된 입력·없는 대상에 대한 오류 응답을 바로잡은 버그 수정은 아니다 |
+| deprecation | 이번엔 아직 동작하지만 나중에 없애거나 바꾼다는 예고 (경고 추가·제거 예정 공지). 이번에 이미 없앴으면 breaking |
 | eol | 특정 버전의 지원 종료 (예: Python 3.12 EOL 일정) |
-| security | 보안 패치·CVE·보안 권고 — 글이 보안 문제라고 밝힌 것만(security·CVE·GHSA·vulnerability·advisory). 대상 기술 자체의 수정이어야 한다(같은 저장소의 다른 언어 패키지·개발 의존성·CI 스캔 설정은 아니다) |
+| security | 보안 패치·CVE·보안 권고 — 글이 보안 문제라고 밝힌 것만(security·CVE·GHSA·vulnerability·advisory). 대상 기술 자체의 수정이어야 한다(같은 저장소의 다른 언어 패키지·개발 의존성·CI 스캔 설정은 아니다). 실행 의존성의 CVE 때문에 그 의존성을 올린 것은 포함 |
 | yanked | 배포 철회 (PyPI yanked 등) |
-| major | 메이저 버전 릴리스 (첫 숫자가 오른 것. 0.x에서 둘째 숫자만 오른 것은 major가 아니다) |
-| minor_patch | 그 밖의 minor·patch 릴리스 |
+| major | 정식 메이저 버전 릴리스 (첫 숫자가 오른 x.0.0. 0.x에서 둘째 숫자만 오른 것과 alpha·beta·rc·dev·nightly 프리릴리스는 major가 아니다) |
+| minor_patch | 다른 종류가 하나도 없는 minor·patch·프리릴리스 (기능 추가·버그 수정·되돌리기·내부 정리) |
 | model_retirement | 호스팅 모델의 은퇴(retirement)·지원 종료 일정 공지 |
 | pricing | 호스팅 서비스의 가격·사용 한도(rate limit) 변경 |
 
 규칙:
-- 「새 버전이 나왔다」만 있고 위의 어느 것도 말하지 않으면 해당 종류는 minor_patch 또는 major(버전 숫자로 판단 — 0.x에서 둘째 숫자만 오른 것은 minor_patch)뿐이다
+- 고치기 쉬운지가 아니라 **이번 릴리스에서 무슨 일이 일어났는지**로 고른다 — 얼마나 급한지는 따지지 않는다
+- 「새 버전이 나왔다」만 있고 위의 어느 것도 말하지 않으면 해당 종류는 minor_patch 또는 major(버전 숫자로 판단 — 0.x에서 둘째 숫자만 오른 것과 프리릴리스는 minor_patch)뿐이다
 - 글에 적힌 사실만 쓴다. 짐작으로 breaking·security를 붙이지 않는다
 - `reason`은 한 문장
 """
@@ -66,13 +68,13 @@ CHANGE_INSTRUCTIONS = """당신은 기술 소식(릴리스 노트·공지·페�
 # 위 GPT 프롬프트의 표와 같은 뜻(같은 판정 기준)을 질문별 지시에 나눠 담는다. test_importance.py가 두 표의 문구가 같은지 대조한다.
 
 CHANGE_MEANING = {
-    "breaking": "사용하는 코드가 깨질 수 있는 변경 (릴리스 노트의 Breaking changes·커밋 제목의 `!:` 표시, 또는 업그레이드하려면 마이그레이션이 필요하다는 안내)",
-    "deprecation": "곧 없어질 예정인 기능·API",
+    "breaking": "이번 릴리스에서 API·옵션·플래그·설정을 이미 없앴거나 이름·기본 동작을 바꿔서, 쓰던 코드·설정을 고쳐야 계속 동작하는 변경 — 옵션 하나만 바꾸면 되는 경우도, 예전에 deprecated였던 것을 이번에 없앤 것도 포함 (단서: Breaking changes 절·커밋 제목의 `!:` 표시·마이그레이션 안내). 잘못된 입력·없는 대상에 대한 오류 응답을 바로잡은 버그 수정은 아니다",
+    "deprecation": "이번엔 아직 동작하지만 나중에 없애거나 바꾼다는 예고 (경고 추가·제거 예정 공지). 이번에 이미 없앴으면 breaking",
     "eol": "특정 버전의 지원 종료 (예: Python 3.12 EOL 일정)",
-    "security": "보안 패치·CVE·보안 권고 — 글이 보안 문제라고 밝힌 것만(security·CVE·GHSA·vulnerability·advisory). 대상 기술 자체의 수정이어야 한다(같은 저장소의 다른 언어 패키지·개발 의존성·CI 스캔 설정은 아니다)",
+    "security": "보안 패치·CVE·보안 권고 — 글이 보안 문제라고 밝힌 것만(security·CVE·GHSA·vulnerability·advisory). 대상 기술 자체의 수정이어야 한다(같은 저장소의 다른 언어 패키지·개발 의존성·CI 스캔 설정은 아니다). 실행 의존성의 CVE 때문에 그 의존성을 올린 것은 포함",
     "yanked": "배포 철회 (PyPI yanked 등)",
-    "major": "메이저 버전 릴리스 (첫 숫자가 오른 것. 0.x에서 둘째 숫자만 오른 것은 major가 아니다)",
-    "minor_patch": "그 밖의 minor·patch 릴리스",
+    "major": "정식 메이저 버전 릴리스 (첫 숫자가 오른 x.0.0. 0.x에서 둘째 숫자만 오른 것과 alpha·beta·rc·dev·nightly 프리릴리스는 major가 아니다)",
+    "minor_patch": "다른 종류가 하나도 없는 minor·patch·프리릴리스 (기능 추가·버그 수정·되돌리기·내부 정리)",
     "model_retirement": "호스팅 모델의 은퇴(retirement)·지원 종료 일정 공지",
     "pricing": "호스팅 서비스의 가격·사용 한도(rate limit) 변경",
 }
@@ -89,8 +91,8 @@ TIER_MEANING = {
 }
 _CHANGE_RULE = "소식(state.title·state.body)에 적힌 사실만 쓴다. 외부를 조회하지 않고, 짐작으로 breaking·security를 붙이지 않는다. 대상 기술은 state.technology."
 _CHANGE_EXTRA = {
-    "major": "버전 숫자로 판단한다 (예: 3.x → 4.0. 0.22 → 0.23은 major가 아니다).",
-    "minor_patch": "「새 버전이 나왔다」만 있고 다른 종류를 말하지 않는 minor·patch 릴리스일 때만 예.",
+    "major": "버전 숫자로 판단한다 (예: 3.x → 4.0. 0.22 → 0.23과 4.0.0-beta.1은 major가 아니다).",
+    "minor_patch": "다른 종류를 하나도 말하지 않는 minor·patch·프리릴리스일 때만 예.",
 }
 _TIER_RULE = ("기술(state.technology)이 이 프로젝트에서 쓰이는 방식(state.usage)으로 등급을 고른다. 같은 기술도 쓰임에 따라 등급이 달라진다. "
               "언어(TypeScript·Java 등) → L0 · DB·검색 엔진·그래프 DB → L1 · CI(GitHub Actions)·빌드 도구·타입 정의 → L7. 주어진 정보만 쓰고 외부를 조회하지 않는다.")
