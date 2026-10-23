@@ -9,7 +9,7 @@
 
   radar.py list      <adr_dir> [--in-scope]
   radar.py validate  <adr_dir>
-  radar.py match     <adr_dir> --technology T --repo R --component C [--use U]
+  radar.py match     <adr_dir> --technology T --repo R --component C [--use U] [--release V]
   radar.py decide    <adr_dir> <results.json|-> [--now ISO] [--apply]
   radar.py apply     <adr_dir> <decision.json>
   radar.py next-id   <adr_dir>
@@ -154,10 +154,30 @@ def validate_fm(fm):
             errs.append(f"last_checked {r.get('condition_id')}: result 값 이상")
         if r.get("result") == "undetermined" and not r.get("reason"):
             errs.append(f"last_checked {r.get('condition_id')}: undetermined는 reason 필수 (R1)")
+    if "대응" in str(fm.get("use") or "") and response_release(fm.get("use")) is None:
+        warns.append("use에 「대응」이 있는데 「의존성 릴리스 <버전> 대응 (종류)」 형식이 아니다 — 대응형으로 못 읽어 "
+                     "detect가 같은 기술의 다음 릴리스를 건너뛴다 (R14 변경 2026-10-23)")
     return errs, warns
 
 
 NO_CONDITION_NOTE = "재검토 조건 없음"  # R17-2 — 근거가 없어 조건을 만들지 않았다는 본문 표시
+
+# R14 변경 (2026-10-23, HYO-136) — 의존성 릴리스 대응형 ADR: use가 「의존성 릴리스 <버전> 대응 (종류)」.
+# 한 릴리스에 대한 대응이라 같은 기술의 다음 릴리스를 막지 않는다 (같은 릴리스만 막는다)
+RESPONSE_USE = re.compile(r"^\s*의존성\s*릴리스\s+(.+?)\s+대응(?=\s|\(|$)")
+VERSION_TOKEN = re.compile(r"v?(\d+(?:\.\d+)+[\w.+-]*)", re.I)
+
+
+def norm_release(v):
+    """릴리스 표기 → 비교용 버전 (마지막 숫자 토막, v 접두·대소문자 무시). 숫자 토막이 없으면 None."""
+    toks = VERSION_TOKEN.findall(v or "")
+    return toks[-1].lower() if toks else None
+
+
+def response_release(use):
+    """대응형 ADR이면 그 릴리스 버전, 아니면 None. 「Python SDK v5.0.0」처럼 버전 앞에 말이 있어도 된다."""
+    m = RESPONSE_USE.match(use or "")
+    return norm_release(m.group(1)) if m else None
 
 
 def norm_url(u):
@@ -216,24 +236,31 @@ def cmd_match(a):
 
     exact  = (technology, component, use) 셋 다 일치 → link/supersede 후보 (R7)
     overlap = technology 같고 component 겹침 → DETECT가 건너뜀 (R14)
+              단, 의존성 릴리스 대응형 ADR(use 「의존성 릴리스 <버전> 대응」)은 --release가 그 버전과 같을 때만 overlap.
+              다른 릴리스·릴리스 아닌 소식이면 responses로 돌려준다 → 새 초안, 본문에 「이전 대응」 (R14 변경 2026-10-23, HYO-136)
     related = technology 같거나 component 같음 → 신규 초안 본문에 적을 ID
     use 일치는 정규화한 문자열 비교다. 의미가 같은데 표현이 다르면 모델이 기존 ADR의
     use 문구를 그대로 가져와 다시 호출해야 한다 — 그 판단은 여기서 하지 않는다.
     """
-    exact, overlap, related = [], [], []
+    exact, overlap, responses, related = [], [], [], []
+    release = norm_release(a.release)
     for x in load_all(a.adr_dir):
         fm = x["fm"] or {}
         same_tech = norm(fm.get("technology")) == norm(a.technology)
         comps = {(norm(e.get("repo")), norm(e.get("component"))) for e in fm.get("affected") or []}
         same_comp = (norm(a.repo), norm(a.component)) in comps
         if same_tech and same_comp:
-            overlap.append(x["id"])
+            done = response_release(fm.get("use"))
+            if done is not None and done != release:
+                responses.append({"id": x["id"], "release": done})
+            else:
+                overlap.append(x["id"])
             if a.use is not None and norm(fm.get("use")) == norm(a.use):
                 exact.append(x["id"])
         if same_tech or same_comp:
             related.append({"id": x["id"], "status": fm.get("status"), "technology": fm.get("technology"),
                             "use": fm.get("use"), "same_technology": same_tech, "same_component": same_comp})
-    out({"exact": exact, "overlap": overlap, "related": related})
+    out({"exact": exact, "overlap": overlap, "responses": responses, "related": related})
 
 
 def prior_map(fm):
@@ -470,7 +497,7 @@ def main():
     s = sp.add_parser("match"); s.add_argument("adr_dir")
     for k in ("--technology", "--repo", "--component"):
         s.add_argument(k, required=True)
-    s.add_argument("--use"); s.set_defaults(f=cmd_match)
+    s.add_argument("--use"); s.add_argument("--release", help="detect 의존성 릴리스 후보의 버전 (R14 대응형 ADR과 같은 릴리스인지)"); s.set_defaults(f=cmd_match)
     s = sp.add_parser("decide"); s.add_argument("adr_dir"); s.add_argument("results", help="결과 JSON 경로 또는 - (stdin)"); s.add_argument("--now")
     s.add_argument("--apply", action="store_true", help="updates를 바로 ADR에 쓴다 (decide+apply 원자화)"); s.set_defaults(f=cmd_decide)
     s = sp.add_parser("apply"); s.add_argument("adr_dir"); s.add_argument("decision"); s.set_defaults(f=cmd_apply)

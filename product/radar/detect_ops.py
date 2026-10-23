@@ -37,11 +37,20 @@ def read_stack(c):
     return "\n\n".join(parts)
 
 
-def screen(c, candidates):
+def release_of(cand, feed):
+    """의존성 릴리스 후보의 릴리스 표기 = 근거 소식의 제목 (radar.py match --release가 버전 토막을 뽑는다). 의존성 밖이면 None."""
+    if not cand.get("dependency"):
+        return None
+    urls = set(cand.get("source_urls") or [])
+    return next((it.get("title") for it in feed or [] if it.get("url") in urls and it.get("title")), None)
+
+
+def screen(c, candidates, feed=None):
     """후보마다 R10·R14를 코드로 집행한다.
 
     R10  affected가 비었거나 대상 repo에 없는 repo를 가리키면 버린다 → dropped
-    R14  radar.py match가 overlap(기술 같고 component 겹침)을 주면 초안을 만들지 않는다 → skipped
+    R14  radar.py match가 overlap(기술 같고 component 겹침)을 주면 초안을 만들지 않는다 → skipped.
+         의존성 릴리스 대응형 ADR은 같은 릴리스일 때만 overlap — 릴리스 표기는 소식 제목 (R14 변경 2026-10-23, HYO-136)
     남은 후보는 related(같은 기술이거나 같은 component의 ADR)와 함께 돌려준다 — 초안 본문에 적는다.
     """
     kept, skipped, dropped = [], [], []
@@ -53,8 +62,10 @@ def screen(c, candidates):
                             "reason": "R10: affected가 비었다" if not aff else f"R10: 대상 repo에 없는 repo {sorted({a['repo'] for a in bad})}"})
             continue
         overlap, related = [], {}
+        rel = release_of(cand, feed)
         for a in aff:
-            m = radar(c, "match", c.adr_dir, "--technology", cand["technology"], "--repo", a["repo"], "--component", a["component"])
+            m = radar(c, "match", c.adr_dir, "--technology", cand["technology"], "--repo", a["repo"], "--component", a["component"],
+                      *(("--release", rel) if rel else ()))
             overlap += [x for x in m["overlap"] if x not in overlap]
             for r in m["related"]:
                 related.setdefault(r["id"], r)

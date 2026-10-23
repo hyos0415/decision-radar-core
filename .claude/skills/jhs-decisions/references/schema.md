@@ -93,7 +93,7 @@ revisit_last_checked:            # 재검토 루프만 쓴다. 사람은 손대�
 | `pr.opened`·`alerts[].created` | 전부 | dry-run이면 false |
 | `files_written` | 전부 | 이번 실행에서 쓴 파일 (브랜치에 커밋한 ADR 포함) |
 | `remote_side_effects` | 전부 | 실제로 한 push·PR·issue. dry-run이면 항상 `[]` |
-| `candidates` | detect | `[{technology, affected, source_urls, dependency: true/false}]` |
-| `skipped_existing` | detect | R14로 건너뛴 `[{technology, adr}]` |
+| `candidates` | detect | **초안을 쓴 후보만** `[{technology, affected, source_urls, dependency: true/false}]` — R14로 건너뛴 것은 `skipped_existing`에만 |
+| `skipped_existing` | detect | R14로 건너뛴 `[{technology, adr}]` — 의존성 릴리스 대응형 ADR(`use: 의존성 릴리스 <버전> 대응 …`)은 같은 릴리스일 때만 여기에 온다 (R14 변경 2026-10-23) |
 | `link_candidates` | capture | R7 3중 키가 일치한 ADR ID |
 | `tool_calls` | 전부 | 이번 실행의 도구 호출 수 (R12 진단용, 대략이면 된다) |

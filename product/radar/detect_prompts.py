@@ -27,7 +27,7 @@ TRIAGE_INSTRUCTIONS = """너는 이번 주 소식 목록에서 **내 스택에 �
 DRAFT_INSTRUCTIONS = """너는 후보 하나를 기술 결정 기록(ADR) **초안**으로 쓴다. 결정을 내리지 않는다 — status는 코드가 proposed로 정한다.
 technology·affected·related는 칸이 없다 — 코드가 후보와 기존 ADR 검사 결과로 채운다. 네가 쓰는 것은 아래다.
 
-- title · use(이 결정이 다루는 용도 — 한 구절) · context(무슨 일이 있었나) · decision(제안 — "채택 여부는 사람이 정한다" 형태) · research_note
+- title · use(이 결정이 다루는 용도 — 한 구절. **의존성 릴리스 초안은 「의존성 릴리스 <버전> 대응 (종류)」** — 예: 의존성 릴리스 v0.31.0 대응 (breaking·security). 이 형식이어야 다음 릴리스가 이 초안에 막히지 않는다) · context(무슨 일이 있었나) · decision(제안 — "채택 여부는 사람이 정한다" 형태) · research_note
 - evidence: 소식의 url과 source_type(소식에 적힌 값). community는 evidence가 아니라 research_note로. 링크 없는 수치를 context·decision에 쓰지 않는다
 - revisit_when (R17):
   - 소식에 적힌 **판단 근거**(한계·결함·요구·수치)를 찾는다. 조건은 **그 근거가 바뀌는 사건**이다 — 근거마다 하나

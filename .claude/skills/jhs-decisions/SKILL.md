@@ -82,9 +82,11 @@ description: 기술 결정 기록(ADR)을 쌓고 다시 꺼내 쓰는 스킬. �
    - **의존성 릴리스**: breaking·deprecation·security·yanked·major만 남긴다 (A5b). routine patch·minor는 버린다. `affected`는 매핑과 **정확히 같게** — 빠뜨리지도 덧붙이지도 않는다 (R16).
    - **의존성 밖**(새 모델·논문·서비스): 실재하는 repo·component를 `affected`에 **하나 이상** 적을 수 있을 때만 남긴다 (R10). 못 적으면 버린다.
    - 스택에 없는 기술의 릴리스는 버린다.
-4. 남은 후보마다 `radar.py match $RADAR_ADR_DIR --technology T --repo R --component C`:
-   - `overlap`이 있으면 초안을 만들지 않고 `skipped_existing`에 `{technology, adr}`로 기록한다 (R14) — 그 기술의 재검토는 revisit과 사람의 몫
+4. 남은 후보마다 `radar.py match $RADAR_ADR_DIR --technology T --repo R --component C` — 의존성 릴리스면 `--release <버전>`(소식 제목의 버전)도 넘긴다:
+   - `overlap`이 있으면 초안을 만들지 않고 `skipped_existing`에 `{technology, adr}`로**만** 기록한다 (R14, `candidates`에는 넣지 않는다) — 그 기술의 재검토는 revisit과 사람의 몫
    - 없으면 `radar.py next-id`로 번호를 받아 `status: proposed` 초안을 쓴다. `related`에 나온 ID는 본문에 적는다
+   - `responses`는 같은 기술의 **다른 릴리스에 대한 대응 ADR**이다 — 막지 않는다. 새 초안 본문 「관련 결정」에 「이전 대응: ADR NNNN (버전)」으로 적는다 (R14 변경 2026-10-23)
+   - 의존성 릴리스 초안의 `use`는 **「의존성 릴리스 <버전> 대응 (종류)」** 형식으로 쓴다 (예: `의존성 릴리스 v0.31.0 대응 (breaking·security)`) — 이 형식이어야 다음 릴리스가 이 초안에 막히지 않는다. 형식이 다르면 `validate`가 경고한다
    - 초안의 `revisit_when`은 아래 「초안의 재검토 조건 (R17)」대로. 쓴 뒤 `radar.py validate`를 돌린다
 5. 초안이 1개 이상이면 `claude/radar-detect-<날짜>` 브랜치 + PR 1개 (dry-run 아니면). 0개면 **아무것도 하지 않는다**.
 
