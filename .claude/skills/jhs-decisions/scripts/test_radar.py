@@ -261,6 +261,54 @@ def _(t):
     assert m["overlap"] == [] and m["related"] == []                    # JHS-011
 
 
+RESPONSE_ADR = """---
+status: adopted
+technology: vLLM
+use: {use}
+affected:
+  - {{repo: finance-verifier, component: serving-layer}}
+evidence:
+  - {{url: github.example/vllm/releases/tag/v0.31.0, source_type: release_note}}
+---
+# vLLM v0.31.0 대응
+
+## Research Note
+- 재검토 조건 없음: 대응 작업
+"""
+
+
+@case("match: R14 대응형 ADR(의존성 릴리스 vX 대응)은 다음 릴리스를 막지 않는다 — 같은 릴리스만 (HYO-136)")
+def _(t):
+    a = os.path.join(t, "adr")
+    open(os.path.join(a, "0012-vllm-0-31-0.md"), "w", encoding="utf-8").write(RESPONSE_ADR.format(use="의존성 릴리스 v0.31.0 대응 (breaking·security)"))
+    m = run("match", a, "--technology", "vLLM", "--repo", "finance-verifier", "--component", "serving-layer", "--release", "v0.32.0")
+    assert m["overlap"] == [] and m["responses"] == [{"id": "0012", "release": "0.31.0"}], m     # 10/19 놓친 vLLM 0.32 — 새 초안 (A)
+    assert "0012" in [r["id"] for r in m["related"]]                                              # 본문에 적을 이전 대응 (B)
+    m = run("match", a, "--technology", "vLLM", "--repo", "finance-verifier", "--component", "serving-layer", "--release", "0.31.0")
+    assert m["overlap"] == ["0012"] and m["responses"] == [], m                                    # 같은 릴리스는 그대로 건너뜀 (v 접두 무시)
+    m = run("match", a, "--technology", "vLLM", "--repo", "finance-verifier", "--component", "serving-layer")
+    assert m["overlap"] == [] and [r["id"] for r in m["responses"]] == ["0012"], m                # 릴리스가 아닌 소식도 막지 않는다
+    m = run("match", a, "--technology", "LEANN", "--repo", "medical-mate", "--component", "retrieval", "--release", "v0.2.0")
+    assert m["overlap"] == ["0004"] and m["responses"] == []                                       # 대응형이 아닌 ADR은 R14 원래대로 (JHS-051)
+    open(os.path.join(a, "0013-fastapi.md"), "w", encoding="utf-8").write(
+        RESPONSE_ADR.replace("vLLM", "FastAPI").format(use="의존성 릴리스 Python SDK v5.0.0 대응 (major·breaking)"))
+    m = run("match", a, "--technology", "FastAPI", "--repo", "finance-verifier", "--component", "serving-layer", "--release", "0.145.0")
+    assert m["responses"] == [{"id": "0013", "release": "5.0.0"}], m                               # 버전 앞에 다른 말이 있어도 (adr 0015 형식)
+    v = run("validate", a)
+    assert v["ok"] and not any("R14" in w for r in v["adrs"] for w in r["warnings"]), v
+
+
+@case("validate: 대응 작업인데 use가 「의존성 릴리스 <버전> 대응」 형식이 아니면 경고 (HYO-136)")
+def _(t):
+    a = os.path.join(t, "adr")
+    open(os.path.join(a, "0012-vllm.md"), "w", encoding="utf-8").write(RESPONSE_ADR.format(use="vLLM 0.31 breaking 대응"))
+    v = run("validate", a)
+    w = next(r for r in v["adrs"] if r["id"] == "0012")["warnings"]
+    assert any("R14" in x for x in w), w
+    m = run("match", a, "--technology", "vLLM", "--repo", "finance-verifier", "--component", "serving-layer", "--release", "v0.32.0")
+    assert m["overlap"] == ["0012"]                                                                # 형식을 못 읽으면 원래대로 건너뛴다 (경고로 알린다)
+
+
 @case("decide stdin + --apply: 임시 파일 없이 한 번에 (스모크 경합 수정)")
 def _(t):
     res = results({("0004", "c1"): ("met", [("github.example/leann/releases", "release_note")], None)})

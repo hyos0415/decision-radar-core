@@ -91,5 +91,24 @@ check("read_repo_file은 예산에 안 든다", lookup_guard({"messages": other}
 check("revisit·capture 도구 이름 그대로 · capture에 열기 추가", [t.name for t in REVISIT_TOOLS] == ["snapshot_fetch", "snapshot_search", "read_repo_file"]
       and [t.name for t in CAPTURE_TOOLS] == ["snapshot_fetch", "match_adr", "propose_adr"])
 
+# R14 변경 (2026-10-23, HYO-136): 의존성 릴리스 대응형 ADR은 같은 릴리스만 막는다 — 제품 screen이 소식 제목을 --release로 넘기는지 (규율 8)
+import tempfile  # noqa: E402
+from radar import detect_ops  # noqa: E402
+from common.core import SKILL_RADAR  # noqa: E402
+with tempfile.TemporaryDirectory() as td:
+    adr = os.path.join(td, "adr")
+    os.makedirs(adr)
+    open(os.path.join(adr, "0012-vllm.md"), "w", encoding="utf-8").write(
+        "---\nstatus: adopted\ntechnology: vLLM\nuse: 의존성 릴리스 v0.31.0 대응 (breaking·security)\naffected:\n  - {repo: fv, component: serving}\n"
+        "evidence:\n  - {url: github.com/vllm-project/vllm/releases/tag/v0.31.0, source_type: release_note}\n---\n# vLLM v0.31.0 대응\n")
+    sc = Ctx(radar_py=SKILL_RADAR, env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+             adr_dir=adr, targets={"fv": td}, dry_run=True)
+    feed = [{"url": "u32", "title": "vllm-project/vllm v0.32.0"}, {"url": "u31", "title": "vllm-project/vllm v0.31.0"}]
+    cand = lambda u: {"technology": "vLLM", "dependency": True, "affected": [{"repo": "fv", "component": "serving"}], "source_urls": [u]}
+    kept, skipped, _ = detect_ops.screen(sc, [cand("u32"), cand("u31")], feed)
+    check("R14 대응형: 다음 릴리스는 초안 · 같은 릴리스는 건너뜀", [k["candidate"]["source_urls"] for k in kept] == [["u32"]]
+          and skipped == [{"technology": "vLLM", "adr": "0012"}], (kept, skipped))
+    check("R14 대응형: 이전 대응 ADR이 related로 초안에 간다", [r["id"] for r in kept[0]["related"]] == ["0012"] if kept else False)
+
 print(f"\n{'FAILED ' + str(len(fails)) if fails else 'all passed'}")
 sys.exit(1 if fails else 0)

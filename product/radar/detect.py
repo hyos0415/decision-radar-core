@@ -82,7 +82,7 @@ def detect_graph(ctx, model):
                     "p3": [{"kind": "model_error", "stage": "triage", "type": type(e).__name__, "message": str(e)[:300]}]}
         t = r["structured_response"]
         cands = [c.model_dump() for c in t.candidates]
-        kept, skipped, dropped = detect_ops.screen(ctx, cands)
+        kept, skipped, dropped = detect_ops.screen(ctx, cands, state["feed"])
         return {"kept": kept, "skipped": skipped, "dropped": dropped, "excluded": [e.model_dump() for e in t.excluded]}
 
     def fan_out(state):
