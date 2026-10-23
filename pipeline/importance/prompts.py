@@ -1,6 +1,7 @@
 """분류 프롬프트. 정의 문구는 importance-policy §2-1(+v1.1~v1.3)·§3에서 가져왔다 — 바꾸면 정책 쪽을 먼저 본다.
 등급 표의 「예」 칸은 §2-1 예 열과 §4 두 등급 예(langfuse)다 (HYO-124 — 모델이 예시 등급을 따르지 않았다). Jev 질문(TIER_MEANING)에는 넣지 않았다.
 v2(HYO-128): 예에 없는 기술을 분류 불가로 내던 부작용 · langfuse L5만 · python L0+L1을 고치는 규칙 세 줄 — eval/importance/tier-examples.md §3.
+변화 종류 정의는 이전 문구 그대로다 — 정답지 판정 기준과 같은 뜻의 v4(커밋 ea8fa45)를 새 정답지로 쟀으나 breaking 소음만 늘어 등록 규칙대로 되돌렸다 (eval/importance/results-hyo131.md, HYO-131). 프리릴리스 major · 덧붙인 minor_patch는 문구 대신 관문이 policy.normalize_changes로 뺀다.
 
 백엔드가 GPT면 이 프롬프트를 그대로 쓴다. Jev는 문장을 읽고 답하는 모델이 아니라 선택지 + 확률을 내므로,
 같은 정의를 질문의 `instructions`·`criteria`로 나눠 담게 된다 (같은 판정 기준이지 같은 프롬프트가 아니다 — finance_verifier run_eval_jev.py와 같은 단서).

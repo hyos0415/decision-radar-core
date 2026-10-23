@@ -223,7 +223,7 @@ def _gate_items(backend, gold, store):
     for it in gold["items"]:
         item = {"id": it["id"], "title": it["title"], "text": it.get("text", ""), "source": it.get("source", ""), "meta": {"dependency": it["technology"]}}
         g = gate(item, [])
-        preds[it["id"]] = {"keep": g["keep"], "status": g["status"], "changes": g["changes"], "tiers": g["tiers"], "reason": g["reason"],
+        preds[it["id"]] = {"keep": g["keep"], "status": g["status"], "changes": g["changes"], "model_changes": g.get("model_changes"), "tiers": g["tiers"], "reason": g["reason"],
                            "kept_by": [{k: r[k] for k in ("technology", "tier", "change")} for r in g["kept_by"]]}
     return preds, store.data["technologies"]
 

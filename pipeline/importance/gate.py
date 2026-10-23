@@ -98,21 +98,22 @@ class Gate:
         except Exception as e:  # noqa: BLE001 — 안전 실패: 버리고 기록한다 (조용히 남기지도, 조용히 사라지게 두지도 않는다)
             return {**base, "status": "error", "tiers": {t: e2["tiers"] for t, e2 in effs.items()},
                     "reason": f"변화 분류 실패: {type(e).__name__}: {str(e)[:120]}"}
+        changes = policy.normalize_changes(ans.labels, item.get("title") or "")   # 프리릴리스 major · 덧붙인 minor_patch 빼기 (§3 변경 2026-10-21, HYO-131)
         rows, kept_by, defaulted = [], [], False
         for t, e in effs.items():
             ctx = policy.Context(path=e.get("path", "prod"), pin=e.get("pin"), sensitive=e.get("sensitive"), local=e.get("local"))
-            labels = list(ans.labels)
+            labels = list(changes)
             if t in succ:      # 모델 라벨이 비었을 때의 기본(minor·patch) 행은 그대로 두고 후속 모델 행을 더한다 — 기존 판정을 바꾸지 않게
                 labels = (labels or ["minor_patch"]) + ["successor_model"]
             d = policy.decide(e["tiers"], labels, ctx)
-            defaulted = not ans.labels
+            defaulted = not changes
             rows += [{**r, "technology": t} for r in d["rows"]]
             kept_by += [{**r, "technology": t} for r in d["kept_by"]]
         keep = bool(kept_by)
         why = ("; ".join(f"{r['technology']} {r['tier']} × {policy.CHANGE_LABEL[r['change']]}" + (f" ({', '.join(r['adjusted_by'])})" if r["adjusted_by"] else "")
                          for r in kept_by) if keep else
                "남기는 행 없음: " + ", ".join(sorted({f"{r['tier']}×{policy.CHANGE_LABEL[r['change']]}={r['base']}" for r in rows})))
-        return {"keep": keep, "status": "ok", "technologies": techs, "tiers": {t: e["tiers"] for t, e in effs.items()}, "changes": ans.labels,
+        return {"keep": keep, "status": "ok", "technologies": techs, "tiers": {t: e["tiers"] for t, e in effs.items()}, "changes": changes, "model_changes": list(ans.labels),
                 "rows": rows, "kept_by": kept_by, "defaulted_change": defaulted, "skipped": base["skipped"], "successor": base["successor"],
                 "reason": why}
 
