@@ -123,6 +123,9 @@ _R1_HEADING = re.compile(r"^\s*(#{1,6})\s*" + _RISK_WORD, re.I)                 
 _R2_LABEL = re.compile(r"^(\s*)[*-]\s*\*\*\s*" + _RISK_WORD + r"[^*]*\*\*", re.I)      # * **Security**: … → 그 글머리 하나
 _R3_ADVISORY = re.compile(r"\b(?:CVE-\d{4}-\d+|GHSA(?:-[0-9a-z]{4}){3})\b", re.I)     # 권고 번호가 든 줄
 _R4_COMMIT = re.compile(r"^\s*[*-]\s*\w+(?:\([^)]*\))?!:|\(security\)", re.I)          # Conventional Commits breaking 표시 · security 범위
+# R5 (HYO-138, 2026-10-23): 글머리 줄의 `[security]` 꼬리표 · 「security fix(es)/patch(es)/update(s)/upgrade(s)」 — k6 의존성 올림 · electron 「Backported security fixes」.
+# 「security」 낱말만으로는 안 옮긴다(보안 패널·security 클래스·보안 스캔 — HYO-131 정답 의심 항목들)
+_R5_SECURITY_BULLET = re.compile(r"^\s*[*-].*(?:\[security\]|\bsecurity\s+(?:fix(?:es)?|patch(?:es)?|updates?|upgrades?)\b)", re.I)
 _HEADING = re.compile(r"^\s*(#{1,6})\s")
 _BULLET = re.compile(r"^(\s*)[*-]\s")
 
@@ -149,6 +152,8 @@ def _risk_spans(lines):
             spans.append((3, i, i + 1))
         elif _R4_COMMIT.search(line):
             spans.append((4, i, i + 1))
+        elif _R5_SECURITY_BULLET.search(line):
+            spans.append((5, i, i + 1))
     return spans
 
 

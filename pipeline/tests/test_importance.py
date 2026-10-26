@@ -1488,6 +1488,23 @@ def test_window_moves_only_risk_sections_from_outside_the_window():
     assert prompts.window_text(note) in prompts.change_prompt(q) and prompts.jev_change_state(q)["body"] == prompts.window_text(note)
 
 
+def test_window_moves_security_tag_and_fix_bullets_hyo138():
+    # 정답지 과거 릴리스에서 창 밖이던 근거 줄 (grafana/k6 v1.8.0 · electron v41.4.0) — HYO-131 C1 놓침
+    from pipeline.importance import prompts
+    filler = "".join(f"* fix: small thing number {i} in the parser\n" for i in range(120))
+    note = ("# v1.8.0\n\n" + filler
+            + "- [#6047](https://github.com/grafana/k6/pull/6047) Updates `golang.org/x/crypto` to `v0.52.0` [security].\n"
+            + "* Backported security fixes for 492736100, 492668885. [#51259](https://github.com/electron/electron/pull/51259)\n"
+            + "- [#6064] Bumps Dockerfile images for security updates.\n"
+            + "* Fixed the DevTools Security panel's \"View certificate\" button\n"
+            + "* fix(security_scans.sh): pin trivvy version\n"
+            + "* Use `401` status code in security classes when credentials are missing\n")
+    assert note.index("[security]") > prompts.TEXT_MAX
+    head = prompts.window_text(note).split("# v1.8.0")[0]
+    assert "[security]" in head and "Backported security fixes" in head and "security updates" in head
+    assert "Security panel" not in head and "security_scans" not in head and "security classes" not in head   # 낱말만으로는 안 옮긴다
+
+
 def test_synthetic_subsets_are_reported_but_judgement_uses_all():
     gold, tiers_, changes = _gold_oracle()
     assert evaluate.subsets(gold["items"]) == {}                       # 보강이 없으면 나누지 않는다
@@ -1901,6 +1918,7 @@ def mutations():
         ("스택 리더: git 목록을 못 쓰고 폴더를 걸음 (미추적 사본이 섞임)", [(stack, "_git_files", lambda root: (None, "mutation"))], test_signals_use_tracked_files_minus_excludes_and_skip_claude),
         ("스택 리더: .claude를 건너뛰지 않음", [(stack, "SKIP_DIRS", {"node_modules", ".git"})], test_signals_use_tracked_files_minus_excludes_and_skip_claude),
         ("스택 비교: 정규화 없이 견줌", [(signals, "norm", lambda n: n)], test_compare_stacks_groups_and_normalizes),
+        ("창: R5(security 꼬리표·fix 글머리)를 안 옮김", [(prompts, "_R5_SECURITY_BULLET", re.compile(r"(?!x)x"))], test_window_moves_security_tag_and_fix_bullets_hyo138),
         ("창: 재배치 없이 앞에서 자르기만", [(prompts, "window_text", lambda text, text_max=3000: (text or "")[:text_max])], test_window_moves_only_risk_sections_from_outside_the_window),
         ("창: 굵은 라벨(R2)을 못 봄", [(prompts, "_R2_LABEL", re.compile(r"(?!x)x"))], test_window_moves_only_risk_sections_from_outside_the_window),
         ("창: 본문 위험 단어 줄도 옮김", [(prompts, "_R4_COMMIT", re.compile(r"(?i)\b(?:migrate|remove)\b"))], test_window_moves_only_risk_sections_from_outside_the_window),
