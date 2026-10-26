@@ -209,6 +209,27 @@ def test_other_machine_published():
     assert "이미 만듦" in out and git(w.remote, "rev-parse", "main") == before
 
 
+def test_step_log_not_scheduler_log():
+    """단계 로그는 예약 작업 콘솔 로그와 다른 파일이어야 한다 — Windows에서 PowerShell `*>`가 잡은 파일에 쓰면 PermissionError (10/26 등록 직후 발견)."""
+    ps1 = (Path(weekly.REPO) / "collector" / "schedule_windows.ps1").read_text(encoding="utf-8-sig")
+    console = {"last-weekly.log"} if "last-$label.log" in ps1 else set()
+    pl = schedule_mac.build(Path("/r"), "weekly", "Tuesday", "16:00")
+    console.add(Path(pl["StandardOutPath"]).name)
+    assert console == {"last-weekly.log"}, console
+    assert weekly.STEP_LOG not in console, weekly.STEP_LOG
+    if sys.platform != "win32":
+        return
+    # 예약 작업과 같은 모양으로 재현: PowerShell이 콘솔 로그를 *>로 잡은 채 실제 run_step이 단계 로그에 쓴다
+    d = Path(tempfile.mkdtemp())
+    (d / "fakemod.py").write_text("print('step ran')", encoding="utf-8")
+    (d / "go.py").write_text(f"import sys; sys.path.insert(0, {str(weekly.REPO)!r}); from collector import weekly; from pathlib import Path\n"
+                             f"sys.exit(weekly.run_step('fakemod', [], Path({str(d)!r}) / weekly.STEP_LOG, cwd={str(d)!r}))", encoding="utf-8")
+    p = subprocess.run(["powershell", "-NoProfile", "-Command", f"& '{sys.executable}' '{d / 'go.py'}' *> '{d / 'last-weekly.log'}'; exit $LASTEXITCODE"],
+                       capture_output=True, text=True)
+    assert p.returncode == 0, (d / "last-weekly.log").read_text(encoding="utf-8", errors="replace")[-400:]
+    assert "step ran" in (d / weekly.STEP_LOG).read_text(encoding="utf-8")
+
+
 def test_from_gate_week():
     w = World()
     rc, _ = w.go("--from", "gate", "--week", WEEK, "--no-push")
