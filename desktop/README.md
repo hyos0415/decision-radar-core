@@ -123,6 +123,7 @@ RADAR_APP_MODE=real npm run dev     # [RADAR_REAL_ADR=../adr] [RADAR_SNAPSHOT_RE
 - 그래프 실행은 dry-run — detect 초안은 작업 사본에만 쓰고 Inbox 검토 대기. **승인 = 커밋 1개를 main에 push**, 거부 = 초안을 지우고 닫힌 항목 기록만 커밋
 - revisit 직후 `revisit_last_checked`만 바뀐 ADR은 승인 없이 커밋·push한다(`hitl.export_record` — 기록용 칸 밖이 바뀌었으면 거부하고 작업 사본에 남긴다)
 - 정기 실행이 기본 켜짐(`RADAR_SCHEDULE=off`로 끈다) — revisit 월 09:00 · detect 화 18:00
+- **API 그림자** (엔진이 claude-cli일 때, `RADAR_SHADOW=off`로 끈다): detect·revisit이 끝나면 **같은 입력**(실행 직전에 뜬 ADR 사본 + 같은 detect 입력)을 API 엔진으로 한 번 더 돌려 `<data>/shadow.jsonl`에 두 엔진 결과를 나란히 한 줄 — detect는 후보·초안·제외, revisit은 조건별 판정·알림, 각자 사용량. **Inbox·알림·실행 기록·ADR repo에는 아무것도 안 쓴다**. 잠금 밖 백그라운드라 화면을 막지 않고, 죽거나 키가 없으면 그 사실만 남는다. 4주 뒤 엔진 비교용 (사용자 10/26). API 과금이다
 
 ## Mac 검증 (10/26 — Windows로 쓰다 Mac으로 옮긴다, 두 경로 다 검증)
 
