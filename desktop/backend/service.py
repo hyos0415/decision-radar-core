@@ -17,6 +17,16 @@
     `RADAR_DRY_RUN=1`을 강제한다 — git push가 켜질 길이 없다 (`hitl.exporter_for`)
   - 키(.env)는 이 프로세스만 읽는다 (스텁 모드에서는 읽지도 않는다)
 
+실사용 모드 (`RADAR_APP_MODE=real`, HYO-99 3단계 — 레포 주인 결정 10/27): 실제 ADR repo(`RADAR_REAL_ADR`, 기본 `../adr`)에 쓰고 main에 push한다.
+  - 시작 검사: ADR repo가 git 작업 사본의 맨 위 · main 브랜치 · origin 있음 · docs/adr와 radar-targets.json 있음 · 데이터 폴더와 안 겹침.
+    엔진이 claude-cli면 CLI 바이너리도. 하나라도 틀리면 시작을 거부한다 (데모·RADAR_APP_MODEL과 같이 주면 거부)
+  - 엔진: detect·revisit = `RADAR_APP_ENGINE`(기본 claude-cli — 구독 `claude -p`, engines.ClaudeCliRunner) 또는 api. capture는 늘 API(.env 키)
+  - ctx 둘: 그래프 실행(detect·revisit)은 dry-run + 로컬 내보내기 — 초안은 작업 사본에만 쓰고 검토 대기로 둔다 (check_scope).
+    답·capture는 `RADAR_EXPORT=git`(dry-run 아님) — 승인 = 커밋 1개를 main에 push (hitl-state 결정 8)
+  - revisit 직후 `revisit_last_checked`만 바뀐 파일은 승인 없이 커밋·push한다 (`hitl.export_record` — 기록용 칸 밖이 바뀌었으면 거부)
+  - 실행 전: radar-snapshots(`RADAR_SNAPSHOT_REPO`, 기본 `../radar-snapshots`)를 pull만 하고 가장 새 `detect/<주차>/`(pipeline.detect_feed 출력)를
+    detect 입력으로 쓴다 — 만드는 쪽은 수집 PC(Windows)의 주간 작업이다. ADR repo는 원격을 따라잡는다(ff)
+
 읽기(Inbox·상세·Decisions)는 쓰기 잠금을 기다리지 않는다 — 실제 모델 실행(분 단위) 동안에도 화면이 멈추지 않게. 쓰기는 lock 하나로 줄 세운다.
 """
 
@@ -25,6 +35,8 @@ import datetime as dt
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import threading
 
@@ -45,7 +57,7 @@ from common import ops  # noqa: E402
 from pipeline.detect_feed import funnel_line, url_key  # noqa: E402
 from pipeline.importance.card_action import card_action  # noqa: E402
 from common.core import SKILL_RADAR, Ctx, RadarError, radar  # noqa: E402
-from common.env import MODEL as REAL_MODEL  # noqa: E402
+from common.env import MODEL as REAL_MODEL, load_dotenv  # noqa: E402
 from common.schemas import AdrDraft, RevisitCondition  # noqa: E402
 from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: E402
 import yaml  # noqa: E402
@@ -66,6 +78,10 @@ MAX_CONVERSATION = 200_000
 OK_OUTCOMES = ("written", "rejected", "discarded", "rejudge", "recovered")
 NUMBER_NOTE = "번호는 저장할 때 정해짐"
 DEMO_ADR_DEFAULT = os.path.join(os.path.dirname(REPO), "adr")
+APP_MODES = ("stub", "real")
+ENGINES = ("claude-cli", "api")
+SNAPSHOT_REPO_DEFAULT = os.path.join(os.path.dirname(REPO), "radar-snapshots")
+DETECT_FEEDS = "detect"  # radar-snapshots/detect/<주차>/ — 수집 PC가 관문 → detect 입력까지 만들어 push한다
 
 
 class ServiceError(Exception):
@@ -104,7 +120,8 @@ class RadarService:
     """한 프로세스에 하나. 쓰는 일은 전부 lock 하나로 줄 세운다 (Inbox 답 · capture · 시드)."""
 
     def __init__(self, data_dir, *, adr_dir=None, targets=None, model=None, radar_py=SKILL_RADAR, profile=None,
-                 demo=None, demo_adr=None, demo_snapshot=None, chat_factory=None):
+                 demo=None, demo_adr=None, demo_snapshot=None, chat_factory=None, app_mode=None, real_adr=None, snapshot_repo=None,
+                 engine=None):
         self.data_dir = os.path.abspath(data_dir)
         # 개발 데이터 프로필 — 폴더를 만든 프로필이 이긴다. 다른 프로필을 달라고 하면 섞이지 않게 거부한다 (devprofiles.py)
         made = devprofiles.read_marker(self.data_dir)
@@ -130,18 +147,28 @@ class RadarService:
         self.radar_py = radar_py
         want_model = model or os.environ.get("RADAR_APP_MODEL") or "stub"
         demo = (os.environ.get("RADAR_APP_DEMO") == "1") if demo is None else demo
+        app_mode = app_mode or os.environ.get("RADAR_APP_MODE") or "stub"
+        if app_mode not in APP_MODES:
+            raise ServiceError(500, f"RADAR_APP_MODE {app_mode!r} — {list(APP_MODES)}")
+        if app_mode == "real" and (demo or model or os.environ.get("RADAR_APP_MODEL")):
+            raise ServiceError(500, "실사용 모드는 데모(RADAR_APP_DEMO)·RADAR_APP_MODEL과 같이 쓰지 않는다 — 엔진은 RADAR_APP_ENGINE")
         # 실제 모델은 과금이다 — 데모 플래그와 모델 이름을 둘 다 명시해야 연다. 하나만 있으면 실수로 보고 거부한다 (HYO-85)
         if (want_model != "stub" or demo) and not (want_model == "anthropic" and demo):
             raise ServiceError(500, f"모델 {want_model!r} · 데모 {demo}: 실제 모델은 데모 모드에서만 — RADAR_APP_MODEL=anthropic과 RADAR_APP_DEMO=1을 "
                                     "같이 준다 (아니면 둘 다 비워 스텁)")
-        self.mode = "demo" if demo else "stub"
-        self.model_name = REAL_MODEL if demo else "stub"
+        self.mode = "real" if app_mode == "real" else "demo" if demo else "stub"
+        self.model_name = "stub" if self.mode == "stub" else REAL_MODEL
         self.flows = ("detect",) if demo else FLOWS  # 데모는 detect만 실제 모델로 — revisit은 데모 입력에 출처가 없어 의미가 없다
-        self.chat_factory = chat_factory  # 테스트가 실제 모델 자리에 대역을 꽂는다 (API 호출 없이 데모 모드 배관 검사)
-        self.demo_info = None
+        self.chat_factory = chat_factory  # 테스트가 실제 모델 자리에 대역을 꽂는다 (API 호출 없이 데모·실사용 모드 배관 검사)
+        self.demo_info = self.real_info = None
+        self.engine = None if self.mode == "stub" else "api"
         if demo:
             self._setup_demo(demo_adr or os.environ.get("RADAR_DEMO_ADR") or DEMO_ADR_DEFAULT,
                              demo_snapshot or os.environ.get("RADAR_DEMO_SNAPSHOT"))
+        if self.mode == "real":
+            self._setup_real(real_adr or os.environ.get("RADAR_REAL_ADR") or DEMO_ADR_DEFAULT,
+                             snapshot_repo or os.environ.get("RADAR_SNAPSHOT_REPO") or SNAPSHOT_REPO_DEFAULT,
+                             engine or os.environ.get("RADAR_APP_ENGINE") or "claude-cli")
         os.makedirs(self.tmp, exist_ok=True)
         self.lock = threading.RLock()
 
@@ -150,7 +177,7 @@ class RadarService:
         adr_src = os.path.abspath(adr_src)
         if not snapshot or not os.path.exists(os.path.join(snapshot, "feed.json")):
             raise ServiceError(500, f"데모 모드: RADAR_DEMO_SNAPSHOT에 feed.json이 없다 ({snapshot!r}) — python -m pipeline.detect_feed로 만든다")
-        if os.path.commonpath([adr_src, self.data_dir]) in (adr_src, self.data_dir):
+        if _overlaps(adr_src, self.data_dir):
             raise ServiceError(500, f"데모 모드: 데이터 폴더 {self.data_dir}와 원본 ADR repo {adr_src}가 겹친다 — 사본이 원본을 덮을 수 있다")
         copy_root = os.path.join(self.data_dir, "adr")
         if not os.path.isdir(os.path.join(copy_root, "docs", "adr")):
@@ -163,20 +190,66 @@ class RadarService:
         self.snapshot_dir = os.path.abspath(snapshot)
         self.demo_info = {"adr_source": adr_src, "adr_copy": copy_root, "snapshot": self.snapshot_dir}
 
+    def _setup_real(self, adr_root, snapshot_repo, engine):
+        """실사용 모드 — 실제 ADR repo가 맞는지 보고 아니면 시작을 거부한다 (머리말). detect 입력은 실행 때마다 고른다 (`_prepare_real`)."""
+        adr_root, snapshot_repo = os.path.abspath(adr_root), os.path.abspath(snapshot_repo)
+        errs = []
+        if engine not in ENGINES:
+            errs.append(f"RADAR_APP_ENGINE {engine!r} — {list(ENGINES)}")
+        for rel in (os.path.join("docs", "adr"), "radar-targets.json"):
+            if not os.path.exists(os.path.join(adr_root, rel)):
+                errs.append(f"ADR repo에 {rel}가 없다")
+        top = _git(adr_root, "rev-parse", "--show-toplevel")
+        if top is None or not _same_dir(top, adr_root):
+            errs.append(f"git 작업 사본의 맨 위가 아니다 (git 맨 위: {top})")
+        else:
+            branch = _git(adr_root, "rev-parse", "--abbrev-ref", "HEAD")
+            if branch != "main":
+                errs.append(f"브랜치가 main이 아니다 ({branch}) — 승인은 main에 push한다")
+            if not _git(adr_root, "remote", "get-url", "origin"):
+                errs.append("origin 원격이 없다")
+        if _overlaps(adr_root, self.data_dir):
+            errs.append(f"데이터 폴더 {self.data_dir}와 ADR repo가 겹친다")
+        claude_bin = None
+        if engine == "claude-cli":
+            claude_bin = os.environ.get("RADAR_CLAUDE_BIN") or shutil.which("claude")
+            if not claude_bin or not (os.path.exists(claude_bin) or shutil.which(claude_bin)):
+                errs.append(f"claude CLI를 못 찾았다 ({claude_bin}) — 설치하거나 RADAR_CLAUDE_BIN, 아니면 RADAR_APP_ENGINE=api")
+        if errs:
+            raise ServiceError(500, f"실사용 모드를 열지 않았다 — ADR repo {adr_root}: " + " · ".join(errs))
+        self.engine, self.snapshot_repo = engine, snapshot_repo
+        self.adr_dir = os.path.join(adr_root, "docs", "adr")
+        self.targets = os.path.join(adr_root, "radar-targets.json")
+        self.snapshot_dir = _latest_feed(snapshot_repo) or os.path.join(snapshot_repo, DETECT_FEEDS)
+        self.real_info = {"adr_repo": adr_root, "snapshot_repo": snapshot_repo, "claude_bin": claude_bin}
+
+    def _api_key(self):
+        return bool(load_dotenv().get("ANTHROPIC_API_KEY"))
+
     def chat(self, flow, script=None):
-        """흐름 하나의 모델. 스텁이면 대본, 데모면 실제 Claude (테스트는 chat_factory로 대역)."""
+        """흐름 하나의 모델. 스텁이면 대본, 데모면 실제 Claude, 실사용이면 detect·revisit은 엔진(claude-cli · api), capture는 API.
+        테스트는 chat_factory로 대역을 꽂는다."""
         if self.mode == "stub":
             return StubChat(script=script, flow=flow)
         if self.chat_factory is not None:
             return self.chat_factory(flow)
+        if self.mode == "real" and flow != "capture" and self.engine == "claude-cli":
+            from radar.engines import ClaudeCliRunner
+            return ClaudeCliRunner(model=REAL_MODEL, bin=self.real_info["claude_bin"])
+        if not self._api_key():  # anthropic_key()는 SystemExit — 작업 일꾼을 죽이지 않게 먼저 본다
+            raise ServiceError(409, f".env에 ANTHROPIC_API_KEY가 없다 — {flow}는 API로 돈다")
         from radar import models
         return models.make_anthropic()
 
     def health(self):
         h = {"ok": True, "mode": self.mode, "profile": self.profile, "data_dir": self.data_dir, "adr_dir": self.adr_dir,
-             "model": self.model_name, "flows": list(self.flows)}
+             "model": self.model_name, "flows": list(self.flows), "engine": self.engine}
         if self.demo_info:
             h["demo"] = {**self.demo_info, "funnel": self._funnel_line()}
+        if self.real_info:
+            feed = self.snapshot_dir if os.path.exists(os.path.join(self.snapshot_dir, "feed.json")) else None
+            h["real"] = {**self.real_info, "snapshot": feed, "week": os.path.basename(feed) if feed else None,
+                         "api_key": self._api_key(), "funnel": self._funnel_line()}
         return h
 
     def _funnel_line(self):
@@ -194,12 +267,15 @@ class RadarService:
 
     # ── 환경 ─────────────────────────────────────────────────────
 
-    def env(self):
-        env = {k: v for k, v in os.environ.items() if k != "RADAR_EXPORT"}  # 내보내기 스위치는 물려받지 않는다
+    def env(self, export=None):
+        """실사용 모드의 기본(export=None)은 git 내보내기 — 답·capture. 그래프 실행은 export=False (머리말 「ctx 둘」). 스텁·데모는 늘 로컬."""
+        git_export = self.mode == "real" and export is not False
+        env = {k: v for k, v in os.environ.items() if k not in ("RADAR_EXPORT", "RADAR_DRY_RUN")}  # 내보내기 스위치는 물려받지 않는다
         env.update({
             "RADAR_ADR_DIR": self.adr_dir, "RADAR_TARGETS": self.targets,
-            "RADAR_EXPORT": "local",  # 승인 기록만 — git을 부르지 않는다. detect 초안을 Inbox에서 답할 수 있게 (HYO-85)
-            "RADAR_DRY_RUN": "1",  # git 내보내기는 dry-run이면 no-op — RADAR_EXPORT=git이 어디서 들어와도 git을 안 부른다
+            # 로컬: 승인 기록만 — git을 부르지 않는다. detect 초안을 Inbox에서 답할 수 있게 (HYO-85)
+            # dry-run이면 git 내보내기가 no-op — RADAR_EXPORT=git이 어디서 들어와도 git을 안 부른다
+            "RADAR_EXPORT": "git" if git_export else "local", "RADAR_DRY_RUN": "0" if git_export else "1",
             "RADAR_SNAPSHOT_DIR": self.snapshot_dir,  # detect·revisit는 스냅숏 모드만 (check_scope) — 웹에 나가지 않는다
             "RADAR_SERVED_LOG": os.path.join(self.data_dir, "served.log"),
             "LANGSMITH_TRACING": "false", "LANGCHAIN_TRACING_V2": "false",
@@ -207,8 +283,8 @@ class RadarService:
         })
         return env
 
-    def ctx(self):
-        c = Ctx.from_env(self.env(), radar_py=self.radar_py)
+    def ctx(self, export=None):
+        c = Ctx.from_env(self.env(export), radar_py=self.radar_py)
         c.now = now_iso()
         return c
 
@@ -219,9 +295,12 @@ class RadarService:
         if not calls:
             return None
         costs = [c.get("cost_usd") for c in calls]
+        billing = {"stub" if self.mode == "stub" else c.get("billing") or "api" for c in calls}  # 구독 CLI는 subscription (engines.ClaudeCliRunner)
+        equiv = [c["cost_usd_equiv"] for c in calls if c.get("cost_usd_equiv") is not None]
         return {"model": ", ".join(sorted({c.get("model") or self.model_name for c in calls})), "model_calls": len(calls),
                 "input_tokens": sum(c.get("input_tokens") or 0 for c in calls), "output_tokens": sum(c.get("output_tokens") or 0 for c in calls),
-                "cost_usd": None if any(x is None for x in costs) else round(sum(costs), 5), "estimated": self.mode == "stub"}
+                "cost_usd": None if any(x is None for x in costs) else round(sum(costs), 5), "estimated": self.mode == "stub",
+                "billing": billing.pop() if len(billing) == 1 else "mixed", "cost_usd_equiv": round(sum(equiv), 5) if equiv else None}
 
     def model(self, item_id=None):
         sid = (self._meta().get("items", {}).get(item_id) or {}).get("stub") if item_id else None
@@ -820,11 +899,43 @@ class RadarService:
         if flow not in self.flows:
             raise ServiceError(409, f"{self.mode} 모드에서는 {flow}를 돌리지 않는다 — {list(self.flows)}만")
 
+    def _prepare_real(self, flow):
+        """실사용 실행 전 — radar-snapshots를 당기고(pull만) 가장 새 detect 입력을 고르고, ADR repo를 원격에 맞춘다(ff). 요약 줄."""
+        notes = []
+        if _git(self.snapshot_repo, "pull", "--ff-only", "-q") is None:
+            notes.append(f"radar-snapshots를 못 당겼다 — 가진 것으로 돈다 ({self.snapshot_repo})")
+        feed = _latest_feed(self.snapshot_repo)
+        if feed:
+            self.snapshot_dir = feed
+            notes.append(f"입력 {os.path.basename(feed)}")
+        elif flow == "detect":
+            raise RuntimeError(f"detect 입력이 없다 — {os.path.join(self.snapshot_repo, DETECT_FEEDS)}/<주차>/feed.json (수집 PC의 주간 작업이 만든다)")
+        else:
+            notes.append("detect 입력이 없어 출처를 못 연다 — 조건은 판정 불가로 남는다")
+        b = hitl.sync_exporter(self.ctx())
+        if b:
+            notes.append(f"ADR repo를 원격에 못 맞췄다 ({b.get('reason')}) — 로컬 상태로 돈다")
+        return notes
+
+    def _export_record(self, rep):
+        """revisit 직후 — 기록용 칸만 바뀐 ADR을 커밋 1개로 main에 (사용자 10/27). 요약 한 줄 (쓴 파일이 없으면 None)."""
+        files = rep.get("files_written") or []
+        if not files:
+            return None
+        ids = sorted(os.path.basename(f)[:4] for f in files)
+        r = hitl.export_record(self.ctx(), files, f"radar revisit {str(rep.get('now') or '')[:10]}: revisit_last_checked — ADR {', '.join(ids)}")
+        self.log("revisit_record", None, state=r["state"], adrs=ids, commit=r.get("commit"), reason=r.get("reason"), detail=r.get("detail"))
+        if r["state"] == "exported":
+            return f"재검토 기록 커밋 {r['commit'][:7]} (ADR {len(ids)}개)"
+        why = r.get("reason") + (f": {r['detail']}" if r.get("detail") else "")
+        return f"재검토 기록 커밋 막힘 ({why}) — 파일은 ADR repo 작업 사본에 남았다"
+
     def run(self, flow, trigger="manual"):
-        """흐름 하나를 한 번 돌린다 (스텁 대본, 데모면 실제 모델). 코어 그래프를 그대로 부르고 보고서만 요약한다. 스냅숏 모드 + dry-run (check_scope)."""
+        """흐름 하나를 한 번 돌린다 (스텁 대본, 데모·실사용이면 실제 모델). 코어 그래프를 그대로 부르고 보고서만 요약한다.
+        스냅숏 모드 + dry-run (check_scope) — 실사용 모드도 그래프는 dry-run ctx로 돌고, 내보내기는 답과 기록 커밋만 한다."""
         self.check_flow(flow)
         with self.lock:
-            ctx = self.ctx()
+            ctx = self.ctx(export=False)
             if self.pscript is not None:  # 프로필 대본 — 판단표는 프로필 스냅숏(`<data>/snapshots`)의 소식·출처를 읽고 적은 것
                 if flow == "detect":
                     fn, script = detect, {"detect": self.pscript["detect"]}
@@ -837,10 +948,17 @@ class RadarService:
             res = {"id": f"{ctx.now}-{flow}", "flow": flow, "at": ctx.now, "mode": self.mode, "trigger": trigger, "ok": True, "error": None,
                    "summary": [], "drafts": [], "alerts": [], "excluded": []}
             try:
+                notes = []
+                if self.mode == "real":
+                    notes = self._prepare_real(flow)
+                    ctx.env["RADAR_SNAPSHOT_DIR"] = self.snapshot_dir  # 방금 고른 detect 입력
                 rep, diag = asyncio.run(fn(ctx, self.chat(flow, script), ctx.now, self.model_name))
                 res.update(self._summarize_detect(rep) if flow == "detect" else self._summarize_revisit(rep))
+                res["summary"] = notes + res["summary"]
                 if flow == "revisit":
                     self._record_alerts(res["alerts"], ctx.now)  # 충족 알림은 Inbox로 (화면 설계 ③)
+                    if self.mode == "real":
+                        res["summary"] += [x for x in [self._export_record(rep)] if x]
                 if diag.get("p3_errors"):
                     res["summary"].append(f"오류 {len(diag['p3_errors'])}건: " + "; ".join(e.get("kind", "?") for e in diag["p3_errors"]))
             except Exception as e:  # 실행이 죽어도 앱은 산다 — 기록에 남기고 보인다
@@ -904,6 +1022,44 @@ class RadarService:
 
 
 _SECTION = re.compile(r"^## (.+)$", re.M)
+_WEEK_DIR = re.compile(r"^\d{4}-W\d{2}$")
+
+
+def _git(cwd, *args):
+    """git 한 번 → 출력(앞뒤 공백 뺌), 실패면 None. 묻지 않는다(GIT_TERMINAL_PROMPT=0) — 인증이 필요하면 실패로 끝난다."""
+    try:
+        p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=120,
+                           env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"})
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return p.stdout.strip() if p.returncode == 0 else None
+
+
+def _same_dir(a, b):
+    """같은 폴더인가 — 문자열로 비교하지 않는다. macOS 임시 폴더는 /var → /private/var 링크, Windows는 8.3 짧은 이름(RUNNER~1)이 섞인다."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
+def _overlaps(a, b):
+    """한 폴더가 다른 폴더 안(또는 같은 폴더)인가. 링크·짧은 이름을 풀고 비교하고, Windows에서 드라이브가 다르면 안 겹친다."""
+    a, b = (os.path.normcase(os.path.realpath(p)) for p in (a, b))
+    try:
+        return os.path.commonpath([a, b]) in (a, b)
+    except ValueError:  # 다른 드라이브 (C: / D:)
+        return False
+
+
+def _latest_feed(snapshot_repo):
+    """radar-snapshots/detect/<주차>/ 중 feed.json이 있는 가장 새 주차. 없으면 None."""
+    root = os.path.join(snapshot_repo, DETECT_FEEDS)
+    try:
+        weeks = sorted((n for n in os.listdir(root) if _WEEK_DIR.match(n) and os.path.exists(os.path.join(root, n, "feed.json"))), reverse=True)
+    except OSError:
+        return None
+    return os.path.join(root, weeks[0]) if weeks else None
 
 
 def _parse_adr(text):

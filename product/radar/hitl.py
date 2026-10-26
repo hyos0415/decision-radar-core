@@ -1084,6 +1084,36 @@ def sync_exporter(ctx, exporter=None):
     return s if s["state"] == "blocked" else None
 
 
+def record_only_errors(old_text, new_text):
+    """기존 ADR 두 판이 기록용 칸(MACHINE_FIELDS · MACHINE_KEYS_ANYWHERE)만 다른가 — 기록 커밋의 내용 검사. 오류 문자열 | None.
+    지문과 같은 기준(`_strip_machine`)이다: radar.py가 yaml을 다시 쓰므로 글자가 아니라 파싱한 값으로 비교한다. 본문은 글자 그대로."""
+    def parts(text):
+        text = text.replace("\r\n", "\n")
+        m = _FM.match(text)
+        try:
+            fm = yaml.safe_load(m.group(1)) if m else None
+        except yaml.YAMLError:
+            fm = None
+        return (_strip_machine(fm), text[m.end():]) if isinstance(fm, dict) else None
+
+    old, new = parts(old_text), parts(new_text)
+    if old is None or new is None:
+        return "프론트매터를 못 읽었다"
+    if old[1] != new[1]:
+        return "본문이 바뀌었다"
+    keys = sorted(k for k in set(old[0]) | set(new[0]) if _canon(old[0].get(k)) != _canon(new[0].get(k)))
+    return f"칸이 바뀌었다: {keys}" if keys else None
+
+
+def export_record(ctx, paths, message, exporter=None):
+    """revisit 직후 — radar.py decide --apply가 쓴 기록용 칸을 커밋 1개로 main에 (사용자 10/27). 내용 검사는 `record_only_errors`.
+    paths는 절대 경로(decide의 files_written). git 내보내기가 아니면(eval·dry-run·스텁·로컬 사본) skipped."""
+    ex = exporter or exporter_for(ctx)
+    if not hasattr(ex, "publish_record"):
+        return {"state": "skipped", "reason": "no_exporter"}
+    return ex.publish_record([_rel(ctx, p) for p in paths], message, only_record=lambda _rel_, old, new: record_only_errors(old, new))
+
+
 def review_queue(ctx):
     """검토 대기·보류 항목 — Inbox가 보일 목록 (대기 일수는 since에서)."""
     d, out = items_dir(ctx), []

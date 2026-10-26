@@ -730,7 +730,7 @@ export interface components {
        * Mode
        * @enum {string}
        */
-      mode: 'stub' | 'demo'
+      mode: 'stub' | 'demo' | 'real'
       /**
        * Profile
        * @description 개발 데이터 프로필 (default · andbread)
@@ -746,11 +746,17 @@ export interface components {
        * @description 이 모드에서 돌릴 수 있는 흐름 — 데모는 detect만
        */
       flows: ('detect' | 'revisit')[]
+      /**
+       * Engine
+       * @description detect·revisit 실행 엔진 — 스텁은 null, 데모는 api, 실사용은 RADAR_APP_ENGINE
+       */
+      engine?: ('claude-cli' | 'api') | null
       /** Data Dir */
       data_dir: string
       /** Adr Dir */
       adr_dir: string
       demo?: components['schemas']['DemoInfo'] | null
+      real?: components['schemas']['RealInfo'] | null
     }
     /** InboxDetail */
     InboxDetail: {
@@ -951,7 +957,7 @@ export interface components {
        * Mode
        * @enum {string}
        */
-      mode: 'stub' | 'demo'
+      mode: 'stub' | 'demo' | 'real'
       /**
        * Preview
        * @description capture: 대화 첫 줄 (Inbox에 접수된 항목 제목)
@@ -1130,6 +1136,47 @@ export interface components {
       ok: boolean
     }
     /**
+     * RealInfo
+     * @description 실사용 모드 (RADAR_APP_MODE=real, HYO-99) — 실제 ADR repo에 쓰고 승인은 main에 push한다.
+     */
+    RealInfo: {
+      /**
+       * Adr Repo
+       * @description 실제 ADR repo 작업 사본 (main)
+       */
+      adr_repo: string
+      /**
+       * Snapshot Repo
+       * @description radar-snapshots 작업 사본 — 실행 전에 pull만 한다
+       */
+      snapshot_repo: string
+      /**
+       * Snapshot
+       * @description 지금 detect 입력 폴더 (radar-snapshots/detect/<주차>). 아직 없으면 null
+       */
+      snapshot: string | null
+      /**
+       * Week
+       * @description detect 입력 주차 (예 2026-W44)
+       */
+      week: string | null
+      /**
+       * Claude Bin
+       * @description 구독 CLI 바이너리 (엔진이 claude-cli일 때)
+       */
+      claude_bin: string | null
+      /**
+       * Api Key
+       * @description .env에 ANTHROPIC_API_KEY가 있나 — capture는 API로 돈다. 값은 보이지 않는다
+       */
+      api_key: boolean
+      /**
+       * Funnel
+       * @description 건수 한 줄: 수집 → 레인 A → 관문 남김 → detect 입력
+       */
+      funnel: string | null
+    }
+    /**
      * RevisitCondition
      * @description 초안의 재검토 조건 — R17 (2026-09-30).
      */
@@ -1241,7 +1288,7 @@ export interface components {
        * Mode
        * @enum {string}
        */
-      mode: 'stub' | 'demo'
+      mode: 'stub' | 'demo' | 'real'
       /**
        * Trigger
        * @description manual · schedule · job
@@ -1526,6 +1573,18 @@ export interface components {
        * @description 스텁 — 토큰이 글자 수/4 추정이고 비용 0 (배관 확인용)
        */
       estimated: boolean
+      /**
+       * Billing
+       * @description subscription = 구독 CLI(`claude -p`) — 과금이 없어 cost_usd가 null
+       * @default api
+       * @enum {string}
+       */
+      billing: 'stub' | 'api' | 'subscription' | 'mixed'
+      /**
+       * Cost Usd Equiv
+       * @description 구독 CLI가 알려 준 정가 환산 (USD) — 실제로 낸 돈이 아니다. 엔진 비교용
+       */
+      cost_usd_equiv?: number | null
     }
     /** ValidationError */
     ValidationError: {

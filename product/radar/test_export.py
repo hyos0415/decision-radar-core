@@ -848,6 +848,85 @@ def e_review_cli(h, X, w):
     return ok_list and ok_dry and ok_ans, (lst, dry, ap, rj, bad)
 
 
+# 기록 커밋 (사용자 10/27) — revisit 직후 revisit_last_checked만 승인 없이 main에
+
+@scen
+def e_record_commit(h, X, w):
+    """기록용 칸만 바뀐 기존 ADR 둘 → 커밋 1개(M만) → push. 바뀐 게 없으면 skipped"""
+    ex = w.ex(X)
+    touch_machine(w.adr, "0004")
+    touch_machine(w.adr, "0003", result="met")
+    paths = [adr_path(w, "0004"), adr_path(w, "0003")]
+    r = h.export_record(w.ctx(), paths, "radar revisit: 기록", ex)
+    files = w.commit_files(w.rhead()) if r["state"] == "exported" else None
+    rels = {"docs/adr/" + os.path.basename(p): "M" for p in paths}
+    empty = h.export_record(w.ctx(), [], "빈 기록", ex)
+    return (r["state"] == "exported" and w.count() == 1 and files == rels and w.lhead() == w.rhead()
+            and "revisit_last_checked" in w.remote_show(min(rels)) and git(w.root, "status", "--porcelain") == ""
+            and empty["state"] == "skipped"), (r, files, empty)
+
+
+@scen
+def e_record_refuses_other_fields(h, X, w):
+    """기록용 칸 밖의 변경은 커밋하지 않는다 — status · 본문 · 새 ADR 파일 · 스테이징에 낀 다른 변경. 원격은 그대로"""
+    ex = w.ex(X)
+    head = w.lhead()
+    out = {}
+    touch_machine(w.adr, "0004")
+    p4 = adr_path(w, "0004")
+    th.sub_file(p4, "status: ", "status: x")  # 기록과 함께 status가 바뀌었다 (R8 위반)
+    out["status"] = h.export_record(w.ctx(), [p4], "status", ex)
+    git(w.root, "checkout", "--", ".")
+    touch_machine(w.adr, "0004")
+    with open(p4, "a", encoding="utf-8", newline="\n") as f:
+        f.write("\n사람이 덧붙인 줄\n")
+    out["body"] = h.export_record(w.ctx(), [p4], "본문", ex)
+    git(w.root, "checkout", "--", ".")
+    new = os.path.join(w.adr, "0009-new.md")
+    open(new, "w", encoding="utf-8", newline="\n").write("---\nstatus: proposed\n---\n# n\n")
+    out["new"] = h.export_record(w.ctx(), [new], "새 파일", ex)
+    os.remove(new)
+    touch_machine(w.adr, "0004")
+    th.sub_file(os.path.join(w.root, "radar-targets.json"), "medical-mate", "medical-mate2")
+    git(w.root, "add", "radar-targets.json")
+    out["staged"] = h.export_record(w.ctx(), [p4], "섞임", ex)
+    ok = (all(r["state"] == "blocked" for r in out.values()) and w.rhead() == head and w.lhead() == head
+          and "이미 있는 ADR 파일만" in out["new"].get("detail", "") and "기록용 칸 밖" in out["status"].get("detail", "")
+          and "기록용 칸 밖" in out["body"].get("detail", ""))
+    return ok, out
+
+
+@scen
+def e_record_remote_ahead(h, X, w):
+    """원격이 앞섬 — 사람이 다른 ADR을 고쳤으면 ff 뒤 기록만 커밋 · 같은 ADR을 고쳤으면 막고 기록은 작업 트리에 남긴다"""
+    ex = w.ex(X)
+    touch_machine(w.adr, "0004")
+    p4 = adr_path(w, "0004")
+    w.human_push(lambda d: th.sub_file(os.path.join(d, "docs", "adr", os.path.basename(adr_path(w, "0003"))), "status: ", "status: x"))
+    r1 = h.export_record(w.ctx(), [p4], "기록 1", ex)
+    files1 = w.commit_files(w.rhead()) if r1["state"] == "exported" else None
+    ok1 = r1["state"] == "exported" and files1 == {"docs/adr/" + os.path.basename(p4): "M"} and w.count() == 2
+    touch_machine(w.adr, "0004", result="met", at="2026-10-20T09:07:00+09:00")
+    w.human_push(lambda d: th.sub_file(os.path.join(d, "docs", "adr", os.path.basename(p4)), "status: ", "status: x"))
+    head = w.rhead()
+    r2 = h.export_record(w.ctx(), [p4], "기록 2", ex)
+    ok2 = r2["state"] == "blocked" and w.rhead() == head and "met" in open(p4, encoding="utf-8").read()
+    return ok1 and ok2, (r1, r2)
+
+
+@scen
+def e_record_dry_run(h, X, w):
+    """dry-run이면 기록 커밋도 git을 안 부른다 — exporter_for(dry-run ctx)는 내보내기가 없고, GitExporter(dry_run)도 건너뛴다"""
+    touch_machine(w.adr, "0004")
+    p4 = adr_path(w, "0004")
+    head = w.rhead()
+    dry_ctx = w.ctx()
+    dry_ctx.dry_run = True
+    r1 = h.export_record(dry_ctx, [p4], "dry ctx")
+    r2 = h.export_record(w.ctx(), [p4], "dry exporter", w.ex(X, dry_run=True))
+    return r1["state"] == "skipped" and r2 == {"state": "skipped", "reason": "dry_run"} and w.rhead() == head, (r1, r2)
+
+
 # 2. 그래프 ───────────────────────────────────────────────────────────
 
 def graph_scen():
@@ -984,6 +1063,14 @@ MUTANTS = [
     ("로컬 내보내기가 재검사 생략 (사본이 바뀌어도 승인)", "export", [("if check is not None:  # MUT:local_recheck", "if False:  # MUT:local_recheck")], ["e_local_export_stale"]),
     ("RADAR_EXPORT=local을 무시 (detect 검토를 화면에서 못 받음)", "hitl", [('if ctx.env.get("RADAR_EXPORT") == "local":', 'if False:')], ["e_local_export_review"]),
     ("같은 번호가 들어와도 커밋", "hitl", [("if taken:  # 그 사이 같은 번호의 다른 ADR이", "if False:  # 그 사이 같은 번호의 다른 ADR이")], ["e_sync_blocks"]),
+    ("기록 커밋이 내용 검사를 안 봄", "export", [("if err:  # MUT:record_only", "if False:  # MUT:record_only")], ["e_record_refuses_other_fields"]),
+    ("기록 검사가 기록용 칸 밖 변경도 넘김", "hitl", [('return f"칸이 바뀌었다: {keys}" if keys else None', "return None")], ["e_record_refuses_other_fields"]),
+    ("기록 검사가 본문 변경을 넘김", "hitl", [('return "본문이 바뀌었다"', "pass")], ["e_record_refuses_other_fields"]),
+    ("기록 커밋이 추적 안 된 파일도 받음", "export", [("if not (ALLOW_ADR.match(rel) and self.is_tracked(rel)):  # MUT:record_tracked", "if False:  # MUT:record_tracked")],
+     ["e_record_refuses_other_fields"]),
+    ("기록 커밋에 다른 스테이징이 섞임", "export", [("if self._staged():  # MUT:record_prestaged", "if False:  # MUT:record_prestaged"), ("if bad:  # MUT:record_staged", "if False:  # MUT:record_staged")],
+     ["e_record_refuses_other_fields"]),
+    ("기록 커밋이 dry-run에서 git을 부름", "export", [("if self.dry_run:  # MUT:dry_run_record", "if False:  # MUT:dry_run_record")], ["e_record_dry_run"]),
 ]
 
 

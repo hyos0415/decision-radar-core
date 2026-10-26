@@ -5,6 +5,7 @@
            관문 → detect 입력(`pipeline.detect_feed`)을 만드는 단계는 아직 이 예약에 없다 — 데모(HYO-85·88)는 손으로 만든다
 
 기본은 꺼짐 — `RADAR_SCHEDULE=on`일 때만 돈다. 개발 데이터가 저절로 바뀌면(detect 초안 → 대기 항목이 낡음) 화면을 볼 때 헷갈린다.
+실사용 모드(`RADAR_APP_MODE=real`)만 기본 켜짐 — 주간 실행은 앱이 한다 (사용자 10/26, server.serve). 실행 전 radar-snapshots pull은 service.run이 한다.
 앱이 꺼져 있을 때의 정기 실행(D2)은 여기서 다루지 않는다.
 """
 

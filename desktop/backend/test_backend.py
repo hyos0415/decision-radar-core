@@ -8,6 +8,7 @@ edit(검사 실패는 쓰지 않음, status 칸 거부) · 거부 · 버림 · �
 HYO-85: 로컬 내보내기로 detect 초안 승인·수정·거부 · 「왜 왔나」 · 작업+폴링 · 데모 모드(대역 모델 — 사본에만 쓰기, 원본 무변경, 안전장치).
 HYO-110: 지난 알림 목록(클릭 짝 · 열어 봄 · 항목의 지금 상태 · 묶은 알림).
 HYO-127: 화제 탭(레인 C) — 주차 목록 · k 자르기 · 저장/저장 빼기 · capture의 topic · 개발 예시.
+HYO-99: 실사용 모드 — 임시 git repo + 로컬 bare remote · 대역 모델로 시작 거부 · ctx 둘 · snapshots pull · 승인/거부/기록 커밋 · capture push.
 """
 
 import glob
@@ -180,11 +181,206 @@ def main():
         scenario_hyo110(tmp)
         scenario_hyo127(tmp)
         scenario_hyo132(tmp)
+        scenario_real(tmp)
     finally:
         os.environ.pop("RADAR_EXPORT", None)
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\n{'OK' if not FAILS else 'FAILED'} — 실패 {len(FAILS)}")
     return 1 if FAILS else 0
+
+
+def _git(cwd, *args):
+    import subprocess
+    p = subprocess.run(["git", "-c", "core.quotepath=off", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+                       env={**os.environ, "LC_ALL": "C"})
+    if p.returncode:
+        raise RuntimeError(f"git {' '.join(args)} → {p.returncode}: {p.stderr.strip()[:200]}")
+    return p.stdout.strip()
+
+
+def _clone(remote, dst):
+    _git(os.path.dirname(dst), "clone", "-q", remote, dst)
+    for k, v in (("user.name", "radar-test"), ("user.email", "radar@example.invalid"), ("commit.gpgsign", "false")):
+        _git(dst, "config", k, v)
+
+
+def _alias(path, root):
+    """같은 폴더를 다른 글자로 부르는 경로 — POSIX는 심볼릭 링크, Windows는 8.3 짧은 이름(없으면 링크 시도). 못 만들면 None."""
+    if sys.platform == "win32":
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        if ctypes.windll.kernel32.GetShortPathNameW(path, buf, len(buf)) and buf.value.lower() != path.lower():
+            return buf.value
+    link = os.path.join(root, "adr-link")
+    try:
+        os.symlink(path, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        return None
+    return link
+
+
+def scenario_real(tmp):
+    """HYO-99 3단계 실사용 모드 — 실제 ADR repo 대신 임시 git repo + 로컬 bare remote, 모델 자리엔 대역(StubChat). GitHub·API에 닿지 않는다.
+    시작 거부 · ctx 둘(실행 dry-run / 답 git) · radar-snapshots pull → 가장 새 detect 입력 · 초안은 작업 사본에만 · 승인 = main에 커밋 1개 ·
+    거부는 닫힌 항목 기록만 커밋 · revisit 기록 커밋(기록용 칸만, 승인 없이) · capture 승인도 push."""
+    print("\n— HYO-99: 실사용 모드 —")
+    from radar import script as stub_scripts
+    from radar.stub_model import StubChat
+    saved = {k: os.environ.get(k) for k in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM")}
+    os.environ.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")  # 전역 git 설정(서명·autocrlf)이 흔들지 않게
+    try:
+        _scenario_real(tmp, stub_scripts, StubChat)
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+
+def _scenario_real(tmp, stub_scripts, StubChat):
+    root = os.path.join(tmp, "real")
+    os.makedirs(root)
+    # ADR repo: 픽스처를 main으로 커밋해 bare remote에 올리고 앱의 작업 사본·「사람」의 clone을 둔다
+    seedsrc = os.path.join(root, "seed")
+    shutil.copytree(os.path.join(devdata.FIX, "adr-fixture"), seedsrc)
+    for r in ("finance-verifier", "medical-mate"):  # radar-targets.json이 ../<repo>로 가리킨다
+        shutil.copytree(os.path.join(devdata.FIX, "repos", r), os.path.join(root, r))
+    adr_remote = os.path.join(root, "adr.git")
+    _git(root, "init", "--bare", "-q", "-b", "main", adr_remote)
+    _git(seedsrc, "init", "-q", "-b", "main")
+    _git(seedsrc, "add", "-A")
+    _git(seedsrc, "-c", "user.name=s", "-c", "user.email=s@x.invalid", "commit", "-q", "-m", "fixture")
+    _git(seedsrc, "push", "-q", adr_remote, "main")
+    adr = os.path.join(root, "adr")
+    _clone(adr_remote, adr)
+    base = _git(adr_remote, "rev-parse", "main")
+    # radar-snapshots: 수집 PC(windows)가 detect 입력을 push하고, 앱 쪽 작업 사본은 pull만 한다
+    snap_remote = os.path.join(root, "snap.git")
+    _git(root, "init", "--bare", "-q", "-b", "main", snap_remote)
+    win = os.path.join(root, "snap-windows")
+    _git(root, "init", "-q", "-b", "main", win)
+    for k, v in (("user.name", "w"), ("user.email", "w@x.invalid"), ("commit.gpgsign", "false")):
+        _git(win, "config", k, v)
+    open(os.path.join(win, "README.md"), "w", encoding="utf-8").write("snap\n")
+    _git(win, "add", "-A")
+    _git(win, "commit", "-q", "-m", "init")
+    _git(win, "push", "-q", snap_remote, "main")
+    snaps = os.path.join(root, "radar-snapshots")
+    _clone(snap_remote, snaps)
+    devdata.ensure_snapshots(os.path.join(root, "devsnap"))
+    shutil.copytree(os.path.join(root, "devsnap", "snapshots"), os.path.join(win, "detect", "2026-W44"))
+    _git(win, "add", "-A")
+    _git(win, "commit", "-q", "-m", "detect 2026-W44")
+    _git(win, "push", "-q", snap_remote, "main")
+
+    def fake(flow):
+        if flow == "detect":
+            return StubChat(script=stub_scripts.detect_script(), flow=flow)
+        if flow == "revisit":
+            return StubChat(script=stub_scripts.revisit_script(stub_scripts.SCRIPT["cases"]["JHS-001"]), flow=flow)
+        return StubChat(script=stub_scripts.capture_script(service.DEFAULT_STUB), flow=flow)
+
+    data = os.path.join(root, "app-data")
+    kw = dict(app_mode="real", real_adr=adr, snapshot_repo=snaps, engine="api", chat_factory=fake)
+
+    # 시작 거부 — 실제 ADR repo가 아니면 열지 않는다
+    plain = os.path.join(root, "plain")
+    shutil.copytree(os.path.join(devdata.FIX, "adr-fixture"), plain)
+    side = os.path.join(root, "side")
+    _clone(adr_remote, side)
+    _git(side, "checkout", "-q", "-b", "feature")
+    old_bin = os.environ.get("RADAR_CLAUDE_BIN")
+    os.environ["RADAR_CLAUDE_BIN"] = os.path.join(root, "no-such-claude")
+    try:
+        for over, name, needle in (({"real_adr": plain}, "git이 아닌 폴더", "git 작업 사본"),
+                                   ({"real_adr": os.path.join(adr, "docs")}, "repo 맨 위가 아님", "git 작업 사본"),
+                                   ({"real_adr": side}, "main이 아닌 브랜치", "main이 아니다"),
+                                   ({"real_adr": root, "engine": "api"}, "docs/adr 없음", "docs"),
+                                   ({"engine": "claude-cli"}, "claude CLI 없음", "claude CLI"),
+                                   ({"engine": "codex"}, "모르는 엔진", "RADAR_APP_ENGINE")):
+            try:
+                RadarService(data if over.get("real_adr") != root else os.path.join(tmp, "elsewhere"), **{**kw, **over})
+                check(f"실사용 시작 거부: {name}", False)
+            except ServiceError as e:
+                check(f"실사용 시작 거부: {name}", needle in e.message, e.message)
+        try:
+            RadarService(os.path.join(adr, "data"), **kw)
+            check("실사용 시작 거부: 데이터 폴더가 ADR repo 안", False)
+        except ServiceError as e:
+            check("실사용 시작 거부: 데이터 폴더가 ADR repo 안", "겹친다" in e.message, e.message)
+        for extra, name in (({"demo": True}, "데모와 같이"), ({"model": "anthropic"}, "RADAR_APP_MODEL과 같이"), ({"app_mode": "live"}, "모르는 모드")):
+            try:
+                RadarService(data, **{**kw, **extra})
+                check(f"실사용 시작 거부: {name}", False)
+            except ServiceError:
+                check(f"실사용 시작 거부: {name}", True)
+    finally:
+        os.environ.pop("RADAR_CLAUDE_BIN") if old_bin is None else os.environ.__setitem__("RADAR_CLAUDE_BIN", old_bin)
+
+    # 같은 폴더를 다른 글자로 부르면 — 문자열 비교였을 때 CI에서 거부됐다 (macOS /var → /private/var, Windows RUNNER~1)
+    alias = _alias(os.path.abspath(adr), root)
+    if alias is None:
+        print("SKIP 실사용 시작: 다른 글자로 부른 ADR repo (링크·짧은 이름을 못 만든다)")
+    else:
+        try:
+            RadarService(os.path.join(root, "alias-data"), **{**kw, "real_adr": alias})
+            check("실사용 시작: 다른 글자로 부른 ADR repo도 맨 위로 인정", True)
+        except ServiceError as e:
+            check("실사용 시작: 다른 글자로 부른 ADR repo도 맨 위로 인정", False, f"{alias}: {e.message}")
+        check("겹침 검사: 다른 글자로 불러도 ADR repo 안 데이터 폴더는 겹친다", service._overlaps(alias, os.path.join(adr, "data")))
+    if sys.platform == "win32":
+        check("겹침 검사: 드라이브가 다르면 안 겹친다 (예외 아님)", service._overlaps("C:\\radar-x", "D:\\radar-y") is False)
+
+    svc = RadarService(data, **kw)
+    app = server.create_app(svc)
+    c = TestClient(app)
+    h = c.get("/health").json()
+    check("실사용 health: mode real · 엔진 · ADR repo · 아직 입력 없음(pull 전)", h["mode"] == "real" and h["engine"] == "api" and h["flows"] == ["detect", "revisit"]
+          and h["real"]["adr_repo"] == os.path.abspath(adr) and h["real"]["week"] is None and h["adr_dir"].startswith(os.path.abspath(adr)), h)
+    check("실사용 ctx 둘: 답은 git(dry-run 아님) · 실행은 로컬(dry-run)", svc.env()["RADAR_EXPORT"] == "git" and svc.env()["RADAR_DRY_RUN"] == "0"
+          and svc.env(export=False)["RADAR_EXPORT"] == "local" and svc.env(export=False)["RADAR_DRY_RUN"] == "1")
+    check("스텁 모드는 그대로 로컬 · dry-run", all(RadarService(os.path.join(tmp, "data")).env(x)["RADAR_DRY_RUN"] == "1" for x in (None, True, False)))
+
+    # detect — pull로 새 주차를 받고, 초안은 작업 사본에만 (원격 무변경)
+    r = c.post("/runs/detect", json={}).json()
+    check("실사용 detect: pull한 입력 주차 · 초안", r["ok"] and r["mode"] == "real" and "입력 2026-W44" in r["summary"] and r["drafts"], r)
+    check("실사용 detect: 원격은 그대로 (승인 전 push 0)", _git(adr_remote, "rev-parse", "main") == base)
+    untracked = _git(adr, "status", "--porcelain")
+    check("실사용 detect: 초안은 작업 사본에 미추적으로", all(line.startswith("??") for line in untracked.splitlines()) and "docs/adr/" in untracked, untracked)
+    rows = [i for i in c.get("/inbox").json()["items"] if i["kind"] == "detect"]
+    check("실사용 Inbox: detect 항목 · 답 가능", len(rows) >= 2 and all(i["actions"] == ["approve", "edit", "reject"] for i in rows), rows)
+    a = c.post(f"/inbox/{rows[0]['id']}/approve", json={}).json()
+    files = _git(adr_remote, "diff-tree", "--no-commit-id", "--name-status", "-r", "main")
+    check("실사용 승인 → main에 커밋 1개 (새 ADR + 항목 파일, A만)", a["outcome"] == "written" and _git(adr_remote, "rev-list", "--count", f"{base}..main") == "1"
+          and f"docs/adr/" in files and ".radar/items/" in files and all(line.startswith("A") for line in files.splitlines()), (a, files))
+    head = _git(adr_remote, "rev-parse", "main")
+    rj = c.post(f"/inbox/{rows[1]['id']}/reject", json={}).json()
+    files = _git(adr_remote, "diff-tree", "--no-commit-id", "--name-status", "-r", "main")
+    check("실사용 거부 → 초안 지움 · 닫힌 항목 기록만 커밋 (ADR 파일 없음)", rj["outcome"] == "rejected" and _git(adr_remote, "rev-parse", "main~1") == head
+          and files.startswith("A\t.radar/items/") and len(files.splitlines()) == 1 and not glob.glob(os.path.join(svc.adr_dir, rj["adr"] + "-*.md")), (rj, files))
+    head = _git(adr_remote, "rev-parse", "main")
+
+    # revisit — 기록용 칸만 승인 없이 커밋, 충족 알림은 Inbox로
+    rv = c.post("/runs/revisit", json={}).json()
+    rec = [x for x in rv["summary"] if x.startswith("재검토 기록 커밋")]
+    files = _git(adr_remote, "diff-tree", "--no-commit-id", "--name-status", "-r", "main")
+    check("실사용 revisit → 기록 커밋 1개 (기존 ADR 수정 M만)", rv["ok"] and rec and "막힘" not in rec[0] and _git(adr_remote, "rev-parse", "main~1") == head
+          and files and all(line.startswith("M\tdocs/adr/") for line in files.splitlines()), (rv["summary"], files))
+    check("실사용 revisit: 커밋 내용은 기록용 칸만", all(hitl.record_only_errors(_git(adr_remote, "show", f"main~1:{line.split(chr(9))[1]}"),
+                                                                  _git(adr_remote, "show", f"main:{line.split(chr(9))[1]}")) is None for line in files.splitlines()))
+    check("실사용 revisit: 충족 알림 → Inbox", any(i["kind"] == "revisit" for i in c.get("/inbox").json()["items"]))
+    check("실사용 revisit: 행동 로그에 기록 커밋", any(e["event"] == "revisit_record" and e["detail"]["state"] == "exported" for e in events(svc)))
+    # 사람이 다른 clone에서 push해 원격이 앞섬 → 다음 실행이 따라잡고(ff) capture 승인도 그 위에 push한다 (기록 커밋이 막히는 경우는 test_export.py)
+    human = os.path.join(root, "human")
+    _clone(adr_remote, human)
+    open(os.path.join(human, "README-human.md"), "w", encoding="utf-8").write("사람\n")
+    _git(human, "add", "-A")
+    _git(human, "commit", "-q", "-m", "사람의 변경")
+    _git(human, "push", "-q", "origin", "main")
+    hh = _git(adr_remote, "rev-parse", "main")
+    res = svc.submit_capture("Kopii small 모델을 쓸지 정하자")
+    ap = c.post(f"/inbox/{res['item']}/approve", json={}).json() if res.get("item") else {}
+    check("실사용 capture 승인 → main에 커밋", ap.get("outcome") == "written" and _git(adr_remote, "rev-list", "--count", f"{hh}..main") == "1", (res, ap))
+    u = r.get("usage") or {}
+    check("실사용 사용량: billing (대역은 api) · 정가 환산 칸", u.get("billing") == "api" and "cost_usd_equiv" in u and not u.get("estimated"), u)
 
 
 def scenario_m2(data):

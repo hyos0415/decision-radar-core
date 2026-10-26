@@ -1,4 +1,5 @@
 """git 내보내기 — 승인 = ADR repo main에 바로 커밋·push (설계 docs/design/hitl-state.md 결정 8, §5-2, HYO-44).
+예외 하나: revisit의 기록용 칸(`revisit_last_checked`)은 승인 없이 커밋한다 (`publish_record`, 사용자 10/27 — 데스크톱 실사용 모드).
 
 이 모듈은 git 기계장치만 안다 (ADR repo의 어느 항목이 무엇인지는 hitl.py의 몫). 안전장치 넷:
 
@@ -188,21 +189,73 @@ class GitExporter(Exporter):
                     before()
                 self._git("add", "--", *paths)
                 self._verify_staged(paths)
-                parent = self._out("rev-parse", "HEAD")
-                self._git("commit", "-q", "-m", message)
-                sha = self._out("rev-parse", "HEAD")
-                self._hook("committed")
-                p = self._git("push", self.remote, f"HEAD:{self.branch}", ok=None)
-                if p.returncode == 0:
-                    return {"state": "exported", "commit": sha, "attempts": attempts, "paths": paths}
-                err = (p.stderr or p.stdout).strip()
-                if self._out("rev-parse", "HEAD") == sha:  # MUT:undo — 되돌린다: 로컬 커밋 취소, 파일은 작업 트리에 그대로
-                    self._git("reset", "-q", "--soft", parent)
-                    self._git("reset", "-q", "--", *paths)
-                if undo is not None:
-                    undo()
-                if not any(m in err for m in RACE_MARKERS):  # 경합이 아니라 다른 실패(인증·네트워크) — 다시 돌지 않는다
-                    return {"state": "blocked", "reason": "push_failed", "detail": err[:300]}
+                r = self._commit_push(paths, message, attempts, undo)
+                if r is not None:
+                    return r
+            return {"state": "blocked", "reason": "push_rejected", "attempts": attempts}
+        except ExportRefused as e:
+            return {"state": "blocked", "reason": "refused", "detail": str(e)}
+
+    def _commit_push(self, paths, message, attempts, undo=None):
+        """스테이징 검사가 끝난 paths를 커밋 1개로 push한다. 결과 dict, 또는 None = 경합으로 거부돼 되돌렸다 (호출자가 다시 돈다)."""
+        parent = self._out("rev-parse", "HEAD")
+        self._git("commit", "-q", "-m", message)
+        sha = self._out("rev-parse", "HEAD")
+        self._hook("committed")
+        p = self._git("push", self.remote, f"HEAD:{self.branch}", ok=None)
+        if p.returncode == 0:
+            return {"state": "exported", "commit": sha, "attempts": attempts, "paths": paths}
+        err = (p.stderr or p.stdout).strip()
+        if self._out("rev-parse", "HEAD") == sha:  # MUT:undo — 되돌린다: 로컬 커밋 취소, 파일은 작업 트리에 그대로
+            self._git("reset", "-q", "--soft", parent)
+            self._git("reset", "-q", "--", *paths)
+        if undo is not None:
+            undo()
+        if not any(m in err for m in RACE_MARKERS):  # 경합이 아니라 다른 실패(인증·네트워크) — 다시 돌지 않는다
+            return {"state": "blocked", "reason": "push_failed", "detail": err[:300]}
+        return None
+
+    # ── 기록 커밋 (사용자 10/27) ─────────────────────────────────────
+    def publish_record(self, paths, message, *, only_record):
+        """이미 있는 ADR의 기록용 칸만 바뀐 파일들을 커밋 1개로 main에 push한다 — revisit 직후 `revisit_last_checked` (radar.py decide --apply).
+        사람 승인 없이 나가는 유일한 길이라 좁게 연다: 추적 중인 ADR 파일만 · 수정(M)만 · 내용은 only_record가 통과시킨 것만.
+        only_record(rel, head_text, work_text) → 오류 문자열 | None — 무엇이 기록용 칸인지는 hitl이 안다.
+        원격이 앞서 있으면 sync(ff)가 먼저다. 사람이 같은 파일을 고쳐 push했으면 ff가 막히고 커밋하지 않는다 — 기록은 작업 트리에 남는다."""
+        if self.dry_run:  # MUT:dry_run_record
+            return {"state": "skipped", "reason": "dry_run"}
+        paths = list(paths)
+        if not paths:
+            return {"state": "skipped", "reason": "nothing"}
+        try:
+            for rel in paths:
+                if not (ALLOW_ADR.match(rel) and self.is_tracked(rel)):  # MUT:record_tracked
+                    raise ExportRefused(f"기록 커밋은 이미 있는 ADR 파일만: {rel}")
+            attempts = 0
+            while attempts < self.max_attempts:
+                attempts += 1
+                s = self.sync()
+                if s["state"] != "ok":
+                    return {**s, "state": "blocked"}
+                self._hook("synced")
+                if self._staged():  # MUT:record_prestaged
+                    raise ExportRefused(f"스테이징에 이미 변경이 있다: {sorted(self._staged())}")
+                for rel in paths:  # sync 뒤의 HEAD와 비교한다 — 그 사이 원격이 바꾼 칸이 기록 커밋에 실려 나가지 않게
+                    head = self._git("show", f"HEAD:{rel}").stdout
+                    try:
+                        with open(os.path.join(self.root, *rel.split("/")), encoding="utf-8") as f:
+                            err = only_record(rel, head, f.read())
+                    except OSError as e:
+                        raise ExportRefused(f"기록 파일을 못 읽었다: {rel} — {e}")
+                    if err:  # MUT:record_only
+                        raise ExportRefused(f"기록용 칸 밖의 변경: {rel} — {err}")
+                self._git("add", "--", *paths)
+                staged = self._staged()
+                bad = sorted(rel for rel, st in staged.items() if rel not in paths or st != "M")
+                if bad:  # MUT:record_staged
+                    raise ExportRefused(f"기록 커밋에 수정 말고 다른 변경이 섞였다: {bad}")
+                r = self._commit_push(paths, message, attempts)
+                if r is not None:
+                    return r
             return {"state": "blocked", "reason": "push_rejected", "attempts": attempts}
         except ExportRefused as e:
             return {"state": "blocked", "reason": "refused", "detail": str(e)}
