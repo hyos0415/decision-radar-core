@@ -19,19 +19,16 @@ import operator
 import uuid
 from typing import Annotated, TypedDict
 
-from langchain.agents import create_agent
-from langchain.agents.structured_output import ProviderStrategy
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-from common import ops
-from common.core import Ctx, check_scope
+from common.core import check_scope
 from common.schemas import AdrDraft
 
-from . import detect_ops, hitl, llm_log
+from . import detect_ops, hitl
 from .detect_prompts import DRAFT_INSTRUCTIONS, REPAIR_INSTRUCTIONS, TRIAGE_INSTRUCTIONS, draft_prompt, repair_prompt, triage_prompt
 from .detect_schemas import DraftBody, Triage
-from .revisit import limit
+from .engines import as_runner
 from .tools import DETECT_TOOLS
 
 DETECT_MAX_TURNS = 8  # 소식 몇 건을 열어 보고 답 한 번이면 끝난다. 넘으면 루프로 보고 오류로 센다 (P3)
@@ -56,12 +53,10 @@ def _item_for(feed, urls):
 
 
 def detect_graph(ctx, model):
-    triage_agent = create_agent(model, tools=DETECT_TOOLS, system_prompt=TRIAGE_INSTRUCTIONS,
-                                response_format=ProviderStrategy(Triage), context_schema=Ctx, name="detect-triage")
-    repair_agent = create_agent(model, tools=DETECT_TOOLS, system_prompt=REPAIR_INSTRUCTIONS,
-                                response_format=ProviderStrategy(DraftBody), context_schema=Ctx, name="detect-repair")
-    draft_agent = create_agent(model, tools=DETECT_TOOLS, system_prompt=DRAFT_INSTRUCTIONS,
-                               response_format=ProviderStrategy(DraftBody), context_schema=Ctx, name="detect-draft")
+    runner = as_runner(model)  # 에이전트 셋(triage·draft·repair)을 돌리는 실행 엔진 (engines.py, HYO-99)
+
+    def agent(name, system, schema, user):
+        return runner.run(name=name, system=system, user=user, schema=schema, tools=DETECT_TOOLS, ctx=ctx, max_turns=DETECT_MAX_TURNS)
 
     run = {"id": None}
 
@@ -75,12 +70,11 @@ def detect_graph(ctx, model):
         if not feed:  # 소식이 없으면 모델을 부르지 않는다 — 조용한 주가 정상이다 (R3)
             return {"kept": [], "skipped": [], "dropped": [], "excluded": []}
         try:
-            r = await triage_agent.ainvoke({"messages": [{"role": "user", "content": triage_prompt(state["now"], state["stack"], feed)}]},
-                                           context=ctx, config={"recursion_limit": limit(DETECT_MAX_TURNS)})
+            r = await agent("detect-triage", TRIAGE_INSTRUCTIONS, Triage, triage_prompt(state["now"], state["stack"], feed))
         except Exception as e:  # 400·파싱 실패·recursion limit — 후보 없음으로 두고 오류로 센다 (R1: 추측으로 채우지 않는다)
             return {"kept": [], "skipped": [], "dropped": [], "excluded": [],
                     "p3": [{"kind": "model_error", "stage": "triage", "type": type(e).__name__, "message": str(e)[:300]}]}
-        t = r["structured_response"]
+        t = r.structured
         cands = [c.model_dump() for c in t.candidates]
         kept, skipped, dropped = detect_ops.screen(ctx, cands, state["feed"])
         return {"kept": kept, "skipped": skipped, "dropped": dropped, "excluded": [e.model_dump() for e in t.excluded]}
@@ -95,12 +89,11 @@ def detect_graph(ctx, model):
         cand = w["candidate"]
         related = [{k: r[k] for k in ("id", "status", "technology", "use")} for r in w["related"]]
         try:
-            r = await draft_agent.ainvoke({"messages": [{"role": "user", "content": draft_prompt(inp["now"], cand, inp["item"], related)}]},
-                                          context=ctx, config={"recursion_limit": limit(DETECT_MAX_TURNS)})
+            r = await agent("detect-draft", DRAFT_INSTRUCTIONS, DraftBody, draft_prompt(inp["now"], cand, inp["item"], related))
         except Exception as e:
             return {"p3": [{"kind": "model_error", "stage": "draft", "technology": cand["technology"], "type": type(e).__name__,
                             "message": str(e)[:300]}]}
-        return {"drafts": [{"w": w, "draft": r["structured_response"].model_dump()}]}
+        return {"drafts": [{"w": w, "draft": r.structured.model_dump()}]}
 
     def write_node(state):
         written = []
@@ -128,10 +121,9 @@ def detect_graph(ctx, model):
                 continue
             item = _item_for(state["feed"], x["candidate"]["source_urls"])
             try:
-                r = await repair_agent.ainvoke({"messages": [{"role": "user", "content": repair_prompt(
-                    state["now"], x["candidate"], item, x["body"], x["validate_errors"])}]},
-                    context=ctx, config={"recursion_limit": limit(DETECT_MAX_TURNS)})
-                body = r["structured_response"].model_dump()
+                r = await agent("detect-repair", REPAIR_INSTRUCTIONS, DraftBody,
+                                repair_prompt(state["now"], x["candidate"], item, x["body"], x["validate_errors"]))
+                body = r.structured.model_dump()
             except Exception as e:
                 p3.append({"kind": "model_error", "stage": "repair", "adr": x["id"], "type": type(e).__name__, "message": str(e)[:300]})
                 out.append(x)
@@ -165,8 +157,9 @@ def detect_graph(ctx, model):
 
 async def detect(ctx, model, now, model_name):
     check_scope(ctx)
-    log = llm_log.attach(model, ctx, "detect", model_name)
-    s = await detect_graph(ctx, model).ainvoke({"now": now, "drafts": [], "p3": []})
+    runner = as_runner(model)
+    log = runner.attach_log(ctx, "detect", model_name)
+    s = await detect_graph(ctx, runner).ainvoke({"now": now, "drafts": [], "p3": []})
     p3 = list(s.get("p3") or [])
     p3 += [{"kind": "draft_invalid", "adr": c["adr"], "errors": c["validate_errors"]}
            for c in s["report"]["candidates"] if c["validate_errors"]]
