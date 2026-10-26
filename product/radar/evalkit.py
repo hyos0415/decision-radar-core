@@ -136,21 +136,26 @@ def run_control(rt, name, c, flow, root):
 
 # ── main ─────────────────────────────────────────────────────────────
 
-def main(argv=None):
+def build_parser(rt):
     ap = argparse.ArgumentParser(description="Decision Radar 제품 eval — 53케이스 (LangGraph 비교 모드)")
     ap.add_argument("cases", nargs="*", help="기본: 53케이스 전부 (+ --stub면 음성 대조)")
     ap.add_argument("--stub", action="store_true", help="스텁 모델 (API 없음) — 배관 검증일 뿐이다")
     ap.add_argument("--model", choices=["stub", "anthropic"], default=None, help="anthropic = 실제 Claude (API 과금, .env 키)")
     ap.add_argument("--k", type=int, default=1)
     ap.add_argument("--controls", action="store_true", help="케이스를 지정해도 음성 대조를 돈다 (스텁)")
-    a = ap.parse_args(argv)
+    rt.add_args(ap)  # --engine api|claude-cli (HYO-99) — 빠져 있어 제품 eval이 늘 API로 돌았다
+    return ap
+
+
+def main(argv=None):
+    rt = Runtime()
+    a = build_parser(rt).parse_args(argv)
     kind = a.model or ("stub" if a.stub else None)
     if kind is None:
         sys.exit("--stub 또는 --model anthropic")
     if kind != "stub" and not a.cases:
         sys.exit("실제 모델은 케이스를 명시한다 — 과금 (API)")
     stub = kind == "stub"
-    rt = Runtime()
     real = None if stub else rt.real_spec(a)
 
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S") + f"-product-{'stub' if stub else rt.label(real)}"
