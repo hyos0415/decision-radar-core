@@ -18,7 +18,7 @@ from common.schemas import AdrDraft, Affected  # noqa: F401 — 계약에 그대
 
 Action = Literal["approve", "edit", "reject", "ack"]
 StaleAnswer = Literal["continue", "rejudge", "discard"]
-Mode = Literal["stub", "demo"]
+Mode = Literal["stub", "demo", "real"]
 ItemState = Literal["awaiting_approval", "stale", "review", "pending", "blocked",  # capture · detect
                     "queued", "running", "error", "linked", "no_draft",  # 접수된 capture (화면 설계 ①)
                     "met", "not_met", "undetermined"]  # revisit 충족 알림 (화면 설계 ③)
@@ -44,15 +44,28 @@ class DemoInfo(BaseModel):
     funnel: Optional[str] = Field(description="건수 한 줄: 수집 → 레인 A → 관문 남김 → detect 입력")
 
 
+class RealInfo(BaseModel):
+    """실사용 모드 (RADAR_APP_MODE=real, HYO-99) — 실제 ADR repo에 쓰고 승인은 main에 push한다."""
+    adr_repo: str = Field(description="실제 ADR repo 작업 사본 (main)")
+    snapshot_repo: str = Field(description="radar-snapshots 작업 사본 — 실행 전에 pull만 한다")
+    snapshot: Optional[str] = Field(description="지금 detect 입력 폴더 (radar-snapshots/detect/<주차>). 아직 없으면 null")
+    week: Optional[str] = Field(description="detect 입력 주차 (예 2026-W44)")
+    claude_bin: Optional[str] = Field(description="구독 CLI 바이너리 (엔진이 claude-cli일 때)")
+    api_key: bool = Field(description=".env에 ANTHROPIC_API_KEY가 있나 — capture는 API로 돈다. 값은 보이지 않는다")
+    funnel: Optional[str] = Field(description="건수 한 줄: 수집 → 레인 A → 관문 남김 → detect 입력")
+
+
 class Health(BaseModel):
     ok: bool
     mode: Mode
     profile: str = Field(description="개발 데이터 프로필 (default · andbread)")
     model: str = Field(description="stub 또는 실제 모델 이름")
     flows: list[Flow] = Field(description="이 모드에서 돌릴 수 있는 흐름 — 데모는 detect만")
+    engine: Optional[Literal["claude-cli", "api"]] = Field(default=None, description="detect·revisit 실행 엔진 — 스텁은 null, 데모는 api, 실사용은 RADAR_APP_ENGINE")
     data_dir: str
     adr_dir: str
     demo: Optional[DemoInfo] = None
+    real: Optional[RealInfo] = None
 
 
 # ── Inbox ─────────────────────────────────────────────────────────
@@ -65,6 +78,8 @@ class Usage(BaseModel):
     output_tokens: int
     cost_usd: Optional[float] = Field(description="실제 비용 (USD). 단가를 모르는 모델이 섞이면 null — 0이 아니다. 스텁·로컬 모델은 0")
     estimated: bool = Field(description="스텁 — 토큰이 글자 수/4 추정이고 비용 0 (배관 확인용)")
+    billing: Literal["stub", "api", "subscription", "mixed"] = Field(default="api", description="subscription = 구독 CLI(`claude -p`) — 과금이 없어 cost_usd가 null")
+    cost_usd_equiv: Optional[float] = Field(default=None, description="구독 CLI가 알려 준 정가 환산 (USD) — 실제로 낸 돈이 아니다. 엔진 비교용")
 
 
 class CardAction(BaseModel):

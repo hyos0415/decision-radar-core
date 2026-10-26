@@ -48,8 +48,8 @@ npm run dev          # Electron 창 + 트레이 + 백엔드 자동 기동. 처�
 
 | 무엇 | 어떻게 |
 |---|---|
-| 실제 모델(과금) | 기본은 스텁. **데모 모드**(아래)에서만 — `RADAR_APP_MODEL=anthropic`과 `RADAR_APP_DEMO=1`을 같이 줘야 하고, 하나만 있으면 시작을 거부한다 |
-| 내보내기(git push) | 없다. 백엔드가 물려받은 `RADAR_EXPORT`를 지우고 **로컬 내보내기**(`RADAR_EXPORT=local` — git을 부르지 않고 승인 기록만, `export.LocalExporter`) + `RADAR_DRY_RUN=1`로 띄운다. Electron main도 자식 환경에서 `RADAR_EXPORT`를 지운다 |
+| 실제 모델(과금) | 기본은 스텁. **데모 모드**(아래)에서만 — `RADAR_APP_MODEL=anthropic`과 `RADAR_APP_DEMO=1`을 같이 줘야 하고, 하나만 있으면 시작을 거부한다. **실사용 모드**(아래, `RADAR_APP_MODE=real`)는 레포 주인 기기에서만 |
+| 내보내기(git push) | 스텁·데모는 없다. 백엔드가 물려받은 `RADAR_EXPORT`를 지우고 **로컬 내보내기**(`RADAR_EXPORT=local` — git을 부르지 않고 승인 기록만, `export.LocalExporter`) + `RADAR_DRY_RUN=1`로 띄운다. Electron main도 자식 환경에서 `RADAR_EXPORT`를 지운다 |
 | 쓰는 곳 | 데이터 폴더의 ADR 사본뿐(스텁: `adr-fixture`, 데모: `adr` = 실제 ADR repo의 복사본). 실제 ADR repo는 읽기만 한다 |
 | 키 | 백엔드만 `.env`를 읽는다(스텁 모드는 읽지도 않는다). main·화면에는 넘기지 않는다 |
 | status | 화면에 status 칸이 없다. edit에 status·번호 칸이 오면 코어(`hitl.check_edit`)가 거부한다 (R8) |
@@ -107,6 +107,20 @@ RADAR_APP_DEMO=1 RADAR_APP_MODEL=anthropic RADAR_DEMO_SNAPSHOT=pipeline/out/w41/
 - 처음 뜰 때 실제 ADR repo(`RADAR_DEMO_ADR`, 기본 `../adr`)를 `<data>/adr`로 복사한다 — 그 뒤로는 사본에만 쓴다. 처음부터 다시 하려면 데이터 폴더를 지운다
 - detect만 실제 모델(Sonnet 5.5)로 돈다. revisit은 409. capture도 실제 모델이 대화를 읽는다
 - W41 실측(10/8): detect 작업 14초 · 호출 2회 · 입력 3.8만 토큰 — 약 $0.1
+
+## 실사용 모드 (HYO-99 3단계 — 레포 주인 기기, 실제 ADR repo에 push)
+
+```bash
+RADAR_APP_MODE=real npm run dev     # [RADAR_REAL_ADR=../adr] [RADAR_SNAPSHOT_REPO=../radar-snapshots] [RADAR_APP_ENGINE=claude-cli|api]
+```
+
+- 시작 검사: ADR repo가 git 작업 사본의 맨 위 · main · origin 있음 · `docs/adr`·`radar-targets.json` 있음 · 데이터 폴더와 안 겹침 · (claude-cli 엔진이면) CLI 바이너리. 틀리면 시작을 거부한다. 데모·`RADAR_APP_MODEL`과 같이 주면 거부
+- 데이터 폴더 = `RADAR_APP_DATA` 또는 `~/.decision-radar` (행동 로그 = 실사용 지표라 레포 밖에 둔다)
+- 엔진: detect·revisit = 구독 CLI(`claude -p`, 기본) 또는 api. capture는 API — `.env`에 `ANTHROPIC_API_KEY`가 없으면 capture가 409
+- 실행 전에 radar-snapshots를 **pull만** 하고 가장 새 `detect/<주차>/`(pipeline.detect_feed 출력)를 detect 입력으로 쓴다 — 만드는 쪽은 수집 PC의 주간 작업. ADR repo는 원격을 따라잡는다(ff)
+- 그래프 실행은 dry-run — detect 초안은 작업 사본에만 쓰고 Inbox 검토 대기. **승인 = 커밋 1개를 main에 push**, 거부 = 초안을 지우고 닫힌 항목 기록만 커밋
+- revisit 직후 `revisit_last_checked`만 바뀐 ADR은 승인 없이 커밋·push한다(`hitl.export_record` — 기록용 칸 밖이 바뀌었으면 거부하고 작업 사본에 남긴다)
+- 정기 실행이 기본 켜짐(`RADAR_SCHEDULE=off`로 끈다) — revisit 월 09:00 · detect 화 18:00
 
 **스텁 모드에서 무엇이 진짜인가.** 그래프·도구·`radar.py`·HITL(write-ahead·지문·edit 검사)은 코어 그대로 돈다. 가짜는 모델의 판단뿐이다 —
 capture는 대화에 나온 기술·repo로 미리 적은 대본(`product/radar/stub_script.json`)을 고르고(`service.pick_stub`, 맞는 게 없으면 기본 대본 + 표시),

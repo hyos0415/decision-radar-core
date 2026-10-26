@@ -2843,7 +2843,8 @@
             "type": "string",
             "enum": [
               "stub",
-              "demo"
+              "demo",
+              "real"
             ],
             "title": "Mode"
           },
@@ -2869,6 +2870,22 @@
             "title": "Flows",
             "description": "이 모드에서 돌릴 수 있는 흐름 — 데모는 detect만"
           },
+          "engine": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "claude-cli",
+                  "api"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine",
+            "description": "detect·revisit 실행 엔진 — 스텁은 null, 데모는 api, 실사용은 RADAR_APP_ENGINE"
+          },
           "data_dir": {
             "type": "string",
             "title": "Data Dir"
@@ -2881,6 +2898,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/DemoInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "real": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RealInfo"
               },
               {
                 "type": "null"
@@ -3372,7 +3399,8 @@
             "type": "string",
             "enum": [
               "stub",
-              "demo"
+              "demo",
+              "real"
             ],
             "title": "Mode"
           },
@@ -3770,6 +3798,85 @@
         ],
         "title": "Ok"
       },
+      "RealInfo": {
+        "properties": {
+          "adr_repo": {
+            "type": "string",
+            "title": "Adr Repo",
+            "description": "실제 ADR repo 작업 사본 (main)"
+          },
+          "snapshot_repo": {
+            "type": "string",
+            "title": "Snapshot Repo",
+            "description": "radar-snapshots 작업 사본 — 실행 전에 pull만 한다"
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot",
+            "description": "지금 detect 입력 폴더 (radar-snapshots/detect/<주차>). 아직 없으면 null"
+          },
+          "week": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Week",
+            "description": "detect 입력 주차 (예 2026-W44)"
+          },
+          "claude_bin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claude Bin",
+            "description": "구독 CLI 바이너리 (엔진이 claude-cli일 때)"
+          },
+          "api_key": {
+            "type": "boolean",
+            "title": "Api Key",
+            "description": ".env에 ANTHROPIC_API_KEY가 있나 — capture는 API로 돈다. 값은 보이지 않는다"
+          },
+          "funnel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Funnel",
+            "description": "건수 한 줄: 수집 → 레인 A → 관문 남김 → detect 입력"
+          }
+        },
+        "type": "object",
+        "required": [
+          "adr_repo",
+          "snapshot_repo",
+          "snapshot",
+          "week",
+          "claude_bin",
+          "api_key",
+          "funnel"
+        ],
+        "title": "RealInfo",
+        "description": "실사용 모드 (RADAR_APP_MODE=real, HYO-99) — 실제 ADR repo에 쓰고 승인은 main에 push한다."
+      },
       "RevisitCondition": {
         "properties": {
           "id": {
@@ -4042,7 +4149,8 @@
             "type": "string",
             "enum": [
               "stub",
-              "demo"
+              "demo",
+              "real"
             ],
             "title": "Mode"
           },
@@ -4619,6 +4727,30 @@
             "type": "boolean",
             "title": "Estimated",
             "description": "스텁 — 토큰이 글자 수/4 추정이고 비용 0 (배관 확인용)"
+          },
+          "billing": {
+            "type": "string",
+            "enum": [
+              "stub",
+              "api",
+              "subscription",
+              "mixed"
+            ],
+            "title": "Billing",
+            "description": "subscription = 구독 CLI(`claude -p`) — 과금이 없어 cost_usd가 null",
+            "default": "api"
+          },
+          "cost_usd_equiv": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd Equiv",
+            "description": "구독 CLI가 알려 준 정가 환산 (USD) — 실제로 낸 돈이 아니다. 엔진 비교용"
           }
         },
         "type": "object",

@@ -5,6 +5,8 @@
 개발 데이터 프로필은 `--profile` 또는 `RADAR_DEVDATA` (비우면 default) — 데이터 폴더는 `RADAR_APP_DATA` > `--data-dir` > 프로필의 기본 폴더 순.
 데모 모드(HYO-85): `RADAR_APP_DEMO=1` + `RADAR_APP_MODEL=anthropic` + `RADAR_DEMO_SNAPSHOT=<detect 입력 폴더>` [`RADAR_DEMO_ADR=../adr`].
   데이터 폴더 기본은 `desktop/.dev-data-demo` — 개발 데이터(스텁 픽스처)를 만들지 않고 ADR repo 사본을 만든다. 실제 모델(과금)이다.
+실사용 모드(HYO-99): `RADAR_APP_MODE=real` [`RADAR_REAL_ADR=../adr` · `RADAR_SNAPSHOT_REPO=../radar-snapshots` · `RADAR_APP_ENGINE=claude-cli|api`].
+  실제 ADR repo에 쓰고 승인은 main에 push한다. 데이터 폴더 기본은 `~/.decision-radar`. 정기 실행이 기본 켜짐 (service.py 머리말).
 
 API 모양: desktop/README.md 「백엔드 API」. 엔드포인트는 전부 동기 함수다 — 코어(capture)가 안에서 asyncio.run을 쓰고,
 FastAPI가 동기 함수를 스레드 풀에서 돌리므로 이벤트 루프가 겹치지 않는다. 쓰기는 RadarService의 lock 하나로 줄 세운다.
@@ -31,6 +33,7 @@ import schemas as S  # noqa: E402  — service가 코어 경로를 올린 뒤에
 
 DEFAULT_DATA = devprofiles.data_dir_for(devprofiles.DEFAULT)
 DEMO_DATA = os.path.join(os.path.dirname(HERE), ".dev-data-demo")
+REAL_DATA = os.path.join(os.path.expanduser("~"), ".decision-radar")
 API_VERSION = "1.0.0"  # 계약 버전 — 화면이 깨질 변경이면 올린다
 ERR = {"model": S.ErrorBody, "description": "서비스 오류 — detail 한 줄"}
 
@@ -169,6 +172,19 @@ def main(argv=None):
         sys.exit("localhost에서만 띄운다")
     for s in (sys.stdout, sys.stderr):
         s.reconfigure(encoding="utf-8")
+    if os.environ.get("RADAR_APP_MODE") == "real":  # 실사용 모드 (HYO-99) — 개발 데이터를 만들지 않는다. 검사는 RadarService가 한다
+        # --data-dir은 보지 않는다 — Electron이 늘 스텁 개발 데이터 폴더를 넘긴다. 실사용 기록(행동 로그 = 실사용 지표)은 레포 밖에 둔다
+        data_dir = os.environ.get("RADAR_APP_DATA") or REAL_DATA
+        if devdata.is_seeded(data_dir):
+            sys.exit(f"실사용 모드: {data_dir}는 스텁 개발 데이터 폴더다 — 섞이지 않게 다른 폴더(RADAR_APP_DATA)를 쓴다")
+        try:
+            svc = RadarService(data_dir)
+        except ServiceError as e:
+            sys.exit(e.message)
+        h = svc.health()
+        print(f"실사용 모드 — ADR repo {h['real']['adr_repo']} (승인 = main push) · 엔진 {h['engine']} · detect 입력 {h['real']['week'] or '없음'}"
+              f" · capture 키 {'있음' if h['real']['api_key'] else '없음'} · 데이터 {data_dir}", flush=True)
+        return serve(svc, a)
     if os.environ.get("RADAR_APP_DEMO") == "1":  # 데모 모드 — 개발 데이터를 만들지 않는다. 사본·검사는 RadarService가 한다
         # --data-dir은 보지 않는다 — Electron이 늘 스텁 개발 데이터 폴더를 넘긴다. 데모는 따로(RADAR_APP_DATA > .dev-data-demo)
         data_dir = os.environ.get("RADAR_APP_DATA") or DEMO_DATA
@@ -203,7 +219,8 @@ def main(argv=None):
 
 
 def serve(svc, a):
-    scheduler_on = os.environ.get("RADAR_SCHEDULE") == "on"  # 기본 꺼짐 — scheduling.py 머리말
+    # 기본 꺼짐(scheduling.py 머리말) — 실사용 모드만 기본 켜짐: 주간 실행은 앱이 한다 (사용자 10/26). RADAR_SCHEDULE=off로 끈다
+    scheduler_on = os.environ.get("RADAR_SCHEDULE", "on" if svc.mode == "real" else "off") == "on"
     if scheduler_on:
         scheduling.Scheduler(svc).start()
         print(f"정기 실행 켜짐 ({', '.join(f['slot'] + ' ' + f['flow'] for f in scheduling.describe(scheduling.dt.datetime.now().astimezone(), [], True, svc.flows)['flows'])}"
