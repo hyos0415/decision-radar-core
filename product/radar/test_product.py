@@ -55,6 +55,13 @@ added = set(re.findall(r'g\.add_node\("(\w+)"', src))
 check("노드 = {load, triage, draft, write, repair, report}", added == {"load", "triage", "draft", "write", "repair", "report"}, sorted(added))
 check("모델에게 주는 도구는 읽기뿐 (snapshot_*)", [t.name for t in DETECT_TOOLS] == ["snapshot_fetch", "snapshot_search"])
 
+# 제품 eval이 엔진을 고를 수 있다 (HYO-99) — run_eval.py가 --engine을 안 받아 CLI 스모크가 늘 API로 돌던 틈
+from radar.evalkit import build_parser  # noqa: E402
+from radar.runtime import Runtime  # noqa: E402
+_rt = Runtime()
+check("eval --engine claude-cli → 구독 CLI 엔진", _rt.real_spec(build_parser(_rt).parse_args(["--model", "anthropic", "--engine", "claude-cli", "JHS-001"]))["kind"] == "claude-cli")
+check("eval 엔진 기본값은 api", _rt.real_spec(build_parser(_rt).parse_args(["--model", "anthropic", "JHS-001"]))["kind"] == "anthropic")
+
 print("3. 격리 검사가 detect trace 모양을 문다")
 c = Ctx(radar_py=os.path.join(rc.ROOT, ".claude", "skills", "jhs-decisions", "scripts", "radar.py"), env={}, adr_dir=".", targets={}, dry_run=True)
 c.record("Bash", {"command": f"python {c.radar_py} snapshot feed"})  # 레포의 radar.py를 직접 부름 (CTRL-repo-path-detect와 같은 모양)
