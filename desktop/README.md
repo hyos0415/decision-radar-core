@@ -124,7 +124,7 @@ RADAR_APP_MODE=real npm run dev     # [RADAR_REAL_ADR=../adr] [RADAR_SNAPSHOT_RE
 - revisit 직후 `revisit_last_checked`만 바뀐 ADR은 승인 없이 커밋·push한다(`hitl.export_record` — 기록용 칸 밖이 바뀌었으면 거부하고 작업 사본에 남긴다)
 - 정기 실행이 기본 켜짐(`RADAR_SCHEDULE=off`로 끈다) — revisit 월 09:00 · detect 화 18:00
 
-## Mac 검증 (10/27 — Windows로 쓰다 Mac으로 옮긴다, 두 경로 다 검증)
+## Mac 검증 (10/26 — Windows로 쓰다 Mac으로 옮긴다, 두 경로 다 검증)
 
 CI(`.github/workflows/desktop.yml`) 백엔드 검사는 Windows에서 PR마다 돈다. macOS는 켤 때만 돈다 — GitHub의 Mac 러너는 사용 시간을 10배로 센다(private repo).
 

@@ -1,7 +1,7 @@
 # 데스크톱 앱 검사 — PR마다 · main push마다 (desktop/를 건드렸을 때)
 # 브랜치 보호가 없는 요금제라 merge를 막지는 못한다. 초록불을 보고 merge하는 것은 약속이다 (ONBOARDING.md §7)
 #
-# 백엔드는 쓰는 기기 두 OS에서 돈다 (10/27 사용자: Windows로 쓰다 Mac으로 옮긴다 — 두 경로 다 검증).
+# 백엔드는 쓰는 기기 두 OS에서 돈다 (10/26 사용자: Windows로 쓰다 Mac으로 옮긴다 — 두 경로 다 검증).
 #   Windows  PR마다 (GitHub 러너, 사용 시간 2배로 셈)
 #   macOS    켤 때만 — PR에 `mac` 라벨 · 수동 실행(workflow_dispatch) · 저장소 변수 MAC_RUNNER=on.
 #            MAC_RUNNER=on이면 GitHub 러너(10배로 셈) 대신 등록한 M1(self-hosted, 차감 없음)에서 PR마다 돈다 — desktop/README.md 「Mac 검증」

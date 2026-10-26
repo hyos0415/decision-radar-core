@@ -17,7 +17,7 @@
     `RADAR_DRY_RUN=1`을 강제한다 — git push가 켜질 길이 없다 (`hitl.exporter_for`)
   - 키(.env)는 이 프로세스만 읽는다 (스텁 모드에서는 읽지도 않는다)
 
-실사용 모드 (`RADAR_APP_MODE=real`, HYO-99 3단계 — 레포 주인 결정 10/27): 실제 ADR repo(`RADAR_REAL_ADR`, 기본 `../adr`)에 쓰고 main에 push한다.
+실사용 모드 (`RADAR_APP_MODE=real`, HYO-99 3단계 — 레포 주인 결정 10/26): 실제 ADR repo(`RADAR_REAL_ADR`, 기본 `../adr`)에 쓰고 main에 push한다.
   - 시작 검사: ADR repo가 git 작업 사본의 맨 위 · main 브랜치 · origin 있음 · docs/adr와 radar-targets.json 있음 · 데이터 폴더와 안 겹침.
     엔진이 claude-cli면 CLI 바이너리도. 하나라도 틀리면 시작을 거부한다 (데모·RADAR_APP_MODEL과 같이 주면 거부)
   - 엔진: detect·revisit = `RADAR_APP_ENGINE`(기본 claude-cli — 구독 `claude -p`, engines.ClaudeCliRunner) 또는 api. capture는 늘 API(.env 키)
@@ -947,7 +947,7 @@ class RadarService:
         return notes
 
     def _export_record(self, rep):
-        """revisit 직후 — 기록용 칸만 바뀐 ADR을 커밋 1개로 main에 (사용자 10/27). 요약 한 줄 (쓴 파일이 없으면 None)."""
+        """revisit 직후 — 기록용 칸만 바뀐 ADR을 커밋 1개로 main에 (사용자 10/26). 요약 한 줄 (쓴 파일이 없으면 None)."""
         files = rep.get("files_written") or []
         if not files:
             return None
