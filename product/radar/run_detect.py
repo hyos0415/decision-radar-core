@@ -53,11 +53,12 @@ def main(argv=None):
     ap.add_argument("--snapshot", required=True, help="detect가 읽을 스냅숏 폴더 (pipeline.detect_feed 출력)")
     ap.add_argument("--adr", required=True, help="ADR repo 폴더 (docs/adr · radar-targets.json) — 읽기만, 사본에 쓴다")
     ap.add_argument("--out", required=True, help="결과 폴더 (새 폴더여야 한다)")
-    ap.add_argument("--model", choices=["stub", "anthropic"], default="stub")
+    ap.add_argument("--model", choices=["stub", "anthropic", "claude-cli"], default="stub",
+                    help="claude-cli = 구독 `claude -p` 엔진 (HYO-99) — API 과금 없음, 구독 사용량을 쓴다")
     ap.add_argument("--real-api", action="store_true", help="실제 API 호출 허용 (--model anthropic에 필요)")
     ap.add_argument("--now", help="ISO 시각 (기본: 지금)")
     a = ap.parse_args(argv)
-    if a.model != "stub" and not a.real_api:
+    if a.model == "anthropic" and not a.real_api:
         raise SystemExit("--model anthropic은 과금이다 — --real-api를 같이 준다")
     snap = os.path.abspath(a.snapshot)
     if not os.path.exists(os.path.join(snap, "feed.json")):
@@ -74,7 +75,7 @@ def main(argv=None):
     ctx = Ctx.from_env(env, radar_py=SKILL_RADAR)
     now = a.now or dt.datetime.now().astimezone().isoformat(timespec="seconds")
     rt = runtime.Runtime()
-    spec = {"kind": "stub", "script": stub_scripts.detect_script()} if a.model == "stub" else {"kind": "anthropic"}
+    spec = {"kind": "stub", "script": stub_scripts.detect_script()} if a.model == "stub" else {"kind": a.model}
     shapes = rt.new_shapes(spec)
     with NetGuard(() if a.model == "stub" else ANTHROPIC) as ng:
         rep, diag = asyncio.run(rt.detect(ctx, rt.make_model(spec, shapes, "detect"), now, rt.settings(spec)))
@@ -84,7 +85,9 @@ def main(argv=None):
     s = summarize(rep, funnel, adr_dir)
     s.update({"now": now, "model": rt.settings(spec), "snapshot": snap, "p3_errors": diag.get("p3_errors") or [],
               "usage": {**{k: diag.get(k) for k in ("model_calls", "input_tokens", "output_tokens")},  # 비용은 호출마다 llm_call 줄에 있다
-                        "cost_usd": round(sum(e.get("cost_usd") or 0 for e in ctx.events if e.get("type") == "llm_call"), 5)},
+                        "cost_usd": None if a.model == "claude-cli" else round(sum(e.get("cost_usd") or 0 for e in ctx.events if e.get("type") == "llm_call"), 5),
+                        "billing": "subscription" if a.model == "claude-cli" else ("stub" if a.model == "stub" else "api"),
+                        "cost_usd_equiv": round(sum(e.get("cost_usd_equiv") or 0 for e in ctx.events if e.get("type") == "llm_call"), 5)},
               "net_attempts": ng.attempts})
     if s["p3_errors"]:
         s["summary"].append(f"오류 {len(s['p3_errors'])}건: " + "; ".join(e.get("kind", "?") for e in s["p3_errors"]))

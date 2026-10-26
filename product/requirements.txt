@@ -3,6 +3,7 @@ PyYAML==6.0.3
 
 # 런타임 1 — OpenAI Agents SDK
 openai-agents==0.22.3
+mcp==2.2.0  # 구독 CLI 엔진의 읽기 도구 서버 (radar/mcp_tools.py, HYO-99) — openai-agents도 끈다
 openai==3.22.1
 
 # 런타임 2 — LangGraph (+ LangChain v1 create_agent, 공식 Claude 통합)

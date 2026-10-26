@@ -16,6 +16,7 @@
 |---|---|
 | PyYAML | skill (`radar.py`) · collector · product |
 | openai-agents · openai | product (`spike/agents_sdk` — 최적화 모드, ADR 0008) |
+| mcp (MCP 파이썬 SDK 2.x) | product (`radar/mcp_tools.py` — 구독 CLI 엔진의 읽기 도구 서버, HYO-99) |
 | langgraph · langgraph-checkpoint · langgraph-checkpoint-sqlite · langchain · langchain-core · langchain-anthropic | product (`spike/langgraph_spike` — 비교 모드, ADR 0009) |
 | anthropic | product · pipeline (`pipeline/importance/claude_backend.py` — 관문 등급 재분류, HYO-122) |
 | litellm (별도 venv) | product (`spike/agents_sdk`의 Claude 경로) |
@@ -29,7 +30,7 @@
 
 | 모델·서비스 | component |
 |---|---|
-| Anthropic `claude-sonnet-5-5` (effort medium) — `claude -p`(eval 러너) · API(스파이크 · 관문 주간 등급 재분류 `weekly-tiers`, HYO-122) | eval · product · pipeline |
+| Anthropic `claude-sonnet-5-5` (effort medium) — `claude -p`(eval 러너 · 제품 구독 CLI 엔진 `engines.ClaudeCliRunner`, HYO-99) · API(스파이크 · 제품 API 엔진 · 관문 주간 등급 재분류 `weekly-tiers`, HYO-122) | eval · product · pipeline |
 | Claude Code routines (스킬 실사용, HYO-21) | skill |
 | OpenAI `gpt-6-sol` — `codex exec` (judge, HYO-20) | eval |
 | OpenAI `gpt-6-luna` (tier-screen, ADR 0007) | eval |

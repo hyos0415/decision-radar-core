@@ -103,7 +103,7 @@ def result_event(report, crash, **kw):
 
 
 def model_name(spec):
-    return "stub" if spec["kind"] == "stub" else f"anthropic/{MODEL}"
+    return "stub" if spec["kind"] == "stub" else f"{'claude-cli' if spec['kind'] == 'claude-cli' else 'anthropic'}/{MODEL}"
 
 
 def hosts(spec):
@@ -111,6 +111,9 @@ def hosts(spec):
 
 
 def add_cost(g, spec):
+    if spec["kind"] == "claude-cli":  # 구독 — API 비용이 아니다 (HYO-99). 정가 환산은 transcript의 llm_call.cost_usd_equiv
+        g["spike"]["cost_usd"], g["spike"]["billing"] = None, "subscription"
+        return
     if spec["kind"] != "stub" and g["spike"].get("input_tokens") is not None:
         g["spike"]["cost_usd"] = cost_usd(g["spike"]["input_tokens"], g["spike"]["output_tokens"])
 
