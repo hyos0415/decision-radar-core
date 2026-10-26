@@ -7,7 +7,8 @@
           · 게시: radar-snapshots에 detect/<주>/가 이미 커밋돼 있으면 「이미 만듦」 — 덮어쓰지 않는다 (얼린 주를 고치지 않는 것과 같다).
             관문(유료 API)도 그 경우엔 돌리지 않는다.
 게시 경로 radar-snapshots/detect/<YYYY-Www>/feed.json 은 데스크톱 앱(desktop/backend/service.py _latest_feed)과의 고정 계약이다.
-출력: collector/out/last-weekly.log (이어 쓰기) · last-weekly.json (요약). 종료 코드 0 = 멈춘 실패 없음.
+출력: collector/out/last-weekly-steps.log (단계 출력, 이어 쓰기) · last-weekly.json (요약). 종료 코드 0 = 멈춘 실패 없음.
+예약 작업의 콘솔 출력(last-weekly.log)과 파일을 나눈다 — Windows는 PowerShell이 `*>`로 잡고 있는 파일에 자식이 쓰면 PermissionError다.
 """
 import argparse
 import datetime as dt
@@ -24,6 +25,7 @@ if __package__ in (None, ""):
 from collector import snapshot  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
+STEP_LOG = "last-weekly-steps.log"  # 예약 작업 콘솔 로그(last-weekly.log)와 달라야 한다 — 위 머리말
 STEPS = ["collect", "freeze", "tiers", "gate", "feed", "publish"]
 DEFAULT_GATE = "gpt-6.1-sol"
 
@@ -99,7 +101,7 @@ def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None
     p = paths(env, root)
     out_dir = Path(out_dir or Path(root) / "collector" / "out")
     out_dir.mkdir(parents=True, exist_ok=True)
-    log = out_dir / "last-weekly.log"
+    log = out_dir / STEP_LOG
     gate = a.gate or (os.environ if env is None else env).get("RADAR_GATE") or DEFAULT_GATE
     start = STEPS.index(a.start)
     summary = {"week": a.week, "started": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "finished": None, "steps": []}

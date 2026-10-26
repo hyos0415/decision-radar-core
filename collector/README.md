@@ -27,7 +27,7 @@ python -m collector.weekly --from gate --week 2026-W44 [--no-push]   # 중간부
 python collector/tests/test_weekly.py                     # 오프라인 — 가짜 러너 · 임시 git
 ```
 
-- 관문(`pipeline.profile_filter --gate gpt-6.1-sol`, `RADAR_GATE`/`--gate`로 바꿈)은 **수집을 돌리는 기기의 `.env`에 `OPENAI_API_KEY`가 있어야** 한다. 없으면 관문에서 멈추고 feed·게시는 없다 (로그 `collector/out/last-weekly.log` · 요약 `last-weekly.json`).
+- 관문(`pipeline.profile_filter --gate gpt-6.1-sol`, `RADAR_GATE`/`--gate`로 바꿈)은 **수집을 돌리는 기기의 `.env`에 `OPENAI_API_KEY`가 있어야** 한다. 없으면 관문에서 멈추고 feed·게시는 없다 (단계 로그 `collector/out/last-weekly-steps.log` · 예약 작업 콘솔 `last-weekly.log` · 요약 `last-weekly.json`).
 - 게시는 `radar-snapshots`의 `detect/<주>/`만 커밋·push한다 (그 밖의 경로가 스테이징돼 있으면 거부). 이미 커밋돼 있으면 「이미 만듦」으로 건너뛰고 유료 관문도 다시 돌리지 않는다.
 - 프로필·대상·ADR 경로는 env `RADAR_PROFILE` · `RADAR_TARGETS` · `RADAR_ADR_DIR`, 없으면 `<레포 부모>/adr/...`.
 - **한 기기에서만** 돌린다 (아래 주간 스냅숏 참고) — Windows에서 Mac으로 옮길 때는 한쪽을 먼저 `-Remove`/`--remove`한다.
