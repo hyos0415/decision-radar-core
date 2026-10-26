@@ -1,16 +1,27 @@
 # 데스크톱 앱 검사 — PR마다 · main push마다 (desktop/를 건드렸을 때)
 # 브랜치 보호가 없는 요금제라 merge를 막지는 못한다. 초록불을 보고 merge하는 것은 약속이다 (ONBOARDING.md §7)
+#
+# 백엔드는 쓰는 기기 두 OS에서 돈다 (10/27 사용자: Windows로 쓰다 Mac으로 옮긴다 — 두 경로 다 검증).
+#   Windows  PR마다 (GitHub 러너, 사용 시간 2배로 셈)
+#   macOS    켤 때만 — PR에 `mac` 라벨 · 수동 실행(workflow_dispatch) · 저장소 변수 MAC_RUNNER=on.
+#            MAC_RUNNER=on이면 GitHub 러너(10배로 셈) 대신 등록한 M1(self-hosted, 차감 없음)에서 PR마다 돈다 — desktop/README.md 「Mac 검증」
 name: desktop
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     paths: ["desktop/**", "product/**", "requirements.txt", ".github/workflows/desktop.yml"]
   push:
     branches: [main]
     paths: ["desktop/**", "product/**", "requirements.txt", ".github/workflows/desktop.yml"]
+  workflow_dispatch:
+
+env:
+  PYTHONIOENCODING: utf-8   # Windows 러너 콘솔은 cp1252 — 한국어 출력에서 죽는다
 
 jobs:
   frontend:
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -31,7 +42,8 @@ jobs:
         run: npm run gen:api && git diff --exit-code src/renderer/src/lib/api.gen.ts
 
   backend:
-    runs-on: ubuntu-latest
+    if: github.event.action != 'labeled'
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,6 +54,25 @@ jobs:
             requirements.txt
             product/requirements.txt
       - run: pip install -r requirements.txt -r product/requirements.txt
-      - run: python desktop/backend/test_backend.py   # 스텁 · 임시 폴더 · 네트워크 없음
+      - run: python desktop/backend/test_backend.py   # 스텁 · 임시 폴더 · 네트워크 없음 (실사용 모드는 임시 git repo + 로컬 원격)
+      - run: python product/radar/test_engines.py     # 구독 CLI 엔진 — 가짜 CLI · 프로세스 종료가 OS마다 갈린다
+      - run: python product/radar/test_export.py      # git 내보내기 — 승인 push · revisit 기록 커밋
       - name: 계약(openapi.json)이 백엔드 모델과 같은가 (HYO-91)
         run: python desktop/backend/export_openapi.py --check
+
+  backend-mac:
+    if: vars.MAC_RUNNER == 'on' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'mac')
+    runs-on: ${{ vars.MAC_RUNNER == 'on' && fromJSON('["self-hosted", "macOS", "ARM64"]') || 'macos-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            product/requirements.txt
+      - run: pip install -r requirements.txt -r product/requirements.txt
+      - run: python desktop/backend/test_backend.py
+      - run: python product/radar/test_engines.py
+      - run: python product/radar/test_export.py

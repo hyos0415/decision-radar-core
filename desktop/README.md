@@ -122,6 +122,23 @@ RADAR_APP_MODE=real npm run dev     # [RADAR_REAL_ADR=../adr] [RADAR_SNAPSHOT_RE
 - revisit 직후 `revisit_last_checked`만 바뀐 ADR은 승인 없이 커밋·push한다(`hitl.export_record` — 기록용 칸 밖이 바뀌었으면 거부하고 작업 사본에 남긴다)
 - 정기 실행이 기본 켜짐(`RADAR_SCHEDULE=off`로 끈다) — revisit 월 09:00 · detect 화 18:00
 
+## Mac 검증 (10/27 — Windows로 쓰다 Mac으로 옮긴다, 두 경로 다 검증)
+
+CI(`.github/workflows/desktop.yml`) 백엔드 검사는 Windows에서 PR마다 돈다. macOS는 켤 때만 돈다 — GitHub의 Mac 러너는 사용 시간을 10배로 센다(private repo).
+
+- **한 번 돌려 보기**: PR에 `mac` 라벨을 붙이거나 Actions 탭에서 desktop → Run workflow. 끝나면 라벨을 뗀다 (붙어 있으면 push마다 돈다)
+- **M1을 러너로 등록** (차감 없음 — 그 기기가 켜져 있을 때만 돈다):
+  1. GitHub → Settings → Actions → Runners → New self-hosted runner → macOS · ARM64. 나오는 명령으로 받고 `./config.sh` (라벨은 기본값 `self-hosted, macOS, ARM64` 그대로)
+  2. 로그인할 때 뜨게: `./svc.sh install && ./svc.sh start`
+  3. Settings → Secrets and variables → Actions → Variables에 `MAC_RUNNER` = `on` — 이제 PR·main push마다 M1에서 돈다. 러너가 꺼져 있으면 그 검사는 대기 상태로 남는다(24시간 뒤 실패) → 오래 비울 땐 `off`
+  - 쓰기 권한이 있는 팀원의 PR 코드도 이 Mac에서 실행된다는 점을 알고 켠다
+
+**CI가 못 보는 것 — 기기 앞에서 손으로** (Mac으로 옮길 때 · Mac 쪽 코드를 바꿨을 때):
+- [ ] `RADAR_APP_MODE=real npm run dev`가 뜬다 — 시작 검사 통과 (`claude`는 `which claude`, 안 잡히면 `RADAR_CLAUDE_BIN`)
+- [ ] `claude auth status`가 로그인 상태 · detect·revisit 한 번 (구독 사용량을 쓴다)
+- [ ] 승인 1건이 `../adr` main에 push된다 · revisit 기록 커밋이 push된다
+- [ ] 앱을 끄면 백엔드·`claude` 자식 프로세스가 남지 않는다 (`ps aux | grep -E "uvicorn|claude -p"`)
+
 **스텁 모드에서 무엇이 진짜인가.** 그래프·도구·`radar.py`·HITL(write-ahead·지문·edit 검사)은 코어 그대로 돈다. 가짜는 모델의 판단뿐이다 —
 capture는 대화에 나온 기술·repo로 미리 적은 대본(`product/radar/stub_script.json`)을 고르고(`service.pick_stub`, 맞는 게 없으면 기본 대본 + 표시),
 detect·revisit는 eval 스냅숏(`<data>/snapshots` — Jev v0.9.0 릴리스로 0001 c1 충족, 소식 6건)에 정해진 판단표로 답한다. 웹에는 나가지 않는다.
