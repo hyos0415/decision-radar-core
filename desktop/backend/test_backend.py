@@ -9,6 +9,7 @@ HYO-85: 로컬 내보내기로 detect 초안 승인·수정·거부 · 「왜 �
 HYO-110: 지난 알림 목록(클릭 짝 · 열어 봄 · 항목의 지금 상태 · 묶은 알림).
 HYO-127: 화제 탭(레인 C) — 주차 목록 · k 자르기 · 저장/저장 빼기 · capture의 topic · 개발 예시.
 HYO-99: 실사용 모드 — 임시 git repo + 로컬 bare remote · 대역 모델로 시작 거부 · ctx 둘 · snapshots pull · 승인/거부/기록 커밋 · capture push.
+HYO-99: 엔진 상태(가짜 claude — 설치·버전·구독 로그인 · 키 지움 · 준비됨 판정) · 로그인 창(OS별 argv, 실제로 열지 않음).
 """
 
 import glob
@@ -181,6 +182,7 @@ def main():
         scenario_hyo110(tmp)
         scenario_hyo127(tmp)
         scenario_hyo132(tmp)
+        scenario_engine(tmp)
         scenario_real(tmp)
     finally:
         os.environ.pop("RADAR_EXPORT", None)
@@ -217,6 +219,132 @@ def _alias(path, root):
     except (OSError, NotImplementedError):
         return None
     return link
+
+
+FAKE_CLAUDE = '''import json, os, sys
+a = sys.argv[1:]
+mode = os.environ.get("FAKE_CLAUDE_AUTH", "sub")
+if a == ["--version"]:
+    print("9.9.9 (Claude Code)")
+    sys.exit(0)
+if a[:2] == ["auth", "status"]:
+    if mode == "garbage":
+        print("not json")
+        sys.exit(0)
+    if mode == "out":
+        print(json.dumps({"loggedIn": False}))
+        sys.exit(1)
+    # API 키가 보이면 구독이 가려진다 — 엔진 상태는 키를 지우고 불러야 한다
+    method = "api_key" if os.environ.get("ANTHROPIC_API_KEY") else "console" if mode == "console" else "claude.ai"
+    print(json.dumps({"loggedIn": True, "authMethod": method, "subscriptionType": "max", "email": "x@example.invalid"}))
+    sys.exit(0)
+sys.exit(2)
+'''
+
+
+class _Env:
+    """os.environ 몇 칸을 바꿨다가 되돌린다 (None = 지움)."""
+    def __init__(self, **kv):
+        self.kv, self.saved = kv, {k: os.environ.get(k) for k in kv}
+
+    def __enter__(self):
+        for k, v in self.kv.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        return self
+
+    def __exit__(self, *exc):
+        for k, v in self.saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+
+def _fake_claude(d):
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "fake_claude.py")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(FAKE_CLAUDE)
+    return path
+
+
+def scenario_engine(tmp):
+    """HYO-99 3단계 엔진 상태 · 로그인 창 — 가짜 claude(.py)로. 실제 터미널은 열지 않는다(launcher 대역)."""
+    print("\n— HYO-99: 엔진 상태 · 로그인 —")
+    import engine_status as es
+    fake = _fake_claude(os.path.join(tmp, "engine"))
+    with _Env(RADAR_CLAUDE_BIN=fake, FAKE_CLAUDE_AUTH="sub", ANTHROPIC_API_KEY=None):
+        svc = RadarService(os.path.join(tmp, "engine", "data"))
+        c = TestClient(server.create_app(svc))
+        e = c.get("/engine").json()
+        check("엔진(스텁): 엔진 null · 준비됨 · capture 가능 · 키는 보지 않음", e["mode"] == "stub" and e["engine"] is None and e["ready"]
+              and e["capture_ready"] and e["api_key"] is False, e)
+        cli = e["cli"]
+        check("엔진: CLI 설치·버전·구독 로그인을 읽는다", cli["installed"] and cli["version"] == "9.9.9 (Claude Code)" and cli["logged_in"]
+              and cli["auth_method"] == "claude.ai" and cli["subscription_type"] == "max" and cli["error"] is None, cli)
+        check("엔진: 이메일·조직은 응답에 없다", "example.invalid" not in json.dumps(e), e)
+        os.environ["ANTHROPIC_API_KEY"] = "sk-test-not-real"
+        e = c.get("/engine", params={"refresh": True}).json()
+        check("엔진: env의 API 키를 지우고 부른다 (구독 로그인이 가려지지 않는다)", e["cli"]["auth_method"] == "claude.ai", e["cli"])
+        os.environ.pop("ANTHROPIC_API_KEY")
+        os.environ["FAKE_CLAUDE_AUTH"] = "out"
+        check("엔진: 상태는 잠깐 다시 쓴다 (화면이 자주 불러도 claude를 매번 안 띄움)", c.get("/engine").json()["cli"]["logged_in"])
+        e = c.get("/engine", params={"refresh": True}).json()
+        check("엔진: refresh면 새로 읽는다 → 로그아웃", e["cli"]["logged_in"] is False and e["cli"]["installed"], e["cli"])
+        os.environ["FAKE_CLAUDE_AUTH"] = "garbage"
+        e = c.get("/engine", params={"refresh": True}).json()
+        check("엔진: 상태를 못 읽으면 error (죽지 않음)", e["cli"]["installed"] and "못 읽었다" in (e["cli"]["error"] or ""), e["cli"])
+
+        # 로그인 창 — 대역 launcher가 받은 argv · env를 본다
+        seen = {}
+        def rec(argv, **kw):
+            seen.update(argv=argv, kw=kw)
+        svc.login_launcher = rec
+        os.environ["ANTHROPIC_API_KEY"] = "sk-test-not-real"
+        r = c.post("/engine/login").json()
+        os.environ.pop("ANTHROPIC_API_KEY")
+        check("로그인: 터미널을 연다 · 칠 명령도 돌려준다", r["opened"] and r["command"].endswith("auth login --claudeai") and seen.get("argv"), (r, seen))
+        check("로그인: 연 터미널 env에 API 키가 없다", "ANTHROPIC_API_KEY" not in seen["kw"]["env"], sorted(seen["kw"]["env"])[:5])
+        check("로그인: 행동 로그 engine_login", any(x["event"] == "engine_login" for x in events(svc)))
+        def boom(argv, **kw):
+            raise OSError("no terminal")
+        svc.login_launcher = boom
+        r = c.post("/engine/login").json()
+        check("로그인: 못 열면 opened=false + 직접 칠 명령", r["opened"] is False and "auth login --claudeai" in r["command"] and "직접" in r["detail"], r)
+
+    with _Env(RADAR_CLAUDE_BIN=os.path.join(tmp, "engine", "no-such-claude")):
+        e = RadarService(os.path.join(tmp, "engine", "data2")).engine_info()
+        check("엔진: CLI가 없으면 installed=false · error", e["cli"]["installed"] is False and "못 찾았다" in e["cli"]["error"], e["cli"])
+
+    # 준비됨 판정 — 구독 로그인일 때만 (다른 방식이면 claude -p가 API로 과금된다)
+    ok = {"installed": True, "error": None, "logged_in": True, "auth_method": "claude.ai"}
+    for engine, cli, key, want, needle, name in (
+            ("claude-cli", ok, False, True, None, "구독 로그인 → 준비됨 (API 키 없어도)"),
+            ("claude-cli", {**ok, "logged_in": False}, True, False, "로그인", "로그아웃 → 안 됨"),
+            ("claude-cli", {**ok, "auth_method": "console"}, True, False, "과금", "구독이 아닌 로그인 → 안 됨"),
+            ("claude-cli", {**ok, "installed": False, "error": "x 못 찾았다"}, True, False, "못 찾았다", "CLI 없음 → 안 됨"),
+            ("api", {**ok, "installed": False}, True, True, None, "api 엔진은 CLI와 무관 · 키 있으면 됨"),
+            ("api", ok, False, False, "ANTHROPIC_API_KEY", "api 엔진 · 키 없음 → 안 됨")):
+        ready, reason = es.readiness(engine, cli, key)
+        check(f"준비됨 판정: {name}", ready is want and (needle is None or needle in (reason or "")), (ready, reason))
+
+    # OS별 터미널 — 실제로 열지 않고 argv만 본다
+    argv, kw = es.launch_spec("win32", r"C:\Program Files\claude\claude.exe", tmp)
+    check("터미널(Windows): 새 콘솔 · cmd /k call (빈칸 든 경로) · 입출력을 넘기지 않음",
+          argv[:3] == ["cmd.exe", "/k", "call"] and argv[3] == r"C:\Program Files\claude\claude.exe" and argv[-3:] == ["auth", "login", "--claudeai"]
+          and kw == {"creationflags": es.CREATE_NEW_CONSOLE}, (argv, kw))
+    mac_dir = os.path.join(tmp, "engine", "mac")
+    os.makedirs(mac_dir)
+    argv, kw = es.launch_spec("darwin", "/Users/a b/it's/claude", mac_dir)
+    body = open(argv[-1], encoding="utf-8").read() if os.path.exists(argv[-1]) else ""
+    import shlex
+    try:
+        words = shlex.split(body.splitlines()[-3])
+    except (ValueError, IndexError):
+        words = None
+    check("터미널(macOS): .command를 Terminal로 · 따옴표 처리 · API 키 지움",
+          argv[:3] == ["open", "-a", "Terminal"] and argv[-1].endswith(".command")
+          and words == ["/Users/a b/it's/claude", "auth", "login", "--claudeai"]
+          and "unset ANTHROPIC_API_KEY" in body, (argv, body))
+    if sys.platform != "win32":
+        check("터미널(macOS): .command에 실행 권한", os.access(argv[-1], os.X_OK))
 
 
 def scenario_real(tmp):
@@ -328,6 +456,23 @@ def _scenario_real(tmp, stub_scripts, StubChat):
         check("겹침 검사: 다른 글자로 불러도 ADR repo 안 데이터 폴더는 겹친다", service._overlaps(alias, os.path.join(adr, "data")))
     if sys.platform == "win32":
         check("겹침 검사: 드라이브가 다르면 안 겹친다 (예외 아님)", service._overlaps("C:\\radar-x", "D:\\radar-y") is False)
+
+    # 엔진 상태 — 실사용 claude-cli는 구독 로그인이어야 준비됨, api는 키 (HYO-99 GET /engine)
+    with _Env(RADAR_CLAUDE_BIN=_fake_claude(os.path.join(root, "fake-cli")), FAKE_CLAUDE_AUTH="sub", ANTHROPIC_API_KEY=None):
+        cs = RadarService(os.path.join(root, "cli-data"), **{**kw, "engine": "claude-cli"})
+        cs._api_key = lambda: False
+        e = cs.engine_info()
+        check("실사용 엔진(claude-cli): 구독 로그인 → 준비됨 · 키 없으면 capture만 안 됨", e["engine"] == "claude-cli" and e["ready"]
+              and e["capture_ready"] is False and e["cli"]["path"] == cs.real_info["claude_bin"], e)
+        os.environ["FAKE_CLAUDE_AUTH"] = "out"
+        e = cs.engine_info(refresh=True)
+        check("실사용 엔진(claude-cli): 로그아웃 → 준비 안 됨 + 이유", not e["ready"] and "로그인" in e["reason"], e)
+    api = RadarService(os.path.join(root, "api-data"), **kw)
+    api._api_key = lambda: False
+    e = api.engine_info()
+    check("실사용 엔진(api): 키 없음 → 준비 안 됨", e["engine"] == "api" and not e["ready"] and not e["capture_ready"], e)
+    api._api_key = lambda: True
+    check("실사용 엔진(api): 키 있음 → 준비됨", api.engine_info()["ready"])
 
     svc = RadarService(data, **kw)
     app = server.create_app(svc)

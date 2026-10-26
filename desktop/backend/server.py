@@ -57,6 +57,16 @@ def create_app(svc: RadarService = None, scheduler_on: bool = False, jobs: Jobs 
     def health():
         return svc.health()
 
+    @app.get("/engine", response_model=S.EngineInfo, operation_id="engine")
+    def engine(refresh: bool = Query(default=False, description="CLI 상태를 새로 읽는다 (로그인 창을 닫은 뒤)")):
+        """실행 엔진 상태 (HYO-99) — 구독 CLI 설치·버전·로그인 · API 키 유무. 읽기만 한다."""
+        return svc.engine_info(refresh)
+
+    @app.post("/engine/login", response_model=S.LoginResult, operation_id="engineLogin")
+    def engine_login():
+        """OS 터미널에 `claude auth login --claudeai`를 연다. 로그인은 사람이 터미널에서 마치고, 화면은 `GET /engine?refresh=true`로 다시 본다."""
+        return svc.engine_login()
+
     @app.get("/inbox", response_model=S.InboxList, operation_id="inbox")
     def inbox():
         return {"items": svc.inbox()}

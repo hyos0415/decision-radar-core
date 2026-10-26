@@ -74,6 +74,168 @@
         }
       }
     },
+    "/engine": {
+      "get": {
+        "summary": "Engine",
+        "description": "실행 엔진 상태 (HYO-99) — 구독 CLI 설치·버전·로그인 · API 키 유무. 읽기만 한다.",
+        "operationId": "engine",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "CLI 상태를 새로 읽는다 (로그인 창을 닫은 뒤)",
+              "default": false,
+              "title": "Refresh"
+            },
+            "description": "CLI 상태를 새로 읽는다 (로그인 창을 닫은 뒤)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/engine/login": {
+      "post": {
+        "summary": "Engine Login",
+        "description": "OS 터미널에 `claude auth login --claudeai`를 연다. 로그인은 사람이 터미널에서 마치고, 화면은 `GET /engine?refresh=true`로 다시 본다.",
+        "operationId": "engineLogin",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/inbox": {
       "get": {
         "summary": "Inbox",
@@ -2391,6 +2553,89 @@
         "title": "CardAction",
         "description": "남김 카드의 행동 표시 (HYO-132) — 모델이 아니라 코드가 관문 kept_by의 변화 종류로 정한다."
       },
+      "CliStatus": {
+        "properties": {
+          "installed": {
+            "type": "boolean",
+            "title": "Installed"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path",
+            "description": "바이너리 경로 (RADAR_CLAUDE_BIN 또는 PATH)"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "logged_in": {
+            "type": "boolean",
+            "title": "Logged In"
+          },
+          "auth_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Method",
+            "description": "claude.ai = 구독 로그인. 다른 값이면 `claude -p`가 API로 과금된다"
+          },
+          "subscription_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Type",
+            "description": "pro · max · team 등 (CLI가 알려 준 그대로)"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "못 찾음 · 실행 실패 · 상태를 못 읽음. 없으면 null"
+          }
+        },
+        "type": "object",
+        "required": [
+          "installed",
+          "path",
+          "version",
+          "logged_in",
+          "auth_method",
+          "subscription_type",
+          "error"
+        ],
+        "title": "CliStatus",
+        "description": "구독 CLI(`claude`) 상태 — `claude --version` · `claude auth status --json`을 읽기만 한다. 이메일·조직은 담지 않는다."
+      },
       "Decision": {
         "properties": {
           "id": {
@@ -2742,6 +2987,83 @@
           "draft"
         ],
         "title": "EditRequest"
+      },
+      "EngineInfo": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "stub",
+              "demo",
+              "real"
+            ],
+            "title": "Mode"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "claude-cli",
+                  "api"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine",
+            "description": "detect·revisit 실행 엔진 — 스텁은 null"
+          },
+          "ready": {
+            "type": "boolean",
+            "title": "Ready",
+            "description": "지금 detect·revisit을 돌릴 수 있나. claude-cli는 구독(claude.ai) 로그인일 때만"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "준비 안 됨의 이유 (사람 말)"
+          },
+          "cli": {
+            "$ref": "#/components/schemas/CliStatus",
+            "description": "스텁에서도 읽는다 (읽기만, 사용량 0)"
+          },
+          "api_key": {
+            "type": "boolean",
+            "title": "Api Key",
+            "description": ".env에 ANTHROPIC_API_KEY가 있나 (스텁은 늘 false — 보지 않는다)"
+          },
+          "capture_ready": {
+            "type": "boolean",
+            "title": "Capture Ready",
+            "description": "capture를 돌릴 수 있나 — 실사용 capture는 API라 키가 필요하다. 스텁은 true"
+          },
+          "login_command": {
+            "type": "string",
+            "title": "Login Command",
+            "description": "터미널을 못 열 때 사람이 칠 명령"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode",
+          "engine",
+          "ready",
+          "reason",
+          "cli",
+          "api_key",
+          "capture_ready",
+          "login_command"
+        ],
+        "title": "EngineInfo"
       },
       "ErrorBody": {
         "properties": {
@@ -3507,6 +3829,31 @@
         },
         "type": "object",
         "title": "JobRequest"
+      },
+      "LoginResult": {
+        "properties": {
+          "opened": {
+            "type": "boolean",
+            "title": "Opened",
+            "description": "OS 터미널을 열었나. false면 command를 직접 친다"
+          },
+          "command": {
+            "type": "string",
+            "title": "Command"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "opened",
+          "command",
+          "detail"
+        ],
+        "title": "LoginResult",
+        "description": "로그인 창 열기 — 로그인은 터미널에서 사람이 마친다. 앱은 로그인 코드·토큰을 받지 않는다 (HYO-114)."
       },
       "NotificationEntry": {
         "properties": {
