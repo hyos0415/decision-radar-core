@@ -1106,7 +1106,7 @@ def record_only_errors(old_text, new_text):
 
 
 def export_record(ctx, paths, message, exporter=None):
-    """revisit 직후 — radar.py decide --apply가 쓴 기록용 칸을 커밋 1개로 main에 (사용자 10/27). 내용 검사는 `record_only_errors`.
+    """revisit 직후 — radar.py decide --apply가 쓴 기록용 칸을 커밋 1개로 main에 (사용자 10/26). 내용 검사는 `record_only_errors`.
     paths는 절대 경로(decide의 files_written). git 내보내기가 아니면(eval·dry-run·스텁·로컬 사본) skipped."""
     ex = exporter or exporter_for(ctx)
     if not hasattr(ex, "publish_record"):

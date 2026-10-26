@@ -1,5 +1,5 @@
 """git 내보내기 — 승인 = ADR repo main에 바로 커밋·push (설계 docs/design/hitl-state.md 결정 8, §5-2, HYO-44).
-예외 하나: revisit의 기록용 칸(`revisit_last_checked`)은 승인 없이 커밋한다 (`publish_record`, 사용자 10/27 — 데스크톱 실사용 모드).
+예외 하나: revisit의 기록용 칸(`revisit_last_checked`)은 승인 없이 커밋한다 (`publish_record`, 사용자 10/26 — 데스크톱 실사용 모드).
 
 이 모듈은 git 기계장치만 안다 (ADR repo의 어느 항목이 무엇인지는 hitl.py의 몫). 안전장치 넷:
 
@@ -215,7 +215,7 @@ class GitExporter(Exporter):
             return {"state": "blocked", "reason": "push_failed", "detail": err[:300]}
         return None
 
-    # ── 기록 커밋 (사용자 10/27) ─────────────────────────────────────
+    # ── 기록 커밋 (사용자 10/26) ─────────────────────────────────────
     def publish_record(self, paths, message, *, only_record):
         """이미 있는 ADR의 기록용 칸만 바뀐 파일들을 커밋 1개로 main에 push한다 — revisit 직후 `revisit_last_checked` (radar.py decide --apply).
         사람 승인 없이 나가는 유일한 길이라 좁게 연다: 추적 중인 ADR 파일만 · 수정(M)만 · 내용은 only_record가 통과시킨 것만.

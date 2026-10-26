@@ -848,7 +848,7 @@ def e_review_cli(h, X, w):
     return ok_list and ok_dry and ok_ans, (lst, dry, ap, rj, bad)
 
 
-# 기록 커밋 (사용자 10/27) — revisit 직후 revisit_last_checked만 승인 없이 main에
+# 기록 커밋 (사용자 10/26) — revisit 직후 revisit_last_checked만 승인 없이 main에
 
 @scen
 def e_record_commit(h, X, w):
