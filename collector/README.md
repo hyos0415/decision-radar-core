@@ -9,14 +9,28 @@ python -m collector.run --sources vendor --only aws-bedrock --out <폴더>   # A
 python collector/tests/test_collector.py                                    # 오프라인 테스트
 ```
 
-**정기 실행 (2026-10-02~)**: 이 Windows PC의 작업 스케줄러 — 화 16:00 전체 · 목 16:00 AWS만. `--out` 없이 돌면 `collector/out/<UTC 시각>-<label>/`에 쌓인다.
+**정기 실행 (2026-10-02~)**: 화 16:00 전체 · 목 16:00 AWS만. `--out` 없이 돌면 `collector/out/<UTC 시각>-<label>/`에 쌓인다. 화요일 작업은 **한 줄 `python -m collector.weekly`** — 수집 → 얼림(push) → 등급 → 관문 → detect 입력 → 게시 (HYO-99 3단계). 사슬은 OS와 무관한 이 파이썬 한 곳에 있고, OS마다 다른 것은 예약 등록뿐이다.
 
 ```powershell
+# Windows (작업 스케줄러)
 powershell -ExecutionPolicy Bypass -File collector\schedule_windows.ps1 -WeeklyDay Tuesday -WeeklyTime 16:00 -AwsDay Thursday -AwsTime 16:00
 powershell -ExecutionPolicy Bypass -File collector\schedule_windows.ps1 -Remove     # 해제
 ```
 
-M1으로 옮길 때는 같은 두 명령을 `launchd`(StartCalendarInterval — 잠자기 중 놓친 실행은 깨어날 때 돈다)로 등록하면 된다.
+```bash
+# macOS (launchd — 잠자기 중 놓친 실행은 깨어날 때 돈다). --print는 plist만 보여 준다 (어느 OS에서나)
+.venv/bin/python -m collector.schedule_mac --print
+.venv/bin/python -m collector.schedule_mac --install      # ~/Library/LaunchAgents + launchctl bootstrap
+.venv/bin/python -m collector.schedule_mac --remove
+python -m collector.weekly --dry-run                      # 사슬이 부를 명령만 출력
+python -m collector.weekly --from gate --week 2026-W44 [--no-push]   # 중간부터 다시 (앞 단계는 건너뜀)
+python collector/tests/test_weekly.py                     # 오프라인 — 가짜 러너 · 임시 git
+```
+
+- 관문(`pipeline.profile_filter --gate gpt-6.1-sol`, `RADAR_GATE`/`--gate`로 바꿈)은 **수집을 돌리는 기기의 `.env`에 `OPENAI_API_KEY`가 있어야** 한다. 없으면 관문에서 멈추고 feed·게시는 없다 (로그 `collector/out/last-weekly.log` · 요약 `last-weekly.json`).
+- 게시는 `radar-snapshots`의 `detect/<주>/`만 커밋·push한다 (그 밖의 경로가 스테이징돼 있으면 거부). 이미 커밋돼 있으면 「이미 만듦」으로 건너뛰고 유료 관문도 다시 돌리지 않는다.
+- 프로필·대상·ADR 경로는 env `RADAR_PROFILE` · `RADAR_TARGETS` · `RADAR_ADR_DIR`, 없으면 `<레포 부모>/adr/...`.
+- **한 기기에서만** 돌린다 (아래 주간 스냅숏 참고) — Windows에서 Mac으로 옮길 때는 한쪽을 먼저 `-Remove`/`--remove`한다.
 
 출력: `items.jsonl`(항목 한 줄에 하나) + `run.json`(출처별 요청 수·실패·건수·벤더 규칙 결과·200이 아닌 응답).
 
@@ -24,7 +38,7 @@ M1으로 옮길 때는 같은 두 명령을 `launchd`(StartCalendarInterval — 
 
 weekly 예약 실행은 수집이 끝나면 `collector.snapshot freeze --push`로 한 주를 **`corpus@<ISO 주차>`**로 얼려 private data repo `hyos0415/radar-snapshots`(로컬 `../radar-snapshots`, 환경 변수 `RADAR_SNAPSHOT_REPO`)에 push한다. 폴더 형식은 그 repo의 README.
 
-얼린 뒤에는 `.venv` 파이썬으로 `python -m pipeline.importance weekly-tiers`가 돈다 (HYO-122 PR 3) — 관문 등급 파일 `../radar-snapshots/tiers.json`(고정 경로, `RADAR_TIERS`)을 내 스택에 맞춘다. 지문이 바뀐 기술만 Sonnet 5.5(API, `.env`의 `ANTHROPIC_API_KEY`)로 다시 분류하고, 분류한 게 있으면 그 파일만 커밋·push한다. 보고서는 `collector/out/last-tiers.json`(새 기술 · 지문 바뀜 · 사라진 기술 · 실패 · 호출 · 비용). 키가 없으면 분류를 건너뛰고 「미분류 N」을 로그에 남긴다. 예약을 바꾼 뒤에는 `schedule_windows.ps1`을 다시 실행해 등록을 갱신한다.
+얼린 뒤에는 `.venv` 파이썬으로 `python -m pipeline.importance weekly-tiers`가 돈다 (HYO-122 PR 3) — 관문 등급 파일 `../radar-snapshots/tiers.json`(고정 경로, `RADAR_TIERS`)을 내 스택에 맞춘다. 지문이 바뀐 기술만 Sonnet 5.5(API, `.env`의 `ANTHROPIC_API_KEY`)로 다시 분류하고, 분류한 게 있으면 그 파일만 커밋·push한다. 보고서는 `collector/out/last-tiers.json`(새 기술 · 지문 바뀜 · 사라진 기술 · 실패 · 호출 · 비용). 키가 없으면 분류를 건너뛰고 「미분류 N」을 로그에 남긴다. 예약을 바꾼 뒤에는 `schedule_windows.ps1`(또는 `schedule_mac --install`)을 다시 실행해 등록을 갱신한다.
 
 ```bash
 python -m collector.snapshot status                    # 얼린 주차 · 안 얼린 실행

@@ -5,6 +5,7 @@
 #
 # - 로그온한 동안에만 돈다 (비밀번호를 저장하지 않는다)
 # - 예약 시각에 PC가 꺼져 있었으면 다음에 켜졌을 때 바로 돈다 (StartWhenAvailable) — 놓친 주가 생기면 run.json의 시각으로 드러난다
+# - 주간 작업의 사슬(수집 → 얼림 → 등급 → 관문 → detect 입력 → 게시)은 이제 collector/weekly.py에 있다 — 여기는 그것을 한 줄로 부를 뿐 (맥은 schedule_mac.py)
 # - 출력: collector\out\<UTC 시각>-<label>\ , 마지막 실행 로그: collector\out\last-<label>.log
 param(
     [string]$WeeklyDay = "Tuesday", [string]$WeeklyTime = "16:00",
@@ -22,23 +23,21 @@ if ($Remove) {
     exit 0
 }
 
-function Register-Collector($name, $day, $at, $label, $collectorArgs, $after = "") {
-    $cmd = "Set-Location '$repo'; `$env:PYTHONIOENCODING='utf-8'; & '$python' -m collector.run --label $label $collectorArgs *> 'collector\out\last-$label.log'$after"
+function Register-Collector($name, $day, $at, $label, $py, $module, $collectorArgs, $minutes = 45) {
+    $cmd = "Set-Location '$repo'; `$env:PYTHONIOENCODING='utf-8'; & '$py' -m $module $collectorArgs *> 'collector\out\last-$label.log'"
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command `"$cmd`"" -WorkingDirectory $repo
     $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $day -At $at
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 45) -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes $minutes) -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
     Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Description "Decision Radar 수집기 ($label) — collector/README.md" -Force | Out-Null
     "registered: $name ($day $at, label=$label)"
 }
 
 New-Item -ItemType Directory -Force (Join-Path $repo "collector\out") | Out-Null
-# weekly는 수집이 끝나면 바로 주간 스냅숏으로 얼려 data repo에 push한다 (HYO-72). 한 출처가 죽어도 얼린다 — manifest에 남는다
-$freeze = "; & '$python' -m collector.snapshot freeze --push *>> 'collector\out\last-weekly.log'"
-# 얼린 뒤 관문 등급 파일을 스택에 맞춘다 (HYO-122 PR 3) — 지문 바뀐 기술만 실제 모델(Sonnet 5.5, .env의 ANTHROPIC_API_KEY)로.
-# 키가 없으면 분류를 건너뛰고 「미분류 N」을 로그에 남긴다. anthropic이 필요해 .venv 파이썬으로 돈다 (수집기는 시스템 파이썬 + PyYAML)
+# weekly = collector.weekly 한 줄 — 수집 → 얼림(push) → 등급 → 관문 → detect 입력 → 게시 (HYO-99 3단계). 사슬은 collector/weekly.py에 있다 (맥과 같은 코드).
+# anthropic·openai가 필요해 .venv 파이썬으로 돈다. 관문은 .env의 OPENAI_API_KEY가 필요하다 — 없으면 거기서 멈춘다.
+# 관문·feed가 끼어 45분을 넘길 수 있어 weekly만 90분으로 늘린다
 $venvPython = Join-Path $repo ".venv\Scripts\python.exe"
-if (-not (Test-Path $venvPython)) { throw ".venv가 없다: $venvPython — weekly-tiers는 .venv의 anthropic을 쓴다" }
-$freeze += "; & '$venvPython' -m pipeline.importance weekly-tiers --report 'collector\out\last-tiers.json' *>> 'collector\out\last-weekly.log'"
-Register-Collector "JHS-Collector-Weekly" $WeeklyDay $WeeklyTime "weekly" "" $freeze
-Register-Collector "JHS-Collector-AWS" $AwsDay $AwsTime "aws" "--sources vendor --only aws-bedrock"
+if (-not (Test-Path $venvPython)) { throw ".venv가 없다: $venvPython — 주간 사슬은 .venv의 anthropic·openai를 쓴다" }
+Register-Collector "JHS-Collector-Weekly" $WeeklyDay $WeeklyTime "weekly" $venvPython "collector.weekly" "" 90
+Register-Collector "JHS-Collector-AWS" $AwsDay $AwsTime "aws" $python "collector.run" "--label aws --sources vendor --only aws-bedrock"
 Get-ScheduledTask -TaskName $names | Select-Object TaskName, State, @{n="Next";e={(Get-ScheduledTaskInfo $_).NextRunTime}}

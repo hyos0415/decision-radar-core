@@ -10,10 +10,10 @@ name: desktop
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-    paths: ["desktop/**", "product/**", "requirements.txt", ".github/workflows/desktop.yml"]
+    paths: ["desktop/**", "product/**", "collector/**", "pipeline/**", "requirements.txt", ".github/workflows/desktop.yml"]
   push:
     branches: [main]
-    paths: ["desktop/**", "product/**", "requirements.txt", ".github/workflows/desktop.yml"]
+    paths: ["desktop/**", "product/**", "collector/**", "pipeline/**", "requirements.txt", ".github/workflows/desktop.yml"]
   workflow_dispatch:
 
 env:
@@ -57,6 +57,7 @@ jobs:
       - run: python desktop/backend/test_backend.py   # 스텁 · 임시 폴더 · 네트워크 없음 (실사용 모드는 임시 git repo + 로컬 원격)
       - run: python product/radar/test_engines.py     # 구독 CLI 엔진 — 가짜 CLI · 프로세스 종료가 OS마다 갈린다
       - run: python product/radar/test_export.py      # git 내보내기 — 승인 push · revisit 기록 커밋
+      - run: python collector/tests/test_weekly.py    # 주간 사슬 · launchd plist — 가짜 러너 · 임시 git (HYO-99)
       - name: 계약(openapi.json)이 백엔드 모델과 같은가 (HYO-91)
         run: python desktop/backend/export_openapi.py --check
 
@@ -76,3 +77,4 @@ jobs:
       - run: python desktop/backend/test_backend.py
       - run: python product/radar/test_engines.py
       - run: python product/radar/test_export.py
+      - run: python collector/tests/test_weekly.py
