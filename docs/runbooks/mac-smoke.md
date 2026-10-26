@@ -20,7 +20,7 @@
 - **데이터 폴더는 `~/.decision-radar-smoke`.** 기본 `~/.decision-radar`는 실사용 지표(행동 로그)라 쓰지 않는다
 - **정기 실행 끔** (`RADAR_SCHEDULE=off`) — 켜 두면 띄우자마자 지난 칸을 따라잡아 혼자 돈다
 - **detect는 입력이 있을 때만** — detect 입력(`radar-snapshots/detect/<주차>/`)은 Windows가 만든다. 10/26 저녁 Windows 세션이 W43으로 `detect/2026-W43/`을 게시했을 수 있다(0단계 pull 뒤 `ls radar-snapshots/detect`). 없으면 5b를 건너뛴다
-- **HYO-78**(데스크톱: 빌드본(npm start) 확인 — file:// 출처 CORS)은 **하지 않는다** — Windows에서 이미 막히는 것을 확인했다(빌드본 출처 `null`에 CORS 허용 헤더 없음 · preflight 400). 고치는 PR이 따로 간다
+- **HYO-78**(데스크톱: 빌드본(npm start) 확인 — file:// 출처 CORS)은 8단계 끝에서 한 번 본다. **정정 (10/26)**: 처음엔 「막힌다」고 적었는데 curl로 백엔드만 보고 넘겨짚은 것이었다. 실제 빌드본(`file://`)을 띄워 창 안에서 보내 보니 Windows에서 GET·POST 모두 200 — Electron은 이 경우 CORS로 막지 않는다. Mac에서도 같은지 확인만 한다
 - 수집 예약(`collector.schedule_mac --install`)을 **등록하지 않는다** — 수집은 Windows 한 곳에서만 (CLAUDE.md)
 - 코드를 고치지 않는다. 버그를 찾으면 증상·출력을 보고에 적고, 고치자고 하면 issue → 브랜치 → PR (main 직접 push 금지, CLAUDE.md 규율 9)
 - 키·이메일·토큰 값을 출력하지 않는다 (`.env`는 있는지만 본다)
@@ -243,6 +243,16 @@ ps aux | grep -E "backend/server.py|uvicorn" | grep -v grep       # 종료 뒤 �
 
 안 되거나 어색한 곳은 보고에 한 줄씩 (화면 · 무엇을 했나 · 무엇이 일어났나). 하위 이슈는 Windows 세션에서 만든다.
 
+**HYO-78 — 빌드본** (위 앱을 종료한 뒤, 스텁 모드 그대로):
+
+```bash
+cd "$P/jhs-decisions/desktop"
+npm run build && env -u RADAR_APP_MODE -u RADAR_REAL_ADR -u RADAR_APP_DATA npm start
+```
+
+- [ ] Inbox에 항목이 뜨나 · 하나를 **승인**하면 처리되나 (빌드본은 `file://`에서 열린다 — Windows는 GET·POST 정상이었다)
+- [ ] 종료 뒤 `ps aux | grep -E "backend/server.py|uvicorn" | grep -v grep`이 비어 있나
+
 ## 보고 (사용자에게 — Windows 세션에 붙여 넣는다)
 
 | 단계 | 결과 | 메모 |
@@ -258,5 +268,6 @@ ps aux | grep -E "backend/server.py|uvicorn" | grep -v grep       # 종료 뒤 �
 | 5b detect (입력 있으면) | | 주차 · ok · 후보·초안 · 세션 · 그림자 후보·초안 비교 · push 0 |
 | 6 실사용 화면 (선택) | | Inbox · 승인 push · 남은 프로세스 |
 | 8 HYO-77 | | 항목별 된다/안 된다 · 접근성 권한 · 알림 클릭 · 트레이 · 종료 후 프로세스 |
+| 8 HYO-78 빌드본 | | Inbox · 승인 · 종료 후 프로세스 |
 
 막힌 곳이 있으면 그 명령 · 출력 끝 40줄 · 백엔드 로그 끝 40줄을 함께.
