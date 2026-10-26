@@ -177,7 +177,7 @@ class RadarService:
         adr_src = os.path.abspath(adr_src)
         if not snapshot or not os.path.exists(os.path.join(snapshot, "feed.json")):
             raise ServiceError(500, f"데모 모드: RADAR_DEMO_SNAPSHOT에 feed.json이 없다 ({snapshot!r}) — python -m pipeline.detect_feed로 만든다")
-        if os.path.commonpath([adr_src, self.data_dir]) in (adr_src, self.data_dir):
+        if _overlaps(adr_src, self.data_dir):
             raise ServiceError(500, f"데모 모드: 데이터 폴더 {self.data_dir}와 원본 ADR repo {adr_src}가 겹친다 — 사본이 원본을 덮을 수 있다")
         copy_root = os.path.join(self.data_dir, "adr")
         if not os.path.isdir(os.path.join(copy_root, "docs", "adr")):
@@ -200,7 +200,7 @@ class RadarService:
             if not os.path.exists(os.path.join(adr_root, rel)):
                 errs.append(f"ADR repo에 {rel}가 없다")
         top = _git(adr_root, "rev-parse", "--show-toplevel")
-        if top is None or os.path.normcase(os.path.abspath(top)) != os.path.normcase(adr_root):
+        if top is None or not _same_dir(top, adr_root):
             errs.append(f"git 작업 사본의 맨 위가 아니다 (git 맨 위: {top})")
         else:
             branch = _git(adr_root, "rev-parse", "--abbrev-ref", "HEAD")
@@ -208,7 +208,7 @@ class RadarService:
                 errs.append(f"브랜치가 main이 아니다 ({branch}) — 승인은 main에 push한다")
             if not _git(adr_root, "remote", "get-url", "origin"):
                 errs.append("origin 원격이 없다")
-        if os.path.commonpath([adr_root, self.data_dir]) in (adr_root, self.data_dir):
+        if _overlaps(adr_root, self.data_dir):
             errs.append(f"데이터 폴더 {self.data_dir}와 ADR repo가 겹친다")
         claude_bin = None
         if engine == "claude-cli":
@@ -1033,6 +1033,23 @@ def _git(cwd, *args):
     except (OSError, subprocess.TimeoutExpired):
         return None
     return p.stdout.strip() if p.returncode == 0 else None
+
+
+def _same_dir(a, b):
+    """같은 폴더인가 — 문자열로 비교하지 않는다. macOS 임시 폴더는 /var → /private/var 링크, Windows는 8.3 짧은 이름(RUNNER~1)이 섞인다."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
+def _overlaps(a, b):
+    """한 폴더가 다른 폴더 안(또는 같은 폴더)인가. 링크·짧은 이름을 풀고 비교하고, Windows에서 드라이브가 다르면 안 겹친다."""
+    a, b = (os.path.normcase(os.path.realpath(p)) for p in (a, b))
+    try:
+        return os.path.commonpath([a, b]) in (a, b)
+    except ValueError:  # 다른 드라이브 (C: / D:)
+        return False
 
 
 def _latest_feed(snapshot_repo):

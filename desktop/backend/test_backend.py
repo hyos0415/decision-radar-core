@@ -204,10 +204,25 @@ def _clone(remote, dst):
         _git(dst, "config", k, v)
 
 
+def _alias(path, root):
+    """같은 폴더를 다른 글자로 부르는 경로 — POSIX는 심볼릭 링크, Windows는 8.3 짧은 이름(없으면 링크 시도). 못 만들면 None."""
+    if sys.platform == "win32":
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        if ctypes.windll.kernel32.GetShortPathNameW(path, buf, len(buf)) and buf.value.lower() != path.lower():
+            return buf.value
+    link = os.path.join(root, "adr-link")
+    try:
+        os.symlink(path, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        return None
+    return link
+
+
 def scenario_real(tmp):
     """HYO-99 3단계 실사용 모드 — 실제 ADR repo 대신 임시 git repo + 로컬 bare remote, 모델 자리엔 대역(StubChat). GitHub·API에 닿지 않는다.
     시작 거부 · ctx 둘(실행 dry-run / 답 git) · radar-snapshots pull → 가장 새 detect 입력 · 초안은 작업 사본에만 · 승인 = main에 커밋 1개 ·
-    거부는 커밋 없음 · revisit 기록 커밋(기록용 칸만, 승인 없이) · capture 승인도 push."""
+    거부는 닫힌 항목 기록만 커밋 · revisit 기록 커밋(기록용 칸만, 승인 없이) · capture 승인도 push."""
     print("\n— HYO-99: 실사용 모드 —")
     from radar import script as stub_scripts
     from radar.stub_model import StubChat
@@ -299,6 +314,20 @@ def _scenario_real(tmp, stub_scripts, StubChat):
                 check(f"실사용 시작 거부: {name}", True)
     finally:
         os.environ.pop("RADAR_CLAUDE_BIN") if old_bin is None else os.environ.__setitem__("RADAR_CLAUDE_BIN", old_bin)
+
+    # 같은 폴더를 다른 글자로 부르면 — 문자열 비교였을 때 CI에서 거부됐다 (macOS /var → /private/var, Windows RUNNER~1)
+    alias = _alias(os.path.abspath(adr), root)
+    if alias is None:
+        print("SKIP 실사용 시작: 다른 글자로 부른 ADR repo (링크·짧은 이름을 못 만든다)")
+    else:
+        try:
+            RadarService(os.path.join(root, "alias-data"), **{**kw, "real_adr": alias})
+            check("실사용 시작: 다른 글자로 부른 ADR repo도 맨 위로 인정", True)
+        except ServiceError as e:
+            check("실사용 시작: 다른 글자로 부른 ADR repo도 맨 위로 인정", False, f"{alias}: {e.message}")
+        check("겹침 검사: 다른 글자로 불러도 ADR repo 안 데이터 폴더는 겹친다", service._overlaps(alias, os.path.join(adr, "data")))
+    if sys.platform == "win32":
+        check("겹침 검사: 드라이브가 다르면 안 겹친다 (예외 아님)", service._overlaps("C:\\radar-x", "D:\\radar-y") is False)
 
     svc = RadarService(data, **kw)
     app = server.create_app(svc)
