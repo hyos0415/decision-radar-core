@@ -39,6 +39,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -46,6 +47,7 @@ sys.path.insert(0, os.path.join(REPO, "product"))
 sys.path.insert(1, REPO)  # pipeline.detect_feed — 실행 요약의 건수 한 줄 (HYO-84)
 
 import devprofiles  # noqa: E402
+import engine_status  # noqa: E402
 from radar import hitl  # noqa: E402  — radar/__init__이 spike/common을 경로에 올린다
 from radar.adr_copy import copy_adr  # noqa: E402
 from radar import script as stub_scripts  # noqa: E402
@@ -161,6 +163,8 @@ class RadarService:
         self.flows = ("detect",) if demo else FLOWS  # 데모는 detect만 실제 모델로 — revisit은 데모 입력에 출처가 없어 의미가 없다
         self.chat_factory = chat_factory  # 테스트가 실제 모델 자리에 대역을 꽂는다 (API 호출 없이 데모·실사용 모드 배관 검사)
         self.demo_info = self.real_info = None
+        self.login_launcher = subprocess.Popen  # 테스트는 바꿔 끼운다 — 실제 터미널을 열지 않게
+        self._engine_cache = None  # (시각, 상태) — 화면이 자주 불러도 claude를 매번 띄우지 않게
         self.engine = None if self.mode == "stub" else "api"
         if demo:
             self._setup_demo(demo_adr or os.environ.get("RADAR_DEMO_ADR") or DEMO_ADR_DEFAULT,
@@ -251,6 +255,31 @@ class RadarService:
             h["real"] = {**self.real_info, "snapshot": feed, "week": os.path.basename(feed) if feed else None,
                          "api_key": self._api_key(), "funnel": self._funnel_line()}
         return h
+
+    ENGINE_TTL = 15
+
+    def engine_info(self, refresh=False):
+        """엔진 상태 (`GET /engine`) — 지금 detect·revisit을 돌릴 수 있나 · CLI 설치·버전·로그인. 스텁에서도 CLI는 읽는다(읽기만, 사용량 0).
+        CLI 상태는 ENGINE_TTL초 동안 다시 쓴다 — refresh면 새로 읽는다 (로그인 창을 닫고 난 뒤)."""
+        now = time.time()
+        if refresh or self._engine_cache is None or now - self._engine_cache[0] > self.ENGINE_TTL:
+            self._engine_cache = (now, engine_status.cli_status(self._claude_bin()))
+        cli = self._engine_cache[1]
+        api_key = self.mode != "stub" and self._api_key()
+        ready, reason = engine_status.readiness(self.engine, cli, api_key)
+        return {"mode": self.mode, "engine": self.engine, "ready": ready, "reason": reason, "cli": cli,
+                "api_key": api_key, "capture_ready": self.mode == "stub" or api_key,
+                "login_command": engine_status.login_command(cli["path"])}
+
+    def engine_login(self):
+        """OS 터미널에 `claude auth login --claudeai`를 연다 (`POST /engine/login`). 로그인은 사람이 터미널에서 마친다 — 앱은 코드를 받지 않는다."""
+        self._engine_cache = None
+        res = engine_status.open_login(self._claude_bin(), launcher=self.login_launcher)
+        self.log("engine_login", None, opened=res["opened"])
+        return res
+
+    def _claude_bin(self):
+        return (self.real_info or {}).get("claude_bin") or engine_status.find_bin()
 
     def _funnel_line(self):
         try:

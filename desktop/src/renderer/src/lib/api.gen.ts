@@ -21,6 +21,46 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/engine': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * Engine
+     * @description 실행 엔진 상태 (HYO-99) — 구독 CLI 설치·버전·로그인 · API 키 유무. 읽기만 한다.
+     */
+    get: operations['engine']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/engine/login': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Engine Login
+     * @description OS 터미널에 `claude auth login --claudeai`를 연다. 로그인은 사람이 터미널에서 마치고, 화면은 `GET /engine?refresh=true`로 다시 본다.
+     */
+    post: operations['engineLogin']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/inbox': {
     parameters: {
       query?: never
@@ -585,6 +625,38 @@ export interface components {
        */
       deadline_note: string | null
     }
+    /**
+     * CliStatus
+     * @description 구독 CLI(`claude`) 상태 — `claude --version` · `claude auth status --json`을 읽기만 한다. 이메일·조직은 담지 않는다.
+     */
+    CliStatus: {
+      /** Installed */
+      installed: boolean
+      /**
+       * Path
+       * @description 바이너리 경로 (RADAR_CLAUDE_BIN 또는 PATH)
+       */
+      path: string | null
+      /** Version */
+      version: string | null
+      /** Logged In */
+      logged_in: boolean
+      /**
+       * Auth Method
+       * @description claude.ai = 구독 로그인. 다른 값이면 `claude -p`가 API로 과금된다
+       */
+      auth_method: string | null
+      /**
+       * Subscription Type
+       * @description pro · max · team 등 (CLI가 알려 준 그대로)
+       */
+      subscription_type: string | null
+      /**
+       * Error
+       * @description 못 찾음 · 실행 실패 · 상태를 못 읽음. 없으면 null
+       */
+      error: string | null
+    }
     /** Decision */
     Decision: {
       /** Id */
@@ -684,6 +756,46 @@ export interface components {
       }
       /** Stale Answer */
       stale_answer?: ('continue' | 'rejudge' | 'discard') | null
+    }
+    /** EngineInfo */
+    EngineInfo: {
+      /**
+       * Mode
+       * @enum {string}
+       */
+      mode: 'stub' | 'demo' | 'real'
+      /**
+       * Engine
+       * @description detect·revisit 실행 엔진 — 스텁은 null
+       */
+      engine: ('claude-cli' | 'api') | null
+      /**
+       * Ready
+       * @description 지금 detect·revisit을 돌릴 수 있나. claude-cli는 구독(claude.ai) 로그인일 때만
+       */
+      ready: boolean
+      /**
+       * Reason
+       * @description 준비 안 됨의 이유 (사람 말)
+       */
+      reason: string | null
+      /** @description 스텁에서도 읽는다 (읽기만, 사용량 0) */
+      cli: components['schemas']['CliStatus']
+      /**
+       * Api Key
+       * @description .env에 ANTHROPIC_API_KEY가 있나 (스텁은 늘 false — 보지 않는다)
+       */
+      api_key: boolean
+      /**
+       * Capture Ready
+       * @description capture를 돌릴 수 있나 — 실사용 capture는 API라 키가 필요하다. 스텁은 true
+       */
+      capture_ready: boolean
+      /**
+       * Login Command
+       * @description 터미널을 못 열 때 사람이 칠 명령
+       */
+      login_command: string
     }
     /** ErrorBody */
     ErrorBody: {
@@ -993,6 +1105,21 @@ export interface components {
       repo?: string | null
       /** @description capture만 — CaptureRequest.topic과 같다 */
       topic?: components['schemas']['TopicRef'] | null
+    }
+    /**
+     * LoginResult
+     * @description 로그인 창 열기 — 로그인은 터미널에서 사람이 마친다. 앱은 로그인 코드·토큰을 받지 않는다 (HYO-114).
+     */
+    LoginResult: {
+      /**
+       * Opened
+       * @description OS 터미널을 열었나. false면 command를 직접 친다
+       */
+      opened: boolean
+      /** Command */
+      command: string
+      /** Detail */
+      detail: string
     }
     /**
      * NotificationEntry
@@ -1624,6 +1751,148 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['Health']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  engine: {
+    parameters: {
+      query?: {
+        /** @description CLI 상태를 새로 읽는다 (로그인 창을 닫은 뒤) */
+        refresh?: boolean
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['EngineInfo']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  engineLogin: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['LoginResult']
         }
       }
       /** @description 서비스 오류 — detail 한 줄 */

@@ -79,6 +79,8 @@ edit의 `draft`만 모양 검사 없이(dict) 받는다 — 모델로 받으면 
 | `GET /targets` | 레이더 대상 repo `{items: [{repo}]}` (`radar-targets.json`) — 빠른 capture의 repo 드롭다운 (HYO-95) | `Ctx.targets` |
 | `GET /decisions` · `/decisions/{id}` | ADR 목록(번호·제목·status·technology·재검토 조건별 최근 결과·요약) · 상세(+원문). **읽기만** — status를 바꾸는 엔드포인트가 없다(R8) | `radar.py list` + 파일 제목 |
 | `POST /runs/detect` · `/runs/revisit` · `GET /runs` | 흐름을 한 번 돌리고(동기) 요약(`summary`·`drafts`·`alerts`·`excluded`·`usage`) — `excluded`는 detect가 버린 소식마다 `{url, title, reason, why}`(why = 관문이 남긴 이유, HYO-97) — `<data>/runs.jsonl`. detect 입력이 수집 스냅숏에서 왔으면(`funnel.json`) `summary` 첫 줄이 건수(수집 → 레인 A → 관문 남김 → detect 입력). 이 모드의 `flows` 밖이면 409 | `detect` · `revisit` 그래프 (스냅숏 모드 + dry-run) |
+| `GET /engine?refresh=` | **실행 엔진 상태** (HYO-99) — `{mode, engine(claude-cli · api · 스텁 null), ready, reason, cli{installed, path, version, logged_in, auth_method, subscription_type, error}, api_key, capture_ready, login_command}`. `claude --version` · `claude auth status --json`을 **읽기만**(env에서 API 키를 지우고). `ready`는 claude-cli면 구독(`auth_method: claude.ai`) 로그인일 때만 — 다른 방식이면 `claude -p`가 API로 과금된다. CLI 상태는 15초 다시 쓴다(`refresh=true`면 새로). 스텁에서도 CLI는 읽는다 — 이메일·조직은 담지 않는다 | `engine_status.py` |
+| `POST /engine/login` | OS 터미널에 `claude auth login --claudeai`를 연다 → `{opened, command, detail}`. 로그인은 사람이 터미널에서 마치고 화면은 `GET /engine?refresh=true`로 다시 본다. **앱은 로그인 코드·토큰을 받지 않는다**(HYO-114 약관). Windows 새 콘솔(`cmd /k`) · macOS `.command`를 Terminal로 · Linux `x-terminal-emulator` — 못 열면 `opened: false` + 직접 칠 `command`. 화면 버튼은 HYO-139 | `engine_status.py` |
 | `GET /schedule` | 정기 실행 칸·지난 실행·차례 여부. 켜기: `RADAR_SCHEDULE=on`(기본 꺼짐) — revisit 월 09:00 · detect 화 18:00(수집 화 16:00 뒤), 앱이 꺼져 있던 동안 지난 칸은 켜질 때 한 번 따라잡는다 | `scheduling.py` |
 | `POST /events` `{event, item?, detail?}` | 화면 행동 로그 (`app_opened` · `item_opened` · `notification_shown` · `notification_clicked` · `capture_opened` · `decision_opened` · `topics_opened`(화제 탭 엶) · `topic_opened`(화제 링크 누름, item=화제 id)) | — |
 | `GET /notifications?limit=` | **지난 알림** (HYO-110) — `notification_shown` 한 줄이 한 통, 최근 것 먼저(기본 100통). `{id, at, kind, title, body, clicked, clicked_at, items}` — `items`는 알림이 가리킨 항목마다 지금 상태 `status`(`inbox` 지금 Inbox에 있음 + `kind`·`title`·`state` / `answered` 답함 + `answer`·`outcome`·`answered_at` / `gone`) · `adr`(revisit 항목 · 승인으로 쓴 ADR — 거부·버림·다시 판정으로 지운 초안이면 null) · `new_item` · `opened`(알림 뒤에 `item_opened`). 새로 저장하지 않는다 — 행동 로그를 읽기만 | `<data>/events.jsonl` |
@@ -135,7 +137,8 @@ CI(`.github/workflows/desktop.yml`) 백엔드 검사는 Windows에서 PR마다 �
 
 **CI가 못 보는 것 — 기기 앞에서 손으로** (Mac으로 옮길 때 · Mac 쪽 코드를 바꿨을 때):
 - [ ] `RADAR_APP_MODE=real npm run dev`가 뜬다 — 시작 검사 통과 (`claude`는 `which claude`, 안 잡히면 `RADAR_CLAUDE_BIN`)
-- [ ] `claude auth status`가 로그인 상태 · detect·revisit 한 번 (구독 사용량을 쓴다)
+- [ ] `curl localhost:<포트>/engine` → `ready: true` · `auth_method: claude.ai` · detect·revisit 한 번 (구독 사용량을 쓴다)
+- [ ] `POST /engine/login` → Terminal 창이 뜨고 `claude auth login --claudeai`가 돈다 (Windows는 새 콘솔 창) · 끝낸 뒤 `GET /engine?refresh=true`
 - [ ] 승인 1건이 `../adr` main에 push된다 · revisit 기록 커밋이 push된다
 - [ ] 앱을 끄면 백엔드·`claude` 자식 프로세스가 남지 않는다 (`ps aux | grep -E "uvicorn|claude -p"`)
 

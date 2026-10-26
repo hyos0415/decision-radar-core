@@ -68,6 +68,37 @@ class Health(BaseModel):
     real: Optional[RealInfo] = None
 
 
+# ── 엔진 (HYO-99 3단계) ────────────────────────────────────────────
+
+class CliStatus(BaseModel):
+    """구독 CLI(`claude`) 상태 — `claude --version` · `claude auth status --json`을 읽기만 한다. 이메일·조직은 담지 않는다."""
+    installed: bool
+    path: Optional[str] = Field(description="바이너리 경로 (RADAR_CLAUDE_BIN 또는 PATH)")
+    version: Optional[str]
+    logged_in: bool
+    auth_method: Optional[str] = Field(description="claude.ai = 구독 로그인. 다른 값이면 `claude -p`가 API로 과금된다")
+    subscription_type: Optional[str] = Field(description="pro · max · team 등 (CLI가 알려 준 그대로)")
+    error: Optional[str] = Field(description="못 찾음 · 실행 실패 · 상태를 못 읽음. 없으면 null")
+
+
+class EngineInfo(BaseModel):
+    mode: Mode
+    engine: Optional[Literal["claude-cli", "api"]] = Field(description="detect·revisit 실행 엔진 — 스텁은 null")
+    ready: bool = Field(description="지금 detect·revisit을 돌릴 수 있나. claude-cli는 구독(claude.ai) 로그인일 때만")
+    reason: Optional[str] = Field(description="준비 안 됨의 이유 (사람 말)")
+    cli: CliStatus = Field(description="스텁에서도 읽는다 (읽기만, 사용량 0)")
+    api_key: bool = Field(description=".env에 ANTHROPIC_API_KEY가 있나 (스텁은 늘 false — 보지 않는다)")
+    capture_ready: bool = Field(description="capture를 돌릴 수 있나 — 실사용 capture는 API라 키가 필요하다. 스텁은 true")
+    login_command: str = Field(description="터미널을 못 열 때 사람이 칠 명령")
+
+
+class LoginResult(BaseModel):
+    """로그인 창 열기 — 로그인은 터미널에서 사람이 마친다. 앱은 로그인 코드·토큰을 받지 않는다 (HYO-114)."""
+    opened: bool = Field(description="OS 터미널을 열었나. false면 command를 직접 친다")
+    command: str
+    detail: str
+
+
 # ── Inbox ─────────────────────────────────────────────────────────
 
 class Usage(BaseModel):
