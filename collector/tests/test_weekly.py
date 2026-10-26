@@ -192,6 +192,23 @@ def test_second_run_skips():
     assert all(s["skipped"] for s in w.summary()["steps"])
 
 
+def test_other_machine_published():
+    """다른 기기가 같은 주를 이미 게시했다 — 받아 보고 건너뛴다 (유료 관문 0, 게시 충돌 없음)."""
+    w = World()
+    other = w.tmp / "other"
+    subprocess.run(["git", "clone", "-q", str(w.remote), str(other)], check=True, capture_output=True)
+    w._cfg(other)
+    (other / "detect" / WEEK).mkdir(parents=True)
+    (other / "detect" / WEEK / "feed.json").write_text("[]", encoding="utf-8")
+    git(other, "add", "-A")
+    git(other, "commit", "-q", "-m", "other machine")
+    git(other, "push", "-q", "origin", "HEAD:main")
+    before = git(w.remote, "rev-parse", "main")
+    rc, out = w.go("--from", "gate", "--week", WEEK)
+    assert rc == 0 and w.mods() == [], (w.mods(), out)
+    assert "이미 만듦" in out and git(w.remote, "rev-parse", "main") == before
+
+
 def test_from_gate_week():
     w = World()
     rc, _ = w.go("--from", "gate", "--week", WEEK, "--no-push")

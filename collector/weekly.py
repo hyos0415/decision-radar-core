@@ -144,6 +144,12 @@ def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None
             run_out = Path(pipeline_out or Path(root) / "pipeline" / "out") / week
             feed_out = p["snapshots"] / "detect" / week
             if name == "gate":
+                if not a.no_push:  # 다른 기기가 이미 게시했는지는 받아 봐야 안다 — 모르고 돌리면 유료 관문을 또 부르고 게시에서 엇갈린다
+                    pr = _git(p["snapshots"], "pull", "--ff-only", "-q")
+                    if pr.returncode != 0:
+                        record(name, False, f"git pull --ff-only 실패: {pr.stderr.strip()}", t0=t0)
+                        stop("radar-snapshots를 받지 못했다 — 이미 만들었는지 모른 채 유료 관문을 돌리지 않는다")
+                        continue
                 if committed(p["snapshots"], week):
                     state["done"] = True
                     record(name, True, f"이미 만듦: detect/{week}/ 가 커밋돼 있다 (유료 관문을 다시 돌리지 않는다)", skipped=True)
