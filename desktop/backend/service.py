@@ -68,6 +68,7 @@ STATE_FILE = "capture-checkpoint.sqlite"
 META_FILE = "app-meta.json"
 EVENTS_FILE = "events.jsonl"
 RUNS_FILE = "runs.jsonl"
+SHADOW_FILE = "shadow.jsonl"  # API 그림자 기록 (HYO-99 3단계) — 화면에 안 띄운다
 TOPICS_SAVED_FILE = "topics-saved.json"  # 저장한 화제 {"items": [...]} — 주차 파일과 따로 둔 복사본
 WEEK_NAME = re.compile(r"^\d{4}-W\d{2}$")  # 화제 주차 파일 이름 (pipeline.topics의 `<주차>.json`)
 CAPTURE_SEED_POSTS = 5  # capture 창에 미리 채우는 글 수
@@ -163,6 +164,11 @@ class RadarService:
         self.flows = ("detect",) if demo else FLOWS  # 데모는 detect만 실제 모델로 — revisit은 데모 입력에 출처가 없어 의미가 없다
         self.chat_factory = chat_factory  # 테스트가 실제 모델 자리에 대역을 꽂는다 (API 호출 없이 데모·실사용 모드 배관 검사)
         self.demo_info = self.real_info = None
+        self.shadow = False  # 실사용 + claude-cli면 켜진다 (_setup_real)
+        self.shadow_factory = None  # 테스트가 그림자 모델 자리에 대역을 꽂는다
+        self.shadow_async = True  # 테스트는 False — 실행 끝에 바로 돈다
+        self.shadow_threads = []
+        self._shadow_lock = threading.Lock()
         self.login_launcher = subprocess.Popen  # 테스트는 바꿔 끼운다 — 실제 터미널을 열지 않게
         self._engine_cache = None  # (시각, 상태) — 화면이 자주 불러도 claude를 매번 띄우지 않게
         self.engine = None if self.mode == "stub" else "api"
@@ -225,7 +231,9 @@ class RadarService:
         self.adr_dir = os.path.join(adr_root, "docs", "adr")
         self.targets = os.path.join(adr_root, "radar-targets.json")
         self.snapshot_dir = _latest_feed(snapshot_repo) or os.path.join(snapshot_repo, DETECT_FEEDS)
-        self.real_info = {"adr_repo": adr_root, "snapshot_repo": snapshot_repo, "claude_bin": claude_bin}
+        # API 그림자 (사용자 10/26): 주 엔진이 구독 CLI면 같은 입력을 API로도 돌려 기록만 — 4주 뒤 엔진 비교. RADAR_SHADOW=off로 끈다
+        self.shadow = engine == "claude-cli" and os.environ.get("RADAR_SHADOW", "on") != "off"
+        self.real_info = {"adr_repo": adr_root, "snapshot_repo": snapshot_repo, "claude_bin": claude_bin, "shadow": self.shadow}
 
     def _api_key(self):
         return bool(load_dotenv().get("ANTHROPIC_API_KEY"))
@@ -976,13 +984,17 @@ class RadarService:
                 fn, script = revisit, stub_scripts.revisit_script(stub_scripts.SCRIPT["cases"]["JHS-001"])
             res = {"id": f"{ctx.now}-{flow}", "flow": flow, "at": ctx.now, "mode": self.mode, "trigger": trigger, "ok": True, "error": None,
                    "summary": [], "drafts": [], "alerts": [], "excluded": []}
+            shadow = main_view = None
             try:
                 notes = []
                 if self.mode == "real":
                     notes = self._prepare_real(flow)
                     ctx.env["RADAR_SNAPSHOT_DIR"] = self.snapshot_dir  # 방금 고른 detect 입력
+                    if self.shadow:  # 주 실행이 ADR을 바꾸기 전에 떠 둔다 — 그림자도 같은 입력을 본다
+                        shadow = self._shadow_prepare(res["id"])
                 rep, diag = asyncio.run(fn(ctx, self.chat(flow, script), ctx.now, self.model_name))
                 res.update(self._summarize_detect(rep) if flow == "detect" else self._summarize_revisit(rep))
+                main_view = self._compare_view(flow, rep, res)
                 res["summary"] = notes + res["summary"]
                 if flow == "revisit":
                     self._record_alerts(res["alerts"], ctx.now)  # 충족 알림은 Inbox로 (화면 설계 ③)
@@ -997,7 +1009,74 @@ class RadarService:
                 f.write(json.dumps(res, ensure_ascii=False) + "\n")
             self.log("run", res["id"], flow=flow, trigger=trigger, ok=res["ok"], drafts=len(res["drafts"]), alerts=len(res["alerts"]), excluded=len(res["excluded"]),
                      usage=res["usage"])
-            return res
+        if shadow is not None:  # 잠금 밖에서 — 그림자가 분 단위로 돌아도 화면·다음 실행을 막지 않는다
+            args = (flow, shadow, res, main_view)
+            if self.shadow_async:
+                t = threading.Thread(target=self._shadow_run, args=args, name=f"radar-shadow-{flow}", daemon=True)
+                self.shadow_threads.append(t)
+                t.start()
+            else:
+                self._shadow_run(*args)
+        return res
+
+    # ── API 그림자 (HYO-99 3단계) ───────────────────────────────────
+    # 같은 입력(실행 직전 ADR 사본 + 같은 detect 입력)을 API 엔진으로 한 번 더 — Inbox·알림·실행 기록·ADR repo에는 아무것도 안 쓴다.
+    # 두 엔진의 결과를 나란히 <data>/shadow.jsonl에 한 줄. 실패해도 주 실행에는 영향이 없다.
+
+    def _shadow_prepare(self, run_id):
+        d = os.path.join(self.data_dir, "shadow", re.sub(r"[^0-9A-Za-z-]", "", run_id))
+        try:
+            shutil.rmtree(d, ignore_errors=True)
+            adr_dir, targets = copy_adr(self.real_info["adr_repo"], os.path.join(d, "adr"))
+        except (OSError, ValueError) as e:
+            return {"dir": d, "error": f"ADR 사본을 못 떴다: {type(e).__name__}: {e}"}
+        return {"dir": d, "adr_dir": adr_dir, "targets": targets, "snapshot": self.snapshot_dir}
+
+    def _shadow_chat(self, flow):
+        if self.shadow_factory is not None:
+            return self.shadow_factory(flow)
+        if not self._api_key():
+            return None
+        from radar import models
+        return models.make_anthropic()
+
+    def _compare_view(self, flow, rep, summ):
+        """엔진 비교에 쓸 모양 — 같은 칸을 두 엔진에서 뽑는다."""
+        if flow == "detect":
+            return {"candidates": sorted(c.get("technology") or "" for c in rep.get("candidates") or []),
+                    "drafts": [{"technology": d["technology"], "title": d["title"], "validate_errors": len(d["validate_errors"])} for d in summ["drafts"]],
+                    "excluded": [{"url": e["url"], "reason": e["reason"]} for e in summ["excluded"]]}
+        return {"results": [{"adr": r.get("adr"), "condition": r.get("condition_id"), "result": r.get("result"), "changed": bool(r.get("changed"))}
+                            for r in rep.get("results") or []],
+                "alerts": [{"adr": a["adr"], "condition": a["condition"]} for a in summ["alerts"]]}
+
+    def _shadow_run(self, flow, sh, main, main_view):
+        rec = {"id": main["id"], "flow": flow, "at": main["at"], "trigger": main["trigger"], "input": os.path.basename(sh.get("snapshot") or "") or None,
+               "main": {"engine": self.engine, "ok": main["ok"], "error": main["error"], "usage": main.get("usage"), **(main_view or {})}}
+        c = None
+        try:
+            if sh.get("error"):
+                raise RuntimeError(sh["error"])
+            chat = self._shadow_chat(flow)
+            if chat is None:
+                rec["shadow"] = {"engine": "api", "ok": False, "skipped": "no_key", "error": ".env에 ANTHROPIC_API_KEY가 없다"}
+            else:
+                env = self.env(export=False)
+                env.update(RADAR_ADR_DIR=sh["adr_dir"], RADAR_TARGETS=sh["targets"], RADAR_SNAPSHOT_DIR=sh["snapshot"],
+                           RADAR_SERVED_LOG=os.path.join(sh["dir"], "served.log"))
+                c = Ctx.from_env(env, radar_py=self.radar_py)
+                c.now = main["at"]
+                rep, _diag = asyncio.run((detect if flow == "detect" else revisit)(c, chat, c.now, REAL_MODEL))
+                summ = self._summarize_detect(rep, adr_dir=sh["adr_dir"]) if flow == "detect" else self._summarize_revisit(rep)
+                rec["shadow"] = {"engine": "api", "model": REAL_MODEL, "ok": True, "error": None, "usage": self._usage(c),
+                                 **self._compare_view(flow, rep, summ)}
+        except Exception as e:  # 그림자가 죽어도 주 실행·앱은 산다
+            rec["shadow"] = {"engine": "api", "ok": False, "error": f"{type(e).__name__}: {str(e)[:300]}", "usage": self._usage(c) if c else None}
+        finally:
+            shutil.rmtree(sh["dir"], ignore_errors=True)
+        with self._shadow_lock, open(os.path.join(self.data_dir, SHADOW_FILE), "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        return rec
 
     def runs(self, limit=50):
         try:
@@ -1006,7 +1085,7 @@ class RadarService:
             return []
         return [json.loads(x) for x in reversed(lines[-limit:]) if x.strip()]
 
-    def _summarize_detect(self, rep):
+    def _summarize_detect(self, rep, adr_dir=None):
         try:
             feed = json.load(open(os.path.join(self.snapshot_dir, "feed.json"), encoding="utf-8"))
             n_feed = len(feed)
@@ -1022,8 +1101,9 @@ class RadarService:
         for c in cands:
             if not c.get("adr"):
                 continue
-            f = next(iter(sorted(p for p in os.listdir(self.adr_dir) if p.startswith(c["adr"] + "-"))), None)
-            m = _TITLE.search(open(os.path.join(self.adr_dir, f), encoding="utf-8").read()) if f else None
+            d = adr_dir or self.adr_dir  # 그림자는 ADR 사본
+            f = next(iter(sorted(p for p in os.listdir(d) if p.startswith(c["adr"] + "-"))), None)
+            m = _TITLE.search(open(os.path.join(d, f), encoding="utf-8").read()) if f else None
             drafts.append({"adr": c["adr"], "title": m.group(1).strip() if m else c["technology"], "technology": c["technology"],
                            "validate_errors": c.get("validate_errors") or []})
         head = f"소식 {n_feed}건 → " if n_feed is not None else ""

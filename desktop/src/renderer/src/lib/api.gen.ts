@@ -1302,6 +1302,12 @@ export interface components {
        * @description 건수 한 줄: 수집 → 레인 A → 관문 남김 → detect 입력
        */
       funnel: string | null
+      /**
+       * Shadow
+       * @description API 그림자 — 주 엔진이 claude-cli면 같은 입력을 API로도 돌려 <data>/shadow.jsonl에 기록만 (화면에 안 띄운다, RADAR_SHADOW=off로 끔)
+       * @default false
+       */
+      shadow: boolean
     }
     /**
      * RevisitCondition

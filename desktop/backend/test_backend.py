@@ -526,6 +526,67 @@ def _scenario_real(tmp, stub_scripts, StubChat):
     check("실사용 capture 승인 → main에 커밋", ap.get("outcome") == "written" and _git(adr_remote, "rev-list", "--count", f"{hh}..main") == "1", (res, ap))
     u = r.get("usage") or {}
     check("실사용 사용량: billing (대역은 api) · 정가 환산 칸", u.get("billing") == "api" and "cost_usd_equiv" in u and not u.get("estimated"), u)
+    _scenario_shadow(root, kw, fake, adr_remote)
+
+
+def _scenario_shadow(root, kw, fake, adr_remote):
+    """API 그림자 — 주 엔진이 claude-cli면 같은 입력을 API(대역)로도 돌려 shadow.jsonl에 기록만. Inbox·알림·실행 기록·ADR repo는 그대로.
+    앞 시나리오가 남긴 미추적 초안이 없게 원격에서 새로 받은 작업 사본으로 돈다."""
+    adr = os.path.join(root, "adr-shadow")
+    _clone(adr_remote, adr)
+    kw = {**kw, "real_adr": adr}
+    check("그림자: api 엔진이면 꺼짐", RadarService(os.path.join(root, "sh-api"), **kw).shadow is False)
+    with _Env(RADAR_CLAUDE_BIN=_fake_claude(os.path.join(root, "sh-cli")), RADAR_SHADOW=None):
+        sd = os.path.join(root, "sh-data")
+        svc = RadarService(sd, **{**kw, "engine": "claude-cli"})
+        svc.shadow_async = False
+        svc.shadow_factory = fake
+        c = TestClient(server.create_app(svc))
+        check("그림자: claude-cli면 켜짐 · health에 보인다", svc.shadow and c.get("/health").json()["real"]["shadow"] is True)
+        inbox0 = len(c.get("/inbox").json()["items"])
+        r = c.post("/runs/detect", json={}).json()
+        lines = [json.loads(x) for x in open(os.path.join(sd, "shadow.jsonl"), encoding="utf-8")]
+        rec = lines[-1] if lines else {}
+        m, s = rec.get("main") or {}, rec.get("shadow") or {}
+        check("그림자 detect: 한 줄 · 같은 실행 id · 주=claude-cli 그림자=api · 같은 입력 주차", len(lines) == 1 and rec.get("id") == r["id"]
+              and m.get("engine") == "claude-cli" and s.get("engine") == "api" and s.get("ok") and rec.get("input") == "2026-W44", rec)
+        check("그림자 detect: 두 엔진의 초안·후보를 나란히 (대역이 같으니 같다)", s.get("drafts") and [d["technology"] for d in s["drafts"]] == [d["technology"] for d in m["drafts"]]
+              and s.get("candidates") == m.get("candidates"), (m.get("drafts"), s.get("drafts")))
+        check("그림자: 사용량을 따로 기록", (s.get("usage") or {}).get("model_calls", 0) > 0, s.get("usage"))
+        n_drafts = len(r["drafts"])
+        check("그림자: Inbox에는 주 실행 초안만", len(c.get("/inbox").json()["items"]) == inbox0 + n_drafts, (inbox0, n_drafts))
+        check("그림자: 실행 기록(runs)에 안 들어감", len(svc.runs()) == 1)
+        check("그림자: ADR 사본은 끝나면 지운다", not [x for x in os.listdir(os.path.join(sd, "shadow")) if x] if os.path.isdir(os.path.join(sd, "shadow")) else True)
+        untracked = [x for x in (_git(adr, "status", "--porcelain") or "").splitlines() if x.startswith("??") and x.endswith(".md")]
+        check("그림자: 실제 ADR repo에는 주 실행 초안만", len(untracked) == n_drafts, untracked)
+
+        alerts0 = sum(1 for i in c.get("/inbox").json()["items"] if i["kind"] == "revisit")
+        rv = c.post("/runs/revisit", json={}).json()
+        rec = json.loads(open(os.path.join(sd, "shadow.jsonl"), encoding="utf-8").read().splitlines()[-1])
+        check("그림자 revisit: 조건별 판정을 나란히", rec["flow"] == "revisit" and rec["shadow"].get("results") and
+              [(x["adr"], x["condition"], x["result"]) for x in rec["shadow"]["results"]] == [(x["adr"], x["condition"], x["result"]) for x in rec["main"]["results"]], rec)
+        check("그림자 revisit: 알림은 주 실행 것만 Inbox로", sum(1 for i in c.get("/inbox").json()["items"] if i["kind"] == "revisit") - alerts0
+              <= len(rv["alerts"]), rv["alerts"])
+
+        svc.shadow_factory = None
+        svc._api_key = lambda: False
+        c.post("/runs/detect", json={})
+        rec = json.loads(open(os.path.join(sd, "shadow.jsonl"), encoding="utf-8").read().splitlines()[-1])
+        check("그림자: 키 없으면 건너뜀 기록 (주 실행은 그대로)", rec["shadow"].get("skipped") == "no_key" and rec["main"]["ok"], rec["shadow"])
+
+        def boom(flow):
+            raise RuntimeError("shadow model down")
+        svc.shadow_factory = boom
+        r = c.post("/runs/detect", json={}).json()
+        rec = json.loads(open(os.path.join(sd, "shadow.jsonl"), encoding="utf-8").read().splitlines()[-1])
+        check("그림자: 죽어도 기록만 · 주 실행은 ok", r["ok"] and rec["shadow"]["ok"] is False and "shadow model down" in rec["shadow"]["error"], rec["shadow"])
+
+    with _Env(RADAR_CLAUDE_BIN=_fake_claude(os.path.join(root, "sh-cli")), RADAR_SHADOW="off"):
+        off = RadarService(os.path.join(root, "sh-off"), **{**kw, "engine": "claude-cli"})
+        off.shadow_async = False
+        off.shadow_factory = fake
+        TestClient(server.create_app(off)).post("/runs/detect", json={})
+        check("그림자: RADAR_SHADOW=off면 안 돈다", off.shadow is False and not os.path.exists(os.path.join(root, "sh-off", "shadow.jsonl")))
 
 
 def scenario_m2(data):

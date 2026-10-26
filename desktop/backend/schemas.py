@@ -53,6 +53,7 @@ class RealInfo(BaseModel):
     claude_bin: Optional[str] = Field(description="구독 CLI 바이너리 (엔진이 claude-cli일 때)")
     api_key: bool = Field(description=".env에 ANTHROPIC_API_KEY가 있나 — capture는 API로 돈다. 값은 보이지 않는다")
     funnel: Optional[str] = Field(description="건수 한 줄: 수집 → 레인 A → 관문 남김 → detect 입력")
+    shadow: bool = Field(default=False, description="API 그림자 — 주 엔진이 claude-cli면 같은 입력을 API로도 돌려 <data>/shadow.jsonl에 기록만 (화면에 안 띄운다, RADAR_SHADOW=off로 끔)")
 
 
 class Health(BaseModel):
