@@ -21,13 +21,14 @@ class Runtime:
     state_filename = "capture-checkpoint.sqlite"
 
     def add_args(self, ap):
-        pass
+        ap.add_argument("--engine", choices=["api", "claude-cli"], default="api",
+                        help="실행 엔진 (HYO-99) — claude-cli = 구독 `claude -p`(detect·revisit). capture는 API 그대로")
 
     def real_spec(self, a):
-        return {"kind": "anthropic"}
+        return {"kind": "claude-cli" if getattr(a, "engine", "api") == "claude-cli" else "anthropic"}
 
     def label(self, spec):
-        return "anthropic"
+        return spec["kind"]
 
     def new_shapes(self, spec):
         if spec["kind"] == "stub":
@@ -39,6 +40,9 @@ class Runtime:
         if spec["kind"] == "stub":
             from .stub_model import StubChat
             return StubChat(script=spec["script"], flow=flow)
+        if spec["kind"] == "claude-cli" and flow != "capture":  # capture는 HITL이라 API 엔진 그대로 (HYO-99 §1-5, 사용자 10/26)
+            from .engines import ClaudeCliRunner
+            return ClaudeCliRunner()
         from . import models
         return models.make_anthropic(shapes)
 

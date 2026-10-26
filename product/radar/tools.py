@@ -57,24 +57,36 @@ def _lookups(state):
     return sum(1 for m in (state or {}).get("messages") or [] if isinstance(m, ToolMessage) and m.name in LOOKUPS)
 
 
-def lookup_guard(state, url=None):
-    """거절 사유 dict · 통과면 None. 거절도 도구 결과로 남으니 다음 호출의 예산에 들어간다."""
-    if _lookups(state) >= LOOKUP_BUDGET:
+def check_lookup(seen, lookups, url=None):
+    """가드 본체 — seen: 지금까지 본 글(scheme 뺀 것) · lookups: 지금까지의 열기·검색 수(거절 포함).
+    LangChain 도구(아래 lookup_guard — 에이전트 메시지에서 센다)와 구독 CLI 엔진의 MCP 서버(mcp_tools — 서버가 센다)가 같이 쓴다."""
+    if lookups >= LOOKUP_BUDGET:
         return {"ok": False, "status": "lookup_budget_exhausted",
                 "error": f"열기·검색 {LOOKUP_BUDGET}회를 다 썼다. 확인하지 못했으면 result=undetermined로 답하고 reason에 무엇이 실패했는지 적는다"}
-    if url is not None and (not _url_key(url) or _url_key(url) not in _seen(state)):
+    if url is not None and (not _url_key(url) or _url_key(url) not in seen):
         return {"ok": False, "status": "not_offered",
                 "error": "보인 적 없는 URL이다 — 조건의 source_hint·대화·snapshot_search 결과에 나온 URL만 연다. URL을 지어내지 않는다"}
     return None
 
 
-@tool("snapshot_fetch", description=ops.DOCS["snapshot_fetch"] + f" 조건·대화·검색 결과에 나온 URL만 열 수 있다. 열기·검색은 합쳐 {LOOKUP_BUDGET}회까지.")
+def lookup_guard(state, url=None):
+    """거절 사유 dict · 통과면 None. 거절도 도구 결과로 남으니 다음 호출의 예산에 들어간다."""
+    return check_lookup(_seen(state), _lookups(state), url)
+
+
+GUARDED_DOCS = {  # 가드 판 설명 — 두 엔진이 같은 글자로 보인다
+    "snapshot_fetch": ops.DOCS["snapshot_fetch"] + f" 조건·대화·검색 결과에 나온 URL만 열 수 있다. 열기·검색은 합쳐 {LOOKUP_BUDGET}회까지.",
+    "snapshot_search": ops.DOCS["snapshot_search"] + f" 열기·검색은 합쳐 {LOOKUP_BUDGET}회까지.",
+}
+
+
+@tool("snapshot_fetch", description=GUARDED_DOCS["snapshot_fetch"])
 def guarded_fetch(url: str, runtime: ToolRuntime[Ctx]) -> str:
     refused = lookup_guard(runtime.state, url)
     return json.dumps(refused, ensure_ascii=False) if refused else ops.snapshot_fetch(runtime.context, url)
 
 
-@tool("snapshot_search", description=ops.DOCS["snapshot_search"] + f" 열기·검색은 합쳐 {LOOKUP_BUDGET}회까지.")
+@tool("snapshot_search", description=GUARDED_DOCS["snapshot_search"])
 def guarded_search(query: str, runtime: ToolRuntime[Ctx]) -> str:
     refused = lookup_guard(runtime.state)
     return json.dumps(refused, ensure_ascii=False) if refused else ops.snapshot_search(runtime.context, query)
