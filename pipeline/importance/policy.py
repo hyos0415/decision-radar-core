@@ -6,7 +6,8 @@
 적용 순서 (§4 「보정 축 적용 순서」 + §8 판정 세부): 등급으로 행을 고른다 → 경로가 개발이면 security만 남기고 거기서 끝(개발 경로가 최우선 — 아래 보정이 되살리지 않는다)
 → 아니면 떠 있는 태그면 minor·patch도 ✅ → 민감 경로면 security·deprecation을 ✅로.
 두 등급이면 두 행을 모두 적용하고 하나라도 ✅면 남긴다 — 어느 행(등급 × 변화) 때문에 남았는지 `kept_by`에 기록한다.
-주당 상한: 등급 높은 순(L0→L8) → 변화 심각도 순. 잘린 것은 `truncated`로 돌려줘 로그에 남기게 한다.
+주당 상한: 등급 높은 순(L0→L8) → 변화 심각도 순. 기술당 1칸을 먼저 채우고 남은 칸은 같은 순서로 (§4 변경 2026-10-27, HYO-147).
+잘린 것은 `truncated`로 돌려줘 로그에 남기게 한다.
 """
 
 import re
@@ -44,6 +45,8 @@ TABLE = {t: dict(zip(CHANGES, row.split())) for t, row in _ROWS.items()}
 SEVERITY = {"security": 0, "breaking": 1, "eol": 2, "model_retirement": 2, "deprecation": 3, "successor_model": 5}
 SEVERITY_REST = 4
 WEEKLY_LIMIT = 5
+# 상한의 첫 바퀴에서 기술 하나가 차지할 수 있는 칸 (§4 변경 2026-10-27, HYO-147 — W44에 Electron 한 보안 수정 묶음이 5칸을 다 가져갔다)
+PER_TECH = 1
 
 # 관문이 판정 못 한 비율 경고 (HYO-122 ⑤ — 592건이 요약에 안 보이고 조용히 빠졌다). (모르는 기술 + 분류 불가) / (레인 A − 팀원 스택)이 넘으면 경고.
 # 잠정 (2026-10-15, 사용자 — 아직 재 보지 않은 첫 제안. 고치기 전 W42 ≈ 81%). HYO-122 PR 4 뒤 W42(+W41)를 다시 돌려 정상 비율을 보고
@@ -134,10 +137,33 @@ def rank_key(entry):
     return (min(tier_rank(r["tier"]) for r in kb), min(severity(r["change"]) for r in kb), str(entry.get("id", "")))
 
 
-def apply_cap(entries, limit=WEEKLY_LIMIT):
-    """남긴 후보 → (보이는 것, 잘린 것, "5/N"). entries는 {"id", "kept_by", ...}. 잘린 것은 버리지 않고 호출부가 로그에 남긴다."""
+def cap_technology(entry):
+    """상한에서 묶는 기술 = 남긴 행 중 가장 높은 행(등급 → 심각도 → 기술 이름)의 기술. 기술이 없는 행(옛 기록·테스트)은 항목마다 따로 센다."""
+    best = min(entry["kept_by"], key=lambda r: (tier_rank(r["tier"]), severity(r["change"]), str(r.get("technology") or "")))
+    return best.get("technology") or ("", str(entry.get("id", "")))
+
+
+def apply_cap(entries, limit=WEEKLY_LIMIT, per_tech=None):
+    """남긴 후보 → (보이는 것, 잘린 것, "5/N"). entries는 {"id", "kept_by", ...}. 잘린 것은 버리지 않고 호출부가 로그에 남긴다.
+    첫 바퀴: 정렬 순서대로 기술당 per_tech개(기본 PER_TECH)까지 → 칸이 남으면 나머지를 같은 순서로 채운다. 결과는 둘 다 정렬 순서.
+    per_tech가 0이면 기술을 보지 않는다 (2026-10-27 전 동작)."""
     ordered = sorted(entries, key=rank_key)
-    shown, cut = ordered[:limit], ordered[limit:]
+    per_tech = PER_TECH if per_tech is None else per_tech
+    if not per_tech:
+        picked = set(range(min(limit, len(ordered))))
+    else:
+        picked, used = set(), {}
+        for i, e in enumerate(ordered):
+            t = cap_technology(e)
+            if len(picked) < limit and used.get(t, 0) < per_tech:
+                picked.add(i)
+                used[t] = used.get(t, 0) + 1
+        for i in range(len(ordered)):
+            if len(picked) >= limit:
+                break
+            picked.add(i)
+    shown = [e for i, e in enumerate(ordered) if i in picked]
+    cut = [e for i, e in enumerate(ordered) if i not in picked]
     return shown, cut, f"{len(shown)}/{len(ordered)}"
 
 

@@ -133,6 +133,8 @@ tier-screen v2(`eval/tier-screen/results-v2.md`)에서 Elasticsearch·Neo4j 서�
 
 **주당 상한**: 남은 후보 중 **5개만 보여주고 `5/N`으로 전체 수를 표시**한다. 넘치면 등급이 높은 순(L0 → L8), 같은 등급이면 변화 심각도 순(security > breaking > 우리 버전 EOL·모델 은퇴 > deprecation > 나머지)으로 고른다. (변경 2026-10-16, HYO-129: 후속 모델은 「나머지」보다도 뒤 — 선택 실험이라서) 잘린 후보는 버리지 않고 로그에 남긴다 — "놓친 것"을 잴 때 쓴다.
 
+**변경 (2026-10-27, 사용자 — HYO-147, 결정표·정렬 기준·5/N 표시는 그대로)**: 상한을 **기술당 1칸 먼저** 채운다. 위 정렬 순서대로 훑으며 기술마다 첫 후보만 고르고, 칸이 남으면 나머지를 같은 순서로 채운다(보이는 것도 잘린 것도 정렬 순서). 묶는 기술은 그 후보를 남긴 행 중 가장 높은 행(등급 → 심각도 → 기술 이름)의 기술이다. 이유: 2026-W44 관문 남김 31건 중 5칸이 전부 Electron이었다 — 같은 날 42·43·44·45 줄에 나온 **같은 보안 수정 한 묶음**(노트가 같다)과 45.0.0이 칸을 다 가져가, Anthropic API 2026-10-21·모델 은퇴 페이지 · OpenAI deprecations · langfuse security가 밀렸다. 정렬 키에 다양성이 없어서 생긴 일이다. 저장된 관문 결과에 다시 걸어 본 전/후(모델 호출 없음): W41 바뀐 칸 0 (4/4) · W42 1 (OpenAI changelog → anthropic SDK 1.12.0 deprecation) · W43 1 (claude-code v2.1.299 deprecation → Amazon Bedrock 가격 — 둘 다 L2, claude-code가 claude-sonnet-5-5 기술로 묶여서) · W44 4 (Electron 4건 → Anthropic 모델 은퇴 페이지 · OpenAI deprecations · Bedrock 가격 · langfuse security). 잘린 Electron 4건은 그대로 로그(`truncated`)에 남는다. 같은 W44가 드러낸 다른 틈 — 관문이 **우리 버전 숫자**를 몰라 "42.x 지원 종료"를 「우리 버전 EOL」로 붙였고 정작 우리 Electron 39가 지원 밖이라는 말은 없었다(§7 열린 문제) — 은 이 변경이 고치지 않는다 (HYO-148)
+
 ## 5. 결정 기록 (2026-09-30, 사용자)
 
 | # | 질문 | 메모 |
