@@ -46,6 +46,16 @@ def parse(name):
     return re.compile(pattern, re.I), _version(nums)
 
 
+def mentions(text, name):
+    """글에 우리 모델(같은 계열 + **같은** 버전)이 나오는가 → 찾은 표기 목록 | None (이름에 버전이 없어 볼 수 없다).
+    모델 은퇴를 우리 모델로 좁힐 때 쓴다 (scope.narrow, HYO-148) — 「Claude Sonnet 3.7」은 claude-sonnet-5-5가 아니다."""
+    p = parse(name)
+    if p is None:
+        return None
+    rx, ours = p
+    return list(dict.fromkeys(m.group(0) for m in rx.finditer(text or "") if _version(re.split(r"[.\-]", m.group(1))) == ours))
+
+
 def find(title, names):
     """제목 + L2 기술 이름들 → {기술 이름: 제목에서 찾은 후속 모델 표기}. 같은 기술에 여러 표기가 걸리면 처음 것."""
     out = {}

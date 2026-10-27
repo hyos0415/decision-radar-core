@@ -3,6 +3,7 @@
 `pipeline/lanes.py`가 비워 둔 `gate: null` 자리를 채운다. profile_filter.run_filter(gate=Gate(...))가 레인 A 항목마다 부른다.
 모델은 변화 종류만 부른다(소식 하나당 1회). 등급은 `TierStore`가 이미 갖고 있다 (스택이 바뀔 때만 따로 분류: `python -m pipeline.importance classify-stack`).
 판정(남김/버림·두 등급·보정·5/N)은 policy.py — 모델이 아니라 코드 (규율 1). 후속 모델(successor_model)도 모델이 아니라 successor.py가 제목으로 붙인다 (HYO-129).
+eol·모델 은퇴가 우리 버전·우리 모델인지는 scope.py가 기술마다 정한다 — 아니면 그 기술의 라벨에서 뺀다 (HYO-148). 기록은 결과의 `scope`.
 
 status: ok(판정함) · unclassified(소식이 걸린 기술을 모르거나 등급이 분류 불가 — v1.1 U4: 후보에서 빼고 기록) · error(변화 분류 호출 실패 — 안전 실패, 버림 + 기록)
         · other-stack(내 스택에 없고 팀원 스택 — 수집 전용 대상 — 에만 있는 기술. 내 관문 밖이라 버리되 「모르는 기술」과 따로 센다, HYO-122 결정 1)
@@ -10,7 +11,7 @@ unclassified 중 technologies가 비었으면 「모르는 기술」, 있으면 
 """
 import re
 
-from . import policy, successor
+from . import policy, scope, successor
 from .backends import BoundaryError, NewsQuery
 from .signals import norm
 
@@ -49,9 +50,19 @@ def resolve_technologies(item, names, vendor_terms=None):
 
 
 class Gate:
-    def __init__(self, backend, store, vendor_terms=None, limit=policy.WEEKLY_LIMIT, other_stack=()):
+    def __init__(self, backend, store, vendor_terms=None, limit=policy.WEEKLY_LIMIT, other_stack=(), versions=None):
+        """versions: 우리 버전 {정규화 이름: [{version, ...}]} (signals.read_repo_versions — 없으면 eol은 확인 불가로 남긴다).
+        사람이 적은 overrides `version`이 이긴다 (HYO-148)."""
         self.backend, self.store, self.vendor_terms, self.limit = backend, store, vendor_terms or {}, limit
         self.other_stack = list(other_stack or [])
+        self.auto_versions = versions or {}
+
+    @property
+    def versions(self):
+        """manifest 버전 + 사람 overrides `version` (매번 등급 파일에서 읽는다 — 실행 중 사람 수정도 반영)."""
+        human = {k: ([o["version"]] if isinstance(o["version"], str) else o["version"])
+                 for k, o in self.store.data["overrides"].items() if o.get("version")}
+        return scope.Versions(self.auto_versions, human)
 
     def _other_stack(self, item, mine):
         """내 스택에서 못 찾은 소식 → 팀원 스택 기술 이름들 | []. 의존성 릴리스는 그 의존성 이름으로만 본다 —
@@ -99,10 +110,14 @@ class Gate:
             return {**base, "status": "error", "tiers": {t: e2["tiers"] for t, e2 in effs.items()},
                     "reason": f"변화 분류 실패: {type(e).__name__}: {str(e)[:120]}"}
         changes = policy.normalize_changes(ans.labels, item.get("title") or "")   # 프리릴리스 major · 덧붙인 minor_patch 빼기 (§3 변경 2026-10-21, HYO-131)
-        rows, kept_by, defaulted = [], [], False
+        rows, kept_by, defaulted, scoped = [], [], False, []
+        versions = self.versions
         for t, e in effs.items():
             ctx = policy.Context(path=e.get("path", "prod"), pin=e.get("pin"), sensitive=e.get("sensitive"), local=e.get("local"))
-            labels = list(changes)
+            labels, notes = scope.narrow(changes, t, e["tiers"], item, versions)   # 우리 버전·우리 모델이 아닌 eol·모델 은퇴를 뺀다 (HYO-148)
+            line = scope.release_line(t, item, versions)
+            if notes or line:
+                scoped.append({"technology": t, "notes": notes, **({"release_line": line} if line else {})})
             if t in succ:      # 모델 라벨이 비었을 때의 기본(minor·patch) 행은 그대로 두고 후속 모델 행을 더한다 — 기존 판정을 바꾸지 않게
                 labels = (labels or ["minor_patch"]) + ["successor_model"]
             d = policy.decide(e["tiers"], labels, ctx)
@@ -115,7 +130,7 @@ class Gate:
                "남기는 행 없음: " + ", ".join(sorted({f"{r['tier']}×{policy.CHANGE_LABEL[r['change']]}={r['base']}" for r in rows})))
         return {"keep": keep, "status": "ok", "technologies": techs, "tiers": {t: e["tiers"] for t, e in effs.items()}, "changes": changes, "model_changes": list(ans.labels),
                 "rows": rows, "kept_by": kept_by, "defaulted_change": defaulted, "skipped": base["skipped"], "successor": base["successor"],
-                "reason": why}
+                "scope": scoped, "reason": why}
 
 
 def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT):
@@ -130,4 +145,20 @@ def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT):
         t = policy.cap_technology(x)
         return {"id": x["id"], "tier": best["tier"], "change": best["change"], "technology": t if isinstance(t, str) else None}
     return {"label": label, "limit": limit, "per_tech": policy.PER_TECH, "total_kept": len(kept), "shown": [brief(s) for s in shown], "truncated": [brief(c) for c in cut],
-            "status_counts": policy.gate_counts(entries)}
+            "status_counts": policy.gate_counts(entries), "newer_line_eol": newer_line_eol(entries)}
+
+
+def newer_line_eol(entries):
+    """「우리 줄보다 새 줄이 지원 종료됐다」 알림 (HYO-148 — 판정이 아니라 요약 한 줄). 그 eol은 다른 줄이라 뺐지만 우리 줄도 지원 밖일 수 있다.
+    기술마다 한 번 → [{technology, ours, announced(가장 높은 줄), ids}]."""
+    by = {}
+    for e in entries:
+        for s in (e.get("gate") or {}).get("scope") or []:
+            for n in s["notes"]:
+                for x in n.get("newer_line_eol") or []:
+                    cur = by.setdefault(x["technology"], {"technology": x["technology"], "ours": x["ours"], "announced": x["announced"], "ids": []})
+                    if scope.vtuple(x["announced"]) > scope.vtuple(cur["announced"]):
+                        cur["announced"] = x["announced"]
+                    if e["id"] not in cur["ids"]:
+                        cur["ids"].append(e["id"])
+    return list(by.values())
