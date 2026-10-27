@@ -152,6 +152,34 @@ def test_cap_order_and_log():
     assert policy.rank_key(two)[0] == 3
 
 
+def _tcand(i, tier, change, tech):
+    return {"id": i, "kept_by": [{"tier": tier, "change": change, "technology": tech}]}
+
+
+def test_cap_one_slot_per_technology_then_fill():
+    # §4 변경 2026-10-27 (HYO-147) — W44 모양: Electron 한 보안 수정 묶음(42·43·44·45 줄)이 5칸을 다 가져갔다
+    w44 = [_tcand(f"electron@v{v}", "L1", "security", "electron") for v in ("42.11.16", "43.8.1", "44.9.1", "45.0.0-beta.6")]
+    w44 += [_tcand("electron@v45.0.0", "L1", "breaking", "electron"), _tcand("electron@v42.11.17", "L1", "eol", "electron"),
+            _tcand("anthropic:model-deprecations", "L2", "breaking", "claude-sonnet-5-5"), _tcand("anthropic:release-notes", "L2", "breaking", "claude-sonnet-5-5"),
+            _tcand("openai:deprecations", "L2", "model_retirement", "gpt-6-luna"), _tcand("bedrock:pricing", "L2", "pricing", "Amazon Bedrock"),
+            _tcand("langfuse@v4.70.0", "L3", "security", "langfuse"), _tcand("fastapi@0.150.0", "L4", "breaking", "fastapi")]
+    shown, cut, label = policy.apply_cap(w44, 5)
+    assert [s["id"] for s in shown] == ["electron@v42.11.16", "anthropic:model-deprecations", "openai:deprecations", "bedrock:pricing",
+                                        "langfuse@v4.70.0"], [s["id"] for s in shown]
+    assert label == "5/12" and len(cut) == 7 and cut[0]["id"] == "electron@v43.8.1"                 # 잘린 것은 정렬 순서로 로그에
+    assert [s["id"] for s in policy.apply_cap(w44, 5, per_tech=0)[0]][:4] == ["electron@v42.11.16", "electron@v43.8.1", "electron@v44.9.1",
+                                                                             "electron@v45.0.0-beta.6"]   # 0 = 예전 동작
+    # 기술이 칸보다 적으면 남은 칸을 정렬 순서로 채운다 — 결과도 정렬 순서
+    few = w44[:4] + [w44[10]]
+    assert [s["id"] for s in policy.apply_cap(few, 3)[0]] == ["electron@v42.11.16", "electron@v43.8.1", "langfuse@v4.70.0"]
+    assert [s["id"] for s in policy.apply_cap(few, 5)[0]] == [e["id"] for e in few] and policy.apply_cap(few, 5)[2] == "5/5"
+    # 묶는 기술 = 가장 높은 행의 기술. 두 기술이 같은 등급·심각도면 이름 순 (결정론)
+    two = {"id": "x", "kept_by": [{"tier": "L5", "change": "breaking", "technology": "anthropic"},
+                                  {"tier": "L2", "change": "pricing", "technology": "gpt-6-sol"}, {"tier": "L2", "change": "pricing", "technology": "gpt-6-luna"}]}
+    assert policy.cap_technology(two) == "gpt-6-luna"
+    assert policy.cap_technology(_cand("y", "L4", "security")) != policy.cap_technology(_cand("z", "L4", "security"))   # 기술 없는 옛 기록은 따로
+
+
 # ---------------------------------------------------------------- 등급: 신호 · 검증 · 저장
 
 def _write(p, text):
@@ -698,18 +726,22 @@ def _profile():
 
 def test_lane_a_gate_wiring_and_cap():
     st = _store(pydantic={"tiers": ["L4"]}, fastapi={"tiers": ["L4"]}, langfuse={"tiers": ["L3", "L5"]})
-    changes = {f"d{i}": ["breaking"] for i in range(7)} | {"s": ["security"], "m": ["minor_patch"]}
+    changes = {f"d{i}": ["breaking"] for i in range(7)} | {"s": ["security"], "m": ["minor_patch"], "f": ["breaking"]}
     be = StubBackend(changes=changes)
     items = [_item(f"d{i}", f"pydantic {i}", tech="pydantic") for i in range(7)]
-    items += [_item("s", "langfuse cve", tech="langfuse"), _item("m", "fastapi patch", tech="fastapi")]
+    items += [_item("s", "langfuse cve", tech="langfuse"), _item("m", "fastapi patch", tech="fastapi"), _item("f", "fastapi breaking", tech="fastapi")]
     res = profile_filter.run_filter(items, _profile(), ["kw"], gate=gate_mod.Gate(be, st))
     a = {e["id"]: e for e in res["lane_a"]}
     assert all(e["gate_status"] == "ok" and e["gate"] is not None for e in a.values())
     assert a["m"]["gate"]["keep"] is False and a["m"]["shown"] is None
     summ = res["gate_summary"]
-    assert summ["total_kept"] == 8 and summ["label"] == "5/8" and len(summ["truncated"]) == 3
+    assert summ["total_kept"] == 9 and summ["label"] == "5/9" and len(summ["truncated"]) == 4
     assert summ["shown"][0]["id"] == "s"                                                     # security가 같은 L3·L4 중 가장 먼저 (L3 행이 더 높은 등급)
-    assert sum(1 for e in a.values() if e["shown"] is True) == 5 and sum(1 for e in a.values() if e["shown"] is False) == 3
+    # 기술당 1칸 먼저 (§4 변경 2026-10-27): pydantic 7건이 칸을 다 채우지 않고 fastapi가 들어온다 — 남은 칸은 pydantic으로
+    assert [(x["id"], x["technology"]) for x in summ["shown"]] == [("s", "langfuse"), ("d0", "pydantic"), ("d1", "pydantic"), ("d2", "pydantic"),
+                                                                   ("f", "fastapi")], summ["shown"]
+    assert summ["per_tech"] == 1
+    assert sum(1 for e in a.values() if e["shown"] is True) == 5 and sum(1 for e in a.values() if e["shown"] is False) == 4
     assert {c["id"] for c in summ["truncated"]} <= {e["id"] for e in a.values() if e["shown"] is False}
     assert [(k["tier"]) for k in a["s"]["gate"]["kept_by"]] == ["L3", "L5"]                  # 두 등급 모두 기록
     # 관문 없이는 예전 그대로
@@ -1770,6 +1802,9 @@ class Mutation:
 _ORIG_DECIDE, _ORIG_CELL, _ORIG_JUDGE = policy.decide, policy.cell, evaluate.judge
 
 
+_ORIG_APPLY_CAP = policy.apply_cap
+
+
 def _first_tier_only(tiers_, changes, ctx=None):
     return _ORIG_DECIDE(tiers_[:1], changes, ctx)
 
@@ -1799,6 +1834,18 @@ def _trust_model(model_tiers, model_unsure, signals_):
 def _ignore_overrides(self, name):
     rec = self.get(name)
     return None if rec is None else {**rec, "sensitive": rec.get("sensitive", False), "local": rec.get("local", False)}
+
+
+def _cap_no_fill(entries, limit=policy.WEEKLY_LIMIT, per_tech=None):
+    """기술당 1칸만 하고 남은 칸을 비워 둔다."""
+    shown, cut, _ = _ORIG_APPLY_CAP(entries, limit, per_tech)
+    seen, keep = set(), []
+    for e in shown:
+        t = policy.cap_technology(e)
+        if t not in seen:
+            seen.add(t)
+            keep.append(e)
+    return keep, [e for e in sorted(entries, key=policy.rank_key) if e not in keep], f"{len(keep)}/{len(entries)}"
 
 
 def _severity_first(entry):
@@ -1901,6 +1948,10 @@ def mutations():
         ("스크립트 검증 무시 (평가 흐름)", [(tiers, "verify", _trust_model)], test_evaluate_end_to_end_with_stub_oracle),
         ("사람 수정 무시", [(TierStore, "effective", _ignore_overrides)], test_store_reuse_fingerprint_and_human_override),
         ("상한 정렬: 심각도 먼저", [(policy, "rank_key", _severity_first)], test_cap_order_and_log),
+        ("상한: 기술당 칸 제한 없음 (W44 Electron 5/5)", [(policy, "PER_TECH", 0)], test_cap_one_slot_per_technology_then_fill),
+        ("상한: 기술 대신 항목마다 따로 셈", [(policy, "cap_technology", lambda e: e["id"])], test_cap_one_slot_per_technology_then_fill),
+        ("상한: 남은 칸을 안 채움", [(policy, "apply_cap", _cap_no_fill)], test_cap_one_slot_per_technology_then_fill),
+        ("상한: 기술당 칸 제한 없음 (관문 배선)", [(policy, "PER_TECH", 0)], test_lane_a_gate_wiring_and_cap),
         ("채점이 오류·분류 불가 상태를 무시", [(evaluate, "score_run", _score_status_ignored)], test_score_run_by_hand),
         ("허용 호스트를 넓힘", [(agents_backend, "ALLOWED_HOSTS", {"api.openai.com", "telemetry.example.invalid"})], test_netguard_blocks_outside_api_openai_and_stops_without_retry),
         ("개발 경로가 최우선이 아님 (떠 있는 태그·민감이 되살림)", [(policy, "cell", _dev_not_first)], test_dev_path_is_top_priority),

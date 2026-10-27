@@ -127,6 +127,7 @@ def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT):
         e["shown"] = True if e["id"] in shown_ids else (False if e["id"] in cut_ids else None)
     def brief(x):
         best = min(x["kept_by"], key=lambda r: (policy.tier_rank(r["tier"]), policy.severity(r["change"])))
-        return {"id": x["id"], "tier": best["tier"], "change": best["change"]}
-    return {"label": label, "limit": limit, "total_kept": len(kept), "shown": [brief(s) for s in shown], "truncated": [brief(c) for c in cut],
+        t = policy.cap_technology(x)
+        return {"id": x["id"], "tier": best["tier"], "change": best["change"], "technology": t if isinstance(t, str) else None}
+    return {"label": label, "limit": limit, "per_tech": policy.PER_TECH, "total_kept": len(kept), "shown": [brief(s) for s in shown], "truncated": [brief(c) for c in cut],
             "status_counts": policy.gate_counts(entries)}
