@@ -318,6 +318,11 @@ class RadarService:
             "LANGSMITH_TRACING": "false", "LANGCHAIN_TRACING_V2": "false",
             "PYTHONIOENCODING": "utf-8", "TEMP": self.tmp, "TMP": self.tmp, "TMPDIR": self.tmp,
         })
+        # 거부한 소식을 detect가 다시 올리나 (HYO-142) — 실사용은 늘 안 올린다. 스텁·데모는 같은 초안을 다시 띄워 알림을 시험하려고 올린다(바꿀 수 있다)
+        if self.mode == "real":
+            env["RADAR_DETECT_RESURFACE"] = "0"
+        else:
+            env.setdefault("RADAR_DETECT_RESURFACE", "1")
         return env
 
     def ctx(self, export=None):
@@ -990,6 +995,13 @@ class RadarService:
                 if self.mode == "real":
                     notes = self._prepare_real(flow)
                     ctx.env["RADAR_SNAPSHOT_DIR"] = self.snapshot_dir  # 방금 고른 detect 입력
+                    if flow == "detect":
+                        res["input"] = os.path.basename(self.snapshot_dir)
+                        if trigger == "schedule" and self._ran_input(res["input"]):
+                            # 수집 PC의 주간 사슬이 늦거나 실패했다 — 지난 입력을 다시 돌리지 않는다 (HYO-142). 실행 기록에 안 남겨서
+                            # 정기 실행이 다음 확인(5분)에 다시 본다 — 새 입력이 push되면 그때 돈다. 손 실행은 막지 않는다
+                            return {**res, "skipped": "same_input",
+                                    "summary": notes + [f"입력 {res['input']}은 이미 돌렸다 — 새 주 입력을 기다린다"]}
                     if self.shadow:  # 주 실행이 ADR을 바꾸기 전에 떠 둔다 — 그림자도 같은 입력을 본다
                         shadow = self._shadow_prepare(res["id"])
                 queued = {q["item"] for q in hitl.review_queue(ctx)} if flow == "detect" else None
@@ -1082,6 +1094,11 @@ class RadarService:
         with self._shadow_lock, open(os.path.join(self.data_dir, SHADOW_FILE), "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         return rec
+
+    def _ran_input(self, week):
+        """이 detect 입력(주차)으로 끝까지 돈 detect가 있나 — 예전 기록은 요약 첫 줄의 「입력 <주차>」로 본다."""
+        return any(r.get("flow") == "detect" and r.get("ok") and (r.get("input") == week or f"입력 {week}" in (r.get("summary") or []))
+                   for r in self.runs(limit=500))
 
     def runs(self, limit=50):
         try:

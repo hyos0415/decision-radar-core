@@ -38,6 +38,7 @@ class DetectState(TypedDict, total=False):
     now: str
     stack: str
     feed: list
+    rejected: list  # 사람이 전에 거부한 소식 — 모델에 넘기지 않고 excluded 앞에 붙인다 (HYO-142)
     excluded: list
     kept: list
     skipped: list
@@ -63,21 +64,22 @@ def detect_graph(ctx, model):
     def load_node(state):
         ctx.now, ctx.calls = state["now"], 0
         run["id"] = f"detect-{state['now']}-{uuid.uuid4().hex[:8]}"  # 이 실행의 초안들이 같이 갖는 기록 — 같은 실행의 내보내기를 지문에서 넘기는 근거 (hitl._own_exports)
-        return {"stack": detect_ops.read_stack(ctx), "feed": detect_ops.snapshot_feed(ctx)}
+        feed, rejected = detect_ops.drop_rejected(ctx, detect_ops.snapshot_feed(ctx))
+        return {"stack": detect_ops.read_stack(ctx), "feed": feed, "rejected": rejected}
 
     async def triage_node(state):
-        feed = state["feed"]
+        feed, rejected = state["feed"], state.get("rejected") or []
         if not feed:  # 소식이 없으면 모델을 부르지 않는다 — 조용한 주가 정상이다 (R3)
-            return {"kept": [], "skipped": [], "dropped": [], "excluded": []}
+            return {"kept": [], "skipped": [], "dropped": [], "excluded": rejected}
         try:
             r = await agent("detect-triage", TRIAGE_INSTRUCTIONS, Triage, triage_prompt(state["now"], state["stack"], feed))
         except Exception as e:  # 400·파싱 실패·recursion limit — 후보 없음으로 두고 오류로 센다 (R1: 추측으로 채우지 않는다)
-            return {"kept": [], "skipped": [], "dropped": [], "excluded": [],
+            return {"kept": [], "skipped": [], "dropped": [], "excluded": rejected,
                     "p3": [{"kind": "model_error", "stage": "triage", "type": type(e).__name__, "message": str(e)[:300]}]}
         t = r.structured
         cands = [c.model_dump() for c in t.candidates]
         kept, skipped, dropped = detect_ops.screen(ctx, cands, state["feed"])
-        return {"kept": kept, "skipped": skipped, "dropped": dropped, "excluded": [e.model_dump() for e in t.excluded]}
+        return {"kept": kept, "skipped": skipped, "dropped": dropped, "excluded": rejected + [e.model_dump() for e in t.excluded]}
 
     def fan_out(state):
         sends = [Send("draft", {"now": state["now"], "w": w, "item": _item_for(state["feed"], w["candidate"]["source_urls"])})
@@ -102,8 +104,9 @@ def detect_graph(ctx, model):
             body = detect_ops.compose(d["draft"], w)  # 후보의 정체·related는 코드가 덮어쓴다 — draft는 서술만 한다
             ctx.calls += 1
             item_id = hitl.new_item_id(ctx, "detect", cand["technology"])  # 별도 파일은 초안 파일을 쓰는 순간에 생긴다 (설계 §3-1)
+            sources = [it["id"] for it in state["feed"] if it.get("id") and it.get("url") in cand["source_urls"]]
             res = hitl.write_adr(ctx, item_id, "detect", AdrDraft.model_validate(body), lifecycle="REVIEW_CANDIDATE",
-                                 final_lifecycle="REVIEW_CANDIDATE", by="graph", hold_export=True, run_id=run["id"])  # 내보내기를 켰으면 Inbox 검토까지 로컬에 둔다 (결정 8)
+                                 final_lifecycle="REVIEW_CANDIDATE", by="graph", hold_export=True, run_id=run["id"], sources=sources)  # 내보내기를 켰으면 Inbox 검토까지 로컬에 둔다 (결정 8)
             written.append({"candidate": cand, "w": w, "body": d["draft"], "id": res["id"], "path": res["written"], "item": item_id,
                             "validate_errors": res["validate_errors"], "repaired": False})
         return {"written": written}
