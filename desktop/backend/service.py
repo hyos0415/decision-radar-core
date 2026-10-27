@@ -992,7 +992,12 @@ class RadarService:
                     ctx.env["RADAR_SNAPSHOT_DIR"] = self.snapshot_dir  # 방금 고른 detect 입력
                     if self.shadow:  # 주 실행이 ADR을 바꾸기 전에 떠 둔다 — 그림자도 같은 입력을 본다
                         shadow = self._shadow_prepare(res["id"])
+                queued = {q["item"] for q in hitl.review_queue(ctx)} if flow == "detect" else None
                 rep, diag = asyncio.run(fn(ctx, self.chat(flow, script), ctx.now, self.model_name))
+                if queued is not None:  # 새 detect 초안 = 실행 뒤 검토 대기에 새로 생긴 항목 — 후보 대비 검토율의 분모 (HYO-56, 비교 프로토콜 §7)
+                    for q in hitl.review_queue(ctx):
+                        if q["item"] not in queued and q["kind"] == "detect":
+                            self.log("item_created", q["item"], kind="detect", adr=q["adr"], run=res["id"])
                 res.update(self._summarize_detect(rep) if flow == "detect" else self._summarize_revisit(rep))
                 main_view = self._compare_view(flow, rep, res)
                 res["summary"] = notes + res["summary"]
