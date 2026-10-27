@@ -2028,6 +2028,10 @@ def _():
     assert jm.check_nodes(n, {"adr:1": "langchain · product", "adr:9": "NEO4J"}) == []
     real = jm.load_nodes(HERE.parent / "eval" / "arena" / "nodes@v1.json")         # 등록된 어휘 파일 자체가 검사를 통과한다
     assert real.version == "nodes@v1" and real.tech_id("OpenAI Agents SDK") == real.tech_id("openai-agents")
+    v2 = jm.load_nodes(HERE.parent / "eval" / "arena" / "nodes@v2.json")           # v2 = v1 + ADR affected component (기술 노드·별칭은 같다)
+    assert v2.version == "nodes@v2" and v2.alias == real.alias and set(real.components) < set(v2.components)
+    assert {"component:decision-radar/retrieval-arena", "component:decision-radar/runtime", "component:decision-radar/ui",
+            "component:medical-mate-ai/obs"} <= set(v2.components) - set(real.components)
 
 
 @case("하네스: run_queries가 대표 청크를 남긴다 · save_results extra 파일 (이름 검사) · peak_memory · build_cost(cold 여부)")
