@@ -28,4 +28,4 @@ docker compose -f infra/compose.yaml down -v          # 데이터까지 지우�
 - ES는 기본으로 **와일드카드 삭제를 막는다**(`action.destructive_requires_name`). 인덱스는 이름마다 지운다
 - 단일 노드라 기본 복제본(1) 때문에 인덱스 상태가 yellow다. Arena 인덱스는 `number_of_replicas: 0`으로 만든다
 - n10s는 `NEO4J_PLUGINS`로 첫 기동 때 인터넷에서 받는다. 오프라인에서 다시 만들려면 `neo4j-plugins` 볼륨을 유지하거나 jar를 직접 넣는다
-- 메모리 실측(기동 직후): ES 약 1.5GB · Neo4j 약 1.4GB. M1 16GB 예산(overview Q1)에서 둘을 같이 띄워도 된다. 임베딩 모델은 엔진과 따로 미리 계산한다
+- 메모리 실측(기동 직후): ES 약 1.5GB · Neo4j 약 1.4GB. M1에서도 같다(10/27: 1.46GiB · 1.44GiB, smoke 20/20 — `docs/runbooks/arena-smoke-m1-2026-10-27.md`). M1 16GB 예산(overview Q1)에서 둘을 같이 띄워도 된다. 임베딩 모델은 엔진과 따로 미리 계산한다
