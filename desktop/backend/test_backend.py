@@ -183,6 +183,7 @@ def main():
         scenario_hyo127(tmp)
         scenario_hyo132(tmp)
         scenario_hyo144(tmp)
+        scenario_hyo142(tmp)
         scenario_engine(tmp)
         scenario_real(tmp)
     finally:
@@ -502,6 +503,17 @@ def _scenario_real(tmp, stub_scripts, StubChat):
     files = _git(adr_remote, "diff-tree", "--no-commit-id", "--name-status", "-r", "main")
     check("실사용 거부 → 초안 지움 · 닫힌 항목 기록만 커밋 (ADR 파일 없음)", rj["outcome"] == "rejected" and _git(adr_remote, "rev-parse", "main~1") == head
           and files.startswith("A\t.radar/items/") and len(files.splitlines()) == 1 and not glob.glob(os.path.join(svc.adr_dir, rj["adr"] + "-*.md")), (rj, files))
+    pushed = _git(adr_remote, "show", f"main:{files.split(chr(9))[1].strip()}")
+    check("실사용 거부 기록에 나온 소식이 함께 push된다 (다른 기기도 안다)", "sources:" in pushed, pushed[:300])
+    # HYO-142 — 정기 실행이 같은 입력을 다시 돌리지 않는다 (수집 PC 사슬이 늦은 경우) · 손 실행은 돌되 거부한 소식은 안 올린다
+    n_runs = len(svc.runs(limit=500))
+    sk = svc.run("detect", trigger="schedule")
+    check("실사용 정기 detect: 이미 돌린 입력이면 건너뜀 · 실행 기록 안 남김(다음 확인에 다시 봄)",
+          sk.get("skipped") == "same_input" and len(svc.runs(limit=500)) == n_runs and "2026-W44" in sk["summary"][-1], sk)
+    check("새 주 입력은 아직 안 돌린 것으로 본다", svc._ran_input("2026-W44") and not svc._ran_input("2026-W45"))
+    again = c.post("/runs/detect", json={}).json()
+    check("실사용 손 detect: 거부한 소식은 다시 안 올림 (실사용은 늘 켜짐)", again["ok"] and rows[1]["technology"] not in {d["technology"] for d in again["drafts"]}
+          and any("이전에 거부한 소식" in e["reason"] for e in again["excluded"]), again)
     head = _git(adr_remote, "rev-parse", "main")
 
     # revisit — 기록용 칸만 승인 없이 커밋, 충족 알림은 Inbox로
@@ -1173,6 +1185,42 @@ def scenario_hyo144(tmp):
     check("detect: stale 뒤에도 대기 시작 그대로 (15일)", after[det] == before[det], (before[det], after[det]))
     check("capture(메타 없음): stale 뒤에도 대기 시작 그대로", after[bare] == before[bare], (before[bare], after[bare]))
     check("export.since(처음 멈춘 시각)는 따로 남는다", hitl.read_item(ctx, det)["export"]["since"] > old)
+
+
+def scenario_hyo142(tmp):
+    """HYO-142 — 사람이 거부한 detect 소식은 다음 detect가 다시 올리지 않는다 (소식 하나 단위). 스텁 기본은 다시 올린다(알림 시험용)."""
+    print("\n— HYO-142: 거부한 소식 기억 —")
+    from radar.adr_copy import copy_adr
+
+    def round_trip(name, resurface):
+        data = os.path.join(tmp, name)
+        devdata.seed(data)
+        with _Env(RADAR_DETECT_RESURFACE=resurface):
+            svc = RadarService(data)
+            svc.run("detect")
+            rows = {i["technology"]: i["id"] for i in svc.inbox() if i["kind"] == "detect"}
+            rj = svc.answer(rows["HanNER-pii"], "reject")
+            again = svc.run("detect")
+        return svc, rows, rj, again
+
+    svc, rows, rj, again = round_trip("data142", "0")
+    ctx = svc.ctx()
+    it = hitl.read_item(ctx, rows["HanNER-pii"])
+    check("초안 항목에 나온 소식(피드 id)이 적힌다", rj["outcome"] == "rejected" and bool(it.get("sources")), it.get("sources"))
+    check("거부 기록 → rejected_sources", set(hitl.rejected_sources(ctx)) == set(it["sources"]), hitl.rejected_sources(ctx))
+    check("다시 detect: 거부한 소식은 초안 안 됨 · 제외에 이유", not any(d["technology"] == "HanNER-pii" for d in again["drafts"])
+          and any("이전에 거부한 소식" in e["reason"] for e in again["excluded"]), again)
+    check("다시 detect: 거부한 초안이 Inbox에 안 돌아옴", "HanNER-pii" not in {i["technology"] for i in svc.inbox() if i["kind"] == "detect"})
+    other = hitl.read_item(ctx, rows["vllm"])
+    other["export"] = {"state": "closed", "reason": "discard"}  # 「버림」(stale 답)은 소식에 대한 판단이 아니다
+    hitl.save_item(ctx, other)
+    check("버림은 기억하지 않는다 (거부만)", set(hitl.rejected_sources(ctx)) == set(it["sources"]))
+    dst = os.path.join(tmp, "copy142")
+    copy_adr(os.path.dirname(os.path.dirname(svc.adr_dir)), dst)
+    check("ADR 사본(그림자·데모)에 별도 파일도 간다", os.path.isfile(os.path.join(dst, ".radar", "items", rows["HanNER-pii"] + ".yaml")))
+
+    _svc, _rows, _rj, again = round_trip("data142s", None)
+    check("스텁 기본(RADAR_DETECT_RESURFACE 없음 → 1): 거부해도 다시 올린다 (알림 시험용)", any(d["technology"] == "HanNER-pii" for d in again["drafts"]), again["drafts"])
 
 
 def scenario_hyo132(tmp):

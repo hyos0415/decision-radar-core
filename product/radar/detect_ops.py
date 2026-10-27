@@ -17,6 +17,22 @@ def snapshot_feed(c):
     return radar(c, "snapshot", "feed")
 
 
+def drop_rejected(c, feed):
+    """사람이 전에 거부한 소식을 모델에 넘기기 전에 뺀다 (HYO-142) → (남은 소식, excluded 줄). 안전 조항처럼 코드가 집행한다 (규율 1).
+    단위는 피드 항목 id(릴리스 `repo@tag`, 벤더 페이지는 변경마다 다른 id) — 같은 기술의 새 소식은 막지 않는다.
+    RADAR_DETECT_RESURFACE=1이면 끈다 (데스크톱 스텁 모드 — 같은 초안을 다시 띄워 알림을 시험한다)."""
+    if c.env.get("RADAR_DETECT_RESURFACE") == "1":
+        return feed, []
+    seen = hitl.rejected_sources(c)
+    keep, out = [], []
+    for it in feed:
+        if it.get("id") in seen:
+            out.append({"url": it.get("url") or "", "reason": f"이전에 거부한 소식 — {seen[it['id']]} (다시 올리지 않는다)"})
+        else:
+            keep.append(it)
+    return keep, out
+
+
 MANIFESTS = ("requirements.txt", "package.json")
 
 

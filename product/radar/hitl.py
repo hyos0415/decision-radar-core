@@ -666,7 +666,7 @@ def _complete(ctx, item, errs, final_lifecycle, exporter, event="adr_written"):
 
 
 def write_adr(ctx, item_id, kind, draft, *, lifecycle="USER_REVIEW", final_lifecycle="DONE", by="human",
-              approval=None, after=None, exporter=None, hold_export=False, run_id=None):
+              approval=None, after=None, exporter=None, hold_export=False, run_id=None, sources=None):
     """승인된 초안을 쓴다 — 1 번호 → 2 별도 파일에 의도 → 3 ADR 파일 + validate → 4 완료. 각 단계 뒤 파일은 닫혀 있다.
 
     approval: {"decision": "approve"|"edit", "fingerprint": 승인 근거 지문, "draft_hash_original": edit 전 초안의 해시}.
@@ -694,6 +694,8 @@ def write_adr(ctx, item_id, kind, draft, *, lifecycle="USER_REVIEW", final_lifec
     item = item or new_item(ctx, item_id, kind, lifecycle)
     if run_id:
         item["run_id"] = run_id
+    if sources:  # detect: 이 초안이 나온 소식(피드 항목 id) — 사람이 거부하면 다음 detect가 같은 소식을 다시 올리지 않는다 (HYO-142)
+        item["sources"] = list(sources)
     if hold_export and ex.active:
         lifecycle = "USER_REVIEW"
     item["lifecycle"] = lifecycle
@@ -1112,6 +1114,26 @@ def export_record(ctx, paths, message, exporter=None):
     if not hasattr(ex, "publish_record"):
         return {"state": "skipped", "reason": "no_exporter"}
     return ex.publish_record([_rel(ctx, p) for p in paths], message, only_record=lambda _rel_, old, new: record_only_errors(old, new))
+
+
+def rejected_sources(ctx):
+    """사람이 거부한 detect 초안의 소식 → {피드 항목 id: 항목 id} (HYO-142). 거부만 센다 — 「버림」(stale 답)·「다시 판정」은
+    소식에 대한 판단이 아니다. 기술이 아니라 소식 하나 단위다: 같은 기술의 새 릴리스(다른 id)는 그대로 올라온다."""
+    d, out = items_dir(ctx), {}
+    if not os.path.isdir(d):
+        return out
+    for f in sorted(os.listdir(d)):
+        if not f.endswith(".yaml"):
+            continue
+        try:
+            it = read_item(ctx, f[:-5]) or {}
+        except (ItemInvalid, HitlError):
+            continue
+        ex = it.get("export") or {}
+        if it.get("kind") == "detect" and ex.get("state") == "closed" and ex.get("reason") == "reject":
+            for s in it.get("sources") or []:
+                out.setdefault(s, it["id"])
+    return out
 
 
 def review_queue(ctx):
