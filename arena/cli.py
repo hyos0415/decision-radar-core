@@ -2,6 +2,7 @@
 
   python arena/cli.py stats --snapshots <radar-snapshots> --adr <adr> --repo decision-radar=<경로> ... [--out stats.json]
   python arena/cli.py nodes-check --queries q.jsonl <같은 코퍼스 인자>   # 노드 어휘 nodes@v1 확인 (HYO-34)
+  python arena/cli.py graph-check [--queries q.jsonl --qrels qrels.json] <같은 코퍼스 인자>   # S7 그래프 graph@v1 (HYO-149)
   python arena/cli.py run   --strategy s1|s2|s3a|s3a.ko|s3b|s4|s4.int8|s4.bbq|s4.kure|s5a|s5b|s6 [--s5b-sparse s3a|s3a.ko] [--s6-first s5a|s4] --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
 
 코퍼스 폴더 위치는 전부 인자다 (Windows · M1 Mac 둘 다). 설정(버전·커밋·파일)은 arena/corpus/c-all@v1.json.
@@ -212,6 +213,27 @@ def cmd_nodes_check(args):
         raise SystemExit(1)
 
 
+def cmd_graph_check(args):
+    """S7 그래프 graph@v1 (HYO-149) — 노드·관계 수 · 허브 · 연결 안 된 것 · dev 경로 존재율(스키마만의 상한).
+    test 질의는 개수만 센다 — 노드도 qrels도 보지 않는다(봉인)."""
+    from arena import graph
+    cfg = corpus.load_config(args.config)
+    docs = corpus.load_corpus(cfg, args.snapshots, args.adr, _kv(args.repo, "--repo"), _kv(args.supplement, "--supplement"))
+    nodes = jhs_metrics.load_nodes(args.nodes)
+    G, report = graph.build(docs, nodes)
+    out = {"stats": graph.stats(G), "report": report}
+    if args.queries:
+        qs = harness.load_queries(args.queries)
+        dev = [q for q in qs if q.get("split") == "dev"]
+        qrels = json.loads(Path(args.qrels).read_text(encoding="utf-8"))
+        out["test_skipped"] = sum(q.get("split") == "test" for q in qs)
+        out["dev"] = graph.reachability(G, dev, {q["qid"]: qrels.get(q["qid"], {}) for q in dev}, nodes)
+    text = json.dumps(out, ensure_ascii=False, indent=1)
+    if args.out:
+        Path(args.out).write_text(text + "\n", encoding="utf-8")
+    print(text)
+
+
 def cmd_run(args):
     cfg, policy, policy_path, docs, chunks, counter, chunk_secs = build(args)
     queries = harness.load_queries(args.queries)
@@ -333,7 +355,16 @@ def main(argv=None):
     p.add_argument("--nodes", default=str(NODES_DEFAULT))
     p.add_argument("--queries", required=True)
     p.set_defaults(fn=cmd_nodes_check)
+    p = sub.add_parser("graph-check", help="S7 그래프 graph@v1 — 노드·관계 수 · dev 경로 존재율 (test는 개수만)")
+    add_corpus_args(p)
+    p.add_argument("--nodes", default=str(HERE.parent / "eval" / "arena" / "nodes@v2.json"))
+    p.add_argument("--queries", help="gold 질의 (dev만 쓴다)")
+    p.add_argument("--qrels")
+    p.add_argument("--out", help="결과 JSON 저장 경로")
+    p.set_defaults(fn=cmd_graph_check)
     args = ap.parse_args(argv)
+    if getattr(args, "queries", None) and args.cmd == "graph-check" and not args.qrels:
+        ap.error("graph-check --queries에는 --qrels가 함께 있어야 한다")
     if getattr(args, "s5b_sparse", None) is not None and args.strategy != "s5b":
         ap.error(f"--s5b-sparse {args.s5b_sparse}는 --strategy s5b에서만 뜻이 있다 (지금 {args.strategy}) — 조용히 무시하지 않는다")
     if getattr(args, "s6_first", "s5a") != "s5a" and args.strategy != "s6":
