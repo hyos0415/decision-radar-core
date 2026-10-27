@@ -3289,11 +3289,13 @@
           },
           "since": {
             "type": "string",
-            "title": "Since"
+            "title": "Since",
+            "description": "처음 도착 시각 — 처리 중에 stale·보류로 바뀌어도 그대로다 (HYO-144)"
           },
           "waiting_days": {
             "type": "integer",
-            "title": "Waiting Days"
+            "title": "Waiting Days",
+            "description": "since부터 지난 날 수"
           },
           "state": {
             "type": "string",
@@ -3496,11 +3498,13 @@
           },
           "since": {
             "type": "string",
-            "title": "Since"
+            "title": "Since",
+            "description": "처음 도착 시각 — 처리 중에 stale·보류로 바뀌어도 그대로다 (HYO-144)"
           },
           "waiting_days": {
             "type": "integer",
-            "title": "Waiting Days"
+            "title": "Waiting Days",
+            "description": "since부터 지난 날 수"
           },
           "state": {
             "type": "string",

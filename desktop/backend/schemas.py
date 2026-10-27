@@ -133,8 +133,8 @@ class InboxItem(BaseModel):
     title: str
     technology: Optional[str]
     affected: list[Affected]
-    since: str
-    waiting_days: int
+    since: str = Field(description="처음 도착 시각 — 처리 중에 stale·보류로 바뀌어도 그대로다 (HYO-144)")
+    waiting_days: int = Field(description="since부터 지난 날 수")
     state: ItemState = Field(description="capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked / "
                                          "pending: queued · running · error · linked · no_draft / revisit: met (판정 결과)")
     actions: list[Action] = Field(description="이 항목에 할 수 있는 답. 빈 목록이면 보기만")

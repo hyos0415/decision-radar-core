@@ -496,7 +496,7 @@ class RadarService:
         text = open(path, encoding="utf-8").read() if path and os.path.exists(path) else ""
         m = _TITLE.search(text)
         scope = item.get("scope") or {}
-        since = q["export"].get("since") or q["created"]
+        since = q["created"]  # 처음 도착 시각 — export.since는 상태가 바뀔 때마다 새로 쓰여(review → stale) 대기 일수로 쓰지 않는다 (HYO-144)
         row = {"id": q["item"], "kind": q["kind"], "title": m.group(1).strip() if m else q["item"],
                "technology": scope.get("technology"), "affected": scope.get("affected") or [], "since": since,
                "waiting_days": _days(since), "state": q["export"].get("state"),
