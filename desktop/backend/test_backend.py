@@ -855,6 +855,9 @@ def scenario_hyo85(tmp):
     # detect 검토 — 편집용 초안 · 수정 · 거부 (로컬 내보내기, git 없음)
     rows = [i for i in c.get("/inbox").json()["items"] if i["kind"] == "detect"]
     check("detect 항목 2개 이상 + why 칸(관문 없으면 null)", len(rows) >= 2 and all("why" in i and i["why"] is None for i in rows), rows)
+    made = [x for x in events(svc) if x["event"] == "item_created" and (x.get("detail") or {}).get("kind") == "detect"]
+    check("로그: detect 초안마다 item_created(kind=detect · adr · run) 한 번", sorted(x["item"] for x in made) == sorted(i["id"] for i in rows)
+          and all(x["detail"].get("adr") and x["detail"].get("run") for x in made), made)
     det = c.get(f"/inbox/{rows[0]['id']}").json()
     d = det["draft"]
     check("detect 상세: 편집용 초안이 파일과 같다 (render 왕복)", d is not None and ops.render(AdrDraft.model_validate(d), "2026-10-08")[4:].split("\n", 2)[2]
