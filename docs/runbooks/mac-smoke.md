@@ -138,7 +138,8 @@ curl -s "localhost:8765/engine?refresh=true" | python3 -m json.tool    # ready: 
 curl -s localhost:8765/decisions | python3 -c "import json,sys;c=[r for x in json.load(sys.stdin)['items'] for r in x['revisit'] if r.get('check_type')!='human'];print('모델이 판정할 조건', len(c))"
 ```
 
-- **멈춤** — 「revisit은 조건마다(사람이 보는 human 조건 제외) `claude -p` 세션 1개 → 약 N세션(구독), 이어서 그림자가 같은 일을 API로 한 번 (몇 센트). 돌릴까?」 답을 받는다
+- **멈춤** — 「revisit은 조건마다(사람이 보는 human 조건 제외) `claude -p` 세션 1개 → 약 N세션(구독), 이어서 그림자가 같은 일을 API로 한 번 (**과금 — 회당 약 $0.5**, 조건 25개 기준 10/26 $0.565). 돌릴까?」 답을 받는다
+  - 그림자 `model_calls`가 주 실행보다 몇 배 많은 건 정상이다 — 구독 CLI는 세션 하나(안의 여러 턴)를 1로 세고(`engines._record`, 턴 수는 `num_turns`), API는 모델 호출(턴)마다 1로 센다(`llm_log.on_llm_end`). API 비용은 턴마다 입력 전체를 정가로 셈한다(`cost_for` — 캐시 할인 없음)
 - 알아 둘 것: detect 입력이 없으면 출처를 못 연다 → 조건은 대부분 **판정 불가**로 나온다. W43 입력이 있으면 그 주 소식만 근거로 본다. 어느 쪽이든 이번 점검은 배관 확인이라 괜찮다
 
 ```bash
