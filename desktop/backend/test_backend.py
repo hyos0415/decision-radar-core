@@ -182,6 +182,7 @@ def main():
         scenario_hyo110(tmp)
         scenario_hyo127(tmp)
         scenario_hyo132(tmp)
+        scenario_hyo144(tmp)
         scenario_engine(tmp)
         scenario_real(tmp)
     finally:
@@ -1142,6 +1143,37 @@ def scenario_hyo110(tmp):
     with open(svc.events_path, "a", encoding="utf-8") as f:
         f.write('{"at": "2026-10-13T00:00:00+09:00", "event": "notification_sh')
     check("깨진 줄은 건너뜀", len(notes()) == 9)
+
+def scenario_hyo144(tmp):
+    """HYO-144 — 대기 일수는 처음 도착 시각에서 센다. 다른 항목을 처리해 stale이 되거나 checkpoint가 늘어도 바뀌지 않는다."""
+    print("\n— HYO-144: 대기 시작 시각 고정 —")
+    import datetime as dt
+    data = os.path.join(tmp, "data144")
+    devdata.seed(data)
+    svc = RadarService(data)
+    svc.run("detect")
+    ctx = svc.ctx()
+    old = (dt.datetime.now().astimezone() - dt.timedelta(days=15)).isoformat(timespec="seconds")
+    det = [i for i in svc.inbox() if i["kind"] == "detect"][0]["id"]
+    it = hitl.read_item(ctx, det)
+    it["created"] = old  # Mac 연습장처럼 오래전에 도착한 초안
+    hitl.save_item(ctx, it)
+    caps = [i for i in svc.inbox() if i["kind"] == "capture"]
+    bare = caps[1]["id"]  # 앱 메타에 since가 없는 capture — checkpoint 시각으로 센다
+    m = svc._meta()
+    m["items"][bare].pop("since")
+    json.dump(m, open(svc.meta_path, "w", encoding="utf-8"), ensure_ascii=False)
+    before = {i["id"]: (i["since"], i["waiting_days"]) for i in svc.inbox()}
+    check("준비: detect 초안 15일째", before[det][1] == 15, before[det])
+
+    svc.answer(caps[0]["id"], "approve")  # 다른 항목 처리 → ADR repo가 바뀐다
+    r1, r2 = svc.answer(det, "approve"), svc.answer(bare, "approve")
+    check("준비: 두 항목 모두 stale로 멈춤", r1["outcome"] == r2["outcome"] == "stale", (r1, r2))
+    after = {i["id"]: (i["since"], i["waiting_days"]) for i in svc.inbox()}
+    check("detect: stale 뒤에도 대기 시작 그대로 (15일)", after[det] == before[det], (before[det], after[det]))
+    check("capture(메타 없음): stale 뒤에도 대기 시작 그대로", after[bare] == before[bare], (before[bare], after[bare]))
+    check("export.since(처음 멈춘 시각)는 따로 남는다", hitl.read_item(ctx, det)["export"]["since"] > old)
+
 
 def scenario_hyo132(tmp):
     """HYO-132 — 남김 카드 표시: 관문 kept_by로 강제 이전(+마감일) · 선택 실험 · 표시 없음. 코드가 정한다 (모델 아님)."""

@@ -885,9 +885,15 @@ export interface components {
       technology: string | null
       /** Affected */
       affected: components['schemas']['Affected'][]
-      /** Since */
+      /**
+       * Since
+       * @description 처음 도착 시각 — 처리 중에 stale·보류로 바뀌어도 그대로다 (HYO-144)
+       */
       since: string
-      /** Waiting Days */
+      /**
+       * Waiting Days
+       * @description since부터 지난 날 수
+       */
       waiting_days: number
       /**
        * State
@@ -977,9 +983,15 @@ export interface components {
       technology: string | null
       /** Affected */
       affected: components['schemas']['Affected'][]
-      /** Since */
+      /**
+       * Since
+       * @description 처음 도착 시각 — 처리 중에 stale·보류로 바뀌어도 그대로다 (HYO-144)
+       */
       since: string
-      /** Waiting Days */
+      /**
+       * Waiting Days
+       * @description since부터 지난 날 수
+       */
       waiting_days: number
       /**
        * State
