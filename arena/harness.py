@@ -55,9 +55,10 @@ def rollup(chunk_hits, chunk_to_doc):
     return [(d, s) for d, _, s in rollup_chunks(chunk_hits, chunk_to_doc)]
 
 
-def run_queries(strategy, queries, chunk_to_doc, k_docs=20, chunk_k=200, rep_chunks=None):
+def run_queries(strategy, queries, chunk_to_doc, k_docs=20, chunk_k=200, rep_chunks=None, seeds=None):
     """-> (run {qid: {doc_id: score}}, 질의 지연 ms 목록). 문서 k_docs개가 채워지게 청크를 넉넉히(chunk_k) 받는다.
-    rep_chunks(dict)를 주면 {qid: {doc_id: 대표 chunk_id}}를 채운다 — component 근거(jhs_metrics)가 청크 단위로 본다."""
+    rep_chunks(dict)를 주면 {qid: {doc_id: 대표 chunk_id}}를 채운다 — component 근거(jhs_metrics)가 청크 단위로 본다.
+    seeds(dict)를 주면 전략의 `last_seeds`(S7 — 시드 노드 id 목록)를 {qid: [...]}로 채운다 — Seed Recall(jhs_metrics.seed_recall)이 쓴다."""
     run, latencies = {}, []
     for q in queries:
         t0 = time.perf_counter()
@@ -72,6 +73,8 @@ def run_queries(strategy, queries, chunk_to_doc, k_docs=20, chunk_k=200, rep_chu
         run[q["qid"]] = {d: s for d, _, s in top}
         if rep_chunks is not None:
             rep_chunks[q["qid"]] = {d: c for d, c, _ in top}
+        if seeds is not None and hasattr(strategy, "last_seeds"):
+            seeds[q["qid"]] = list(strategy.last_seeds)
     return run, latencies
 
 

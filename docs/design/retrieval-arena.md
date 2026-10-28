@@ -134,6 +134,7 @@ K는 지금 `jhs.py match`가 문자열 일치로 하는 일이다. 규모에서
 - **노드 어휘 `nodes@v1` (`eval/arena/nodes@v1.json`)** — technology · component 노드의 정식 id와 별칭. **별칭은 코퍼스(`c-all@v1`) 문서에 글자 그대로 나오는 것만** 넣고 출처 문서 id를 같이 적는다(`arena/cli.py nodes-check`가 확인). 질의 글에서 별칭을 뽑지 않는다 — a 방식이 test 질의를 미리 본 셈이 된다. gold nodes의 연결은 기계적으로만 확인하고, test 질의 노드가 연결되지 않아도 별칭을 고치지 않는다. 버전 노드(S7 결정의 Release)는 S7 스키마를 정할 때. HYO-36 파일럿 전에 고정한다
   - **변경 (2026-10-27, 사용자 결정 — test 결과 0건): `nodes@v2`** (`eval/arena/nodes@v2.json`) — nodes@v1은 지우지 않는다. v1의 component는 스택 절 표에서만 왔는데, K 질의 nodes는 ADR `affected`의 이름(retrieval-arena · runtime · ui · medical-mate-ai llm·dialog·obs)을 써서(확정 시트가 둘 다 허용한다) 그래프에 연결되지 않았다(dev 4 · test 6 질의 — 이름 대조만 했고 test 질의 글은 보지 않았다). S7이 K에서 처음부터 불리해진다. v2 = v1 + **C-ADR@v1 0001~0011의 affected (repo, component) 전부**(기계적 — 질의를 보고 고르지 않음), source는 그 ADR. 기술 노드·별칭은 v1과 같다. 스택 표 이름과 ADR 이름(arena ↔ retrieval-arena 등)을 같은 노드로 묶을지는 S7 스키마 결정 때 정한다 — v2에서는 별개 노드. `nodes-check --nodes nodes@v2.json`: dev 미연결 5 → 1(C05 Langfuse Python SDK — 기술 별칭, 질의 글에서 별칭을 뽑지 않는 규칙대로 두었다) · test 14 → 7. Seed Recall(S7 계열)은 v2로 잰다. 이미 등록된 지표(component 근거 · Correct Version · Impact FP)는 기술 별칭만 쓰므로 v1과 같다
   - **변경 (2026-10-27, HYO-149 — 사용자 결정, test 결과 0건)**: 이름 묶기 = **노드는 합치지 않고 근거 있는 것만 `RECORDED_AS` 관계로** (§6 변경 2026-10-27). 그래서 Seed Recall의 id 일치는 v2 그대로다. 버전 노드는 graph@v1의 release(문서 없는 고정 버전 포함) — 노드 어휘 파일에는 넣지 않는다(질의 nodes가 버전을 갖지 않는다). S7 시드는 문서 시드(BM25 상위 k)로 바뀌어 「시드 = 그 문서에 붙은 노드」로 잰다
+  - **변경 (2026-10-28, HYO-36 — 사용자 결정, Seed Recall 결과 0건)**: S7 계열의 Seed Recall은 **시드 목록에서 문서 노드(release·adr·document)를 빼고** technology·component만 센다. 주 지표는 **@all**(BM25 상위 k 문서에 붙은 technology·component 전부 중 질의 노드가 든 비율), 곁에 @1·3·5. 이유: 문서 노드는 질의 노드와 일치할 수 없어 @k 칸만 차지한다 — 등록 그대로면 @1이 사실상 늘 0이고, @5가 앞 문서 한두 개만 봐서 시드 문서 수 k를 바꿔도 지표가 움직이지 않는다(k를 고르는 곁 지표 구실을 못 한다). 「시드 실패 vs 탐색 실패」를 가르는 목적에는 시드 전체에 들었나(@all)가 맞다. dev 파일럿 nDCG는 이 결정 전에 봤고 Seed Recall 값은 보지 않았다. 원자료 `seeds.json`은 문서 노드를 포함한 목록 그대로 저장한다(다시 셀 수 있게)
 - **구축 비용** — `system.json`에 최대 RSS · GPU 최대 메모리 · 구축 LLM 비용($, 지금 전략은 0)을 더한다. 구축 시간은 **캐시 없이 처음 인코딩한 실행만** 보고하고, 캐시를 쓴 실행은 「인코딩 시간 모름」으로 적는다. 보고 기준 기기는 M1(§9 M1 기준 원칙) — 4070 캐시로 돈 실행의 시간은 비교에 쓰지 않는다
 - **「Recall과 같음」 규칙** — 보조 지표가 dev의 해당 질의 전부에서 Recall@k(등급 2, 같은 k)와 같은 값이면 「Recall과 같음」으로 적고 별개의 증거로 세지 않는다. gold가 촘촘해(등급 2가 하나인 질의가 많다) 새 지표가 Recall을 다시 세기 쉽다
 
@@ -213,9 +214,12 @@ K는 지금 `jhs.py match`가 문자열 일치로 하는 일이다. 규모에서
 
 - **결정론** — BM25·PPR 모두 결정론이라 k=1 (§8 반복 규칙 해당 없음). 지연 = 질의 문자열 → BM25 → PPR → 문서 순위 (그래프 구축 시간은 색인 구축 시간에 넣는다)
 - **Seed Recall@k(§5)는 그대로 쓴다** — 시드 = BM25 상위 k 문서에 붙은 노드(문서 노드 자신 + 1홉의 technology·component, BM25 순위대로). 「BM25가 엉뚱한 문서를 줬다(시드 실패)」와 「확장이 못 갔다(탐색 실패)」가 여전히 갈린다
+  - **변경 (2026-10-28, 사용자 결정 — Seed Recall 결과 0건)**: 셀 때는 문서 노드를 빼고 technology·component만, 주 지표 @all (§5 같은 날 변경)
 - **`S7.entity` (Should)** — 같은 graph@v1 · 같은 PPR · 같은 순위, 시드만 질의 개체 링킹(A4a 후보). S7 ↔ `S7.entity` 짝 비교가 「문서로 시작하나 개체로 시작하나」를 잰다. 54칸(30칸) 적중률에 넣지 않는다
 - **알려진 한계 (고치지 않음)** — URL 일치만 쓰므로 같은 문서가 다른 호스트에 있으면 못 잇는다(dev J04: source_hint `developers.openai.com` ↔ 정답 `platform.openai.com`). 스택 행의 별칭 찾기는 §5 component 근거와 같은 규칙이라 「외부 모델·서비스」 표의 회사 이름 행(「OpenAI `gpt-6-sol`」)에도 `openai` 패키지가 걸린다. `tech:llama-cpp`가 릴리스 153개로 허브다(PPR 감쇠가 줄이는지 파일럿에서 본다)
 - **PPR을 어디서 돌리나** — dev 파일럿은 networkx(`nx.pagerank(personalization=…)`). Neo4j에서 GDS 플러그인으로 돌릴지, Neo4j에서 꺼낸 그래프에 networkx로 돌릴지는 HYO-76 적재 때 정한다 — 어느 쪽이든 graph@v1과 노드·관계 수가 같은지 먼저 확인한다
+
+**변경 (2026-10-28, HYO-36 — S7 고정값, 사용자 결정, test 결과 0건)** — 위 「dev에서 정할 것」을 정한다: **시드 문서 수 k = 10 · 순간이동 확률 α = 0.3** (networkx 감쇠 0.7). dev 19질의 9칸 중 nDCG@10 최고(0.534, BM25 0.538) — 등록 규칙 그대로. k=10 줄이 α 세 값 모두에서 k=5·20 이상이고, α 0.3과 0.5의 차이(0.012)는 잡음 안이라 규칙(nDCG)과 격자 가운데 값을 따랐다. 기록 `eval/arena/s7-pilot-dev-2026-10-28.md`(+ `.json`). 구현 `arena/strategies/s7_graph.py` `SEED_K` · `ALPHA`(CLI 기본값). 순위 규칙은 바꾸지 않았다 — 어느 칸도 BM25를 넘지 못했고 손실은 「PPR 문서 먼저」에서 나왔지만(기록 「읽은 것」), 결과를 본 뒤 정의를 바꾸지 않는다
 
 ## 7. 사전 등록
 

@@ -3,7 +3,7 @@
   python arena/cli.py stats --snapshots <radar-snapshots> --adr <adr> --repo decision-radar=<경로> ... [--out stats.json]
   python arena/cli.py nodes-check --queries q.jsonl <같은 코퍼스 인자>   # 노드 어휘 nodes@v1 확인 (HYO-34)
   python arena/cli.py graph-check [--queries q.jsonl --qrels qrels.json] <같은 코퍼스 인자>   # S7 그래프 graph@v1 (HYO-149)
-  python arena/cli.py run   --strategy s1|s2|s3a|s3a.ko|s3b|s4|s4.int8|s4.bbq|s4.kure|s5a|s5b|s6 [--s5b-sparse s3a|s3a.ko] [--s6-first s5a|s4] --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
+  python arena/cli.py run   --strategy s1|s2|s3a|s3a.ko|s3b|s4|s4.int8|s4.bbq|s4.kure|s5a|s5b|s6|s7 [--s5b-sparse s3a|s3a.ko] [--s6-first s5a|s4] [--s7-seed-k 10 --s7-alpha 0.3] --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
 
 코퍼스 폴더 위치는 전부 인자다 (Windows · M1 Mac 둘 다). 설정(버전·커밋·파일)은 arena/corpus/c-all@v1.json.
 gold가 확정되기 전이라 `run`은 장난감 질의로만 돌린다 — gold 버전 이름에 `toy`를 넣는다.
@@ -25,6 +25,7 @@ from arena import chunking, corpus, harness, jhs_metrics   # noqa: E402
 from arena.tokens import HFTokenCounter                    # noqa: E402
 
 NODES_DEFAULT = HERE.parent / "eval" / "arena" / "nodes@v1.json"
+NODES_V2_DEFAULT = HERE.parent / "eval" / "arena" / "nodes@v2.json"      # S7 그래프(graph@v1)가 쓴다
 
 
 def _kv(items, what):
@@ -74,7 +75,7 @@ KURE_MODEL_ID = "nlpai-lab/KURE-v1"
 KURE_REVISION = "8b418a58414668e75532ed045c22d9ca018ae2b2"          # 고정 — 결과가 받는 날에 따라 달라지지 않게
 
 S5B_DEFAULT_SPARSE = "s3a.ko"                                                    # dev에서 정함 (2026-10-13, 이슈 #83) — s5b_rrf.DEFAULT_SPARSE와 같아야 한다
-STRATEGY_CHOICES = ["s1", "s2", "s3a", "s3a.ko", "s3b", "s4", "s4.int8", "s4.bbq", "s4.kure", "s5a", "s5b", "s6"]
+STRATEGY_CHOICES = ["s1", "s2", "s3a", "s3a.ko", "s3b", "s4", "s4.int8", "s4.bbq", "s4.kure", "s5a", "s5b", "s6", "s7"]
 DIAG_STRATEGIES = ["s4.flat", "s4.int8flat", "s4.bbqflat"]                   # §6 진단 (격자 밖 — dev에서 한 번, 이슈 #83)
 BGE_STRATEGIES = ("s3b", "s4", "s4.int8", "s4.bbq", "s5a", "s5b", "s6", "s4.flat", "s4.int8flat", "s4.bbqflat")          # BGE-M3 임베딩이 필요하다
 KURE_STRATEGIES = ("s4.kure",)                                                   # KURE-v1 dense가 필요하다 (BGE-M3 아님)
@@ -90,9 +91,9 @@ def sparse_kind(args):
     return args.strategy if args.strategy in ("s3a", "s3a.ko") else None
 
 
-def make_strategy(name, args, cfg, policy, embedder, splade=None, docs=None):
+def make_strategy(name, args, cfg, policy, embedder, splade=None, docs=None, nodes=None):
     """전략 객체를 만든다. s5a는 S2와 S4를, s5b는 S3a와 S4를 같은 실행 안에서 새로 만든다 (저장된 결과를 재사용하지 않는다).
-    s1은 코퍼스 문서(C-ADR frontmatter)가 필요하다 — docs."""
+    s1은 코퍼스 문서(C-ADR frontmatter)가 필요하다 — docs. s7은 docs와 nodes(nodes@v2)가 필요하다."""
     from arena.strategies.s2_bm25 import S2BM25
     cv = cfg["version"]
     if name == "s1":
@@ -100,6 +101,9 @@ def make_strategy(name, args, cfg, policy, embedder, splade=None, docs=None):
         return S1Match(docs)
     if name == "s2":
         return S2BM25(cv, es_url=args.es_url)
+    if name == "s7":
+        from arena.strategies.s7_graph import S7Graph
+        return S7Graph(S2BM25(cv, es_url=args.es_url), docs, nodes, seed_k=args.s7_seed_k, alpha=args.s7_alpha, chunk_k=args.chunk_k)
     if name == "s3a":
         from arena.strategies.s3a_splade import S3aSplade
         return S3aSplade(cv, splade)
@@ -248,7 +252,7 @@ def cmd_run(args):
     splade = make_splade_embedder(args, cfg, policy, sparse) if sparse else None     # 토큰 확인을 먼저
     embedder = (make_embedder(args, cfg, policy, "kure") if args.strategy in KURE_STRATEGIES
                 else make_embedder(args, cfg, policy) if args.strategy in BGE_STRATEGIES else None)
-    strat = make_strategy(args.strategy, args, cfg, policy, embedder, splade=splade, docs=docs)
+    strat = make_strategy(args.strategy, args, cfg, policy, embedder, splade=splade, docs=docs, nodes=nodes)
     key = harness.result_key(strat.id, strat.version, cfg["version"], args.gold_version, args.tier, args.seed)
     if (Path(args.results) / key).exists():            # 색인을 만들기 전에 먼저 막는다
         raise SystemExit(f"결과 폴더가 이미 있다 — 덮어쓰지 않는다: {Path(args.results) / key}")
@@ -259,10 +263,14 @@ def cmd_run(args):
 
     chunk_to_doc = {c["chunk_id"]: c["doc_id"] for c in chunks}
     rep_chunks = {}
-    run, lat = harness.run_queries(strat, queries, chunk_to_doc, k_docs=args.k, chunk_k=args.chunk_k, rep_chunks=rep_chunks)
+    seeds = {} if args.strategy == "s7" else None             # S7 — 질의마다 시드 노드 (Seed Recall)
+    run, lat = harness.run_queries(strat, queries, chunk_to_doc, k_docs=args.k, chunk_k=args.chunk_k, rep_chunks=rep_chunks, seeds=seeds)
     metrics = harness.compute_metrics(run, qrels, queries, {d["doc_id"]: d["source_type"] for d in docs})
     stack_text = {c["chunk_id"]: c["text"] for c in chunks if c["doc_id"].startswith("stack:")}
     metrics["jhs"], jhs_error = jhs_block(run, rep_chunks, qrels, queries, docs, stack_text, nodes)
+    if seeds is not None and not jhs_error:
+        ents = {qid: strat.entity_seeds(s) for qid, s in seeds.items()}     # 문서 노드를 뺀다 · @all이 주 지표 (§5 변경 2026-10-28)
+        metrics["jhs"]["seed_recall"] = jhs_metrics.seed_recall(ents, queries, nodes, ks=jhs_metrics.SEED_KS_S7)
     system = {
         "index_build_seconds": round(build_secs, 3),
         "chunking_seconds": round(chunk_secs, 3),
@@ -304,7 +312,8 @@ def cmd_run(args):
             extra["reranker"] = {k: system["reranker"][k] for k in ("model_id", "revision", "dtype", "max_length", "device", "libraries")}
     system["build_cost"] = build_cost(system, [x for x in (embedder, splade) if x], strat)
     env = harness.env_info(extra)
-    out = harness.save_results(args.results, key, run, metrics, system, env, extra={"rep_chunks.json": rep_chunks})
+    files = {"rep_chunks.json": rep_chunks, **({"seeds.json": seeds} if seeds is not None else {})}
+    out = harness.save_results(args.results, key, run, metrics, system, env, extra=files)
     print(f"결과: {out}")
     print(json.dumps({"overall": metrics["overall"], "latency_ms": system["query_latency_ms"]}, ensure_ascii=False))
     if jhs_error:
@@ -348,7 +357,12 @@ def main(argv=None):
                    help="S6 1단계 — s5a(BM25+Dense RRF, 기본 · 결과 id S6) · s4(Dense 하나, 결과 id S6.dense). dev 비교용 (이슈 #75)")
     p.add_argument("--results", default=str(HERE / "results"))
     p.add_argument("--es-url", default=None)
-    p.add_argument("--nodes", default=str(NODES_DEFAULT), help="노드 어휘 (JHS 지표 — component 근거의 별칭)")
+    p.add_argument("--s7-seed-k", type=int, default=None,
+                   help="S7 시드 문서 수 k (BM25 상위 k 문서). s7에서만. 생략하면 dev에서 정한 10 (2026-10-28). 결과 폴더 키에 안 들어간다 → 값마다 --results를 따로 쓴다")
+    p.add_argument("--s7-alpha", type=float, default=None,
+                   help="S7 순간이동 확률 α (0~1 열린 구간). networkx 감쇠 계수는 1−α로 넘긴다. s7에서만. 생략하면 dev에서 정한 0.3 (2026-10-28)")
+    p.add_argument("--nodes", default=None,
+                   help="노드 어휘 (JHS 지표 — component 근거의 별칭). 생략하면 s7은 nodes@v2(그래프 노드), 나머지는 nodes@v1")
     p.set_defaults(fn=cmd_run)
     p = sub.add_parser("nodes-check", help="노드 어휘 nodes@v1 확인 — 별칭 출처 · gold 질의 노드 연결")
     add_corpus_args(p)
@@ -369,6 +383,21 @@ def main(argv=None):
         ap.error(f"--s5b-sparse {args.s5b_sparse}는 --strategy s5b에서만 뜻이 있다 (지금 {args.strategy}) — 조용히 무시하지 않는다")
     if getattr(args, "s6_first", "s5a") != "s5a" and args.strategy != "s6":
         ap.error(f"--s6-first {args.s6_first}는 --strategy s6에서만 뜻이 있다 (지금 {args.strategy}) — 조용히 무시하지 않는다")
+    if args.cmd == "run":
+        if args.strategy != "s7":
+            for flag, v in (("--s7-seed-k", args.s7_seed_k), ("--s7-alpha", args.s7_alpha)):
+                if v is not None:
+                    ap.error(f"{flag} {v}는 --strategy s7에서만 뜻이 있다 (지금 {args.strategy}) — 조용히 무시하지 않는다")
+        else:
+            from arena.strategies import s7_graph
+            args.s7_seed_k = s7_graph.SEED_K if args.s7_seed_k is None else args.s7_seed_k      # dev 파일럿 고정값 (2026-10-28)
+            args.s7_alpha = s7_graph.ALPHA if args.s7_alpha is None else args.s7_alpha
+            if args.s7_seed_k < 1:
+                ap.error(f"--s7-seed-k {args.s7_seed_k} — 1 이상이어야 한다")
+            if not 0 < args.s7_alpha < 1:
+                ap.error(f"--s7-alpha {args.s7_alpha} — 0과 1 사이(열린 구간)여야 한다")
+        if args.nodes is None:
+            args.nodes = str(NODES_V2_DEFAULT if args.strategy == "s7" else NODES_DEFAULT)
     if getattr(args, "es_url", 1) is None:
         from arena import es
         args.es_url = es.DEFAULT_URL
