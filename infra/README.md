@@ -29,3 +29,4 @@ docker compose -f infra/compose.yaml down -v          # 데이터까지 지우�
 - 단일 노드라 기본 복제본(1) 때문에 인덱스 상태가 yellow다. Arena 인덱스는 `number_of_replicas: 0`으로 만든다
 - n10s는 `NEO4J_PLUGINS`로 첫 기동 때 인터넷에서 받는다. 오프라인에서 다시 만들려면 `neo4j-plugins` 볼륨을 유지하거나 jar를 직접 넣는다
 - 메모리 실측(기동 직후): ES 약 1.5GB · Neo4j 약 1.4GB. M1에서도 같다(10/27: 1.46GiB · 1.44GiB, smoke 20/20 — `docs/runbooks/arena-smoke-m1-2026-10-27.md`). M1 16GB 예산(overview Q1)에서 둘을 같이 띄워도 된다. 임베딩 모델은 엔진과 따로 미리 계산한다
+- S7 그래프는 `python arena/cli.py graph-load <코퍼스 인자>`로 Neo4j에 넣는다(HYO-153 — `:ArenaNode {graph: "graph@v1"}`, 같은 이름의 옛 적재는 지우고 다시 넣는다). S7 실행은 Neo4j 적재본의 지문이 코퍼스와 같아야 돈다. 데이터가 들어간 뒤의 smoke는 `n10s.graphconfig.init`을 건너뛴다(빈 DB에서만 확인)

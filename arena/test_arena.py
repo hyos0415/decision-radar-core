@@ -2403,6 +2403,99 @@ def _():
     assert st.nodes is nodes and abs(st.nx_damping - 0.5) < 1e-12 and st.bm25.index_name == s2_bm25.index_name_for("c-all@v1", "s2")
 
 
+def _hier_graph():
+    import networkx as nx
+    G = nx.MultiDiGraph(version="graph@v1", nodes_version="nodes@test")
+    G.add_node("tech:x", kind="technology", label="X")
+    G.add_node("rel:x@1", kind="release", tag="v1", doc=True, key=(1, 0, "rc"), tech=None)
+    G.add_node("rel:x@2", kind="release", tag="v2", doc=False, key="v2", tech="tech:x")
+    G.add_edge("tech:x", "rel:x@1", rel="HAS_RELEASE")
+    G.add_edge("tech:x", "rel:x@2", rel="HAS_RELEASE")
+    G.add_edge("rel:x@1", "rel:x@2", rel="NEXT")
+    G.add_edge("tech:x", "rel:x@1", rel="PINS", op="==")       # 같은 두 노드 사이 평행 관계
+    return G
+
+
+@case("Neo4j 적재 행 (HYO-153): 행으로 바꿨다 되돌리면 노드·관계 순서와 속성(튜플 · None · bool 포함)이 그대로 · 지문이 같다 · 순서나 속성이 바뀌면 지문이 바뀐다")
+def _():
+    from arena import neo4j_graph as ng
+    G = _hier_graph()
+    nodes, edges = ng.to_rows(G)
+    back = ng.from_rows(dict(G.graph), list(reversed(nodes)), list(reversed(edges)))     # 행 순서가 섞여 와도 ord로 되살린다
+    assert list(back.nodes(data=True)) == list(G.nodes(data=True))
+    assert list(back.edges(data=True)) == list(G.edges(data=True))
+    assert back.nodes["rel:x@1"]["key"] == (1, 0, "rc") and type(back.nodes["rel:x@1"]["key"]) is tuple
+    assert back.graph == G.graph and ng.fingerprint(back) == ng.fingerprint(G)
+    H = _hier_graph()
+    H.nodes["rel:x@1"]["key"] = [1, 0, "rc"]                   # 튜플 → 리스트만 달라도 다르다
+    assert ng.fingerprint(H) != ng.fingerprint(G)
+    import networkx as nx
+    R = nx.MultiDiGraph(**G.graph)
+    R.add_nodes_from(reversed(list(G.nodes(data=True))))       # 같은 노드·관계, 순서만 다름
+    R.add_edges_from((a, b, d) for a, b, d in G.edges(data=True))
+    assert ng.fingerprint(R) != ng.fingerprint(G)
+
+
+@case("Neo4j builder (HYO-153): Neo4j 그래프가 코퍼스로 만든 graph@v1과 지문이 같을 때만 쓰고 출처를 neo4j로 남긴다 · 다르거나 적재 기록과 다르면 Neo4jError")
+def _():
+    from arena import graph as graph_mod
+    from arena import neo4j_graph as ng
+    G = _hier_graph()
+    fp = ng.fingerprint(G)
+    orig_build, orig_read = graph_mod.build, ng.read
+    try:
+        graph_mod.build = lambda docs, nodes: (_hier_graph(), {"r": 1})
+        ng.read = lambda g, base: (_hier_graph(), fp)
+        got, report = ng.builder("http://x")([], None)
+        assert ng.fingerprint(got) == fp and report["graph_source"] == "neo4j" and report["fingerprint"] == fp and report["r"] == 1
+        stale = _hier_graph()
+        stale.nodes["tech:x"]["label"] = "Y"
+        ng.read = lambda g, base: (stale, fp)                  # 적재 뒤 Neo4j가 바뀜
+        assert raises(ng.Neo4jError, ng.builder("http://x"), [], None)
+        ng.read = lambda g, base: (_hier_graph(), "0" * 64)    # 옛 코퍼스로 적재한 기록
+        assert raises(ng.Neo4jError, ng.builder("http://x"), [], None)
+    finally:
+        graph_mod.build, ng.read = orig_build, orig_read
+
+
+@case("CLI s7 --s7-graph (HYO-153): s7 기본은 neo4j · build 고를 수 있음 · s7 아니면 오류 · make_strategy가 neo4j면 builder를 넣고 S7Graph가 출처를 settings에 남긴다")
+def _():
+    import contextlib
+    import io
+    from types import SimpleNamespace
+
+    from arena import cli
+    base = ["run", "--snapshots", "x", "--adr", "y", "--queries", "q", "--qrels", "r", "--gold-version", "toy@v0"]
+    seen = []
+    orig = cli.cmd_run
+    cli.cmd_run = lambda a: seen.append(a)
+
+    def parse(*extra):
+        seen.clear()
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                cli.main(base + list(extra))
+        except SystemExit:
+            return None, err.getvalue()
+        return seen[0], ""
+    try:
+        assert parse("--strategy", "s7")[0].s7_graph == "neo4j"
+        assert parse("--strategy", "s7", "--s7-graph", "build")[0].s7_graph == "build"
+        a, msg = parse("--strategy", "s2", "--s7-graph", "build")
+        assert a is None and "s7에서만" in msg, msg
+        assert parse("--strategy", "s7")[0].neo4j_url
+    finally:
+        cli.cmd_run = orig
+    from arena.strategies import s7_graph as mod
+    args = SimpleNamespace(es_url="http://x", chunk_k=50, s7_seed_k=5, s7_alpha=0.5, s7_graph="neo4j", neo4j_url="http://n")
+    st = cli.make_strategy("s7", args, {"version": "c-all@v1"}, {"version": "p@v1"}, None, docs=[], nodes=SimpleNamespace(version="v"))
+    assert type(st) is mod.S7Graph and st.graph_builder is not mod.graph_mod.build
+    args.s7_graph = "build"
+    st = cli.make_strategy("s7", args, {"version": "c-all@v1"}, {"version": "p@v1"}, None, docs=[], nodes=SimpleNamespace(version="v"))
+    assert st.graph_builder is mod.graph_mod.build
+
+
 if FAILS:
     print(f"\nFAILED {len(FAILS)} — {FAILS}")
     sys.exit(1)

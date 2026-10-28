@@ -3,7 +3,8 @@
   python arena/cli.py stats --snapshots <radar-snapshots> --adr <adr> --repo decision-radar=<경로> ... [--out stats.json]
   python arena/cli.py nodes-check --queries q.jsonl <같은 코퍼스 인자>   # 노드 어휘 nodes@v1 확인 (HYO-34)
   python arena/cli.py graph-check [--queries q.jsonl --qrels qrels.json] <같은 코퍼스 인자>   # S7 그래프 graph@v1 (HYO-149)
-  python arena/cli.py run   --strategy s1|s2|s3a|s3a.ko|s3b|s4|s4.int8|s4.bbq|s4.kure|s5a|s5b|s6|s7 [--s5b-sparse s3a|s3a.ko] [--s6-first s5a|s4] [--s7-seed-k 10 --s7-alpha 0.3] --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
+  python arena/cli.py graph-load <같은 코퍼스 인자>   # graph@v1 → Neo4j 적재 + 다시 읽어 지문 비교 (HYO-153) — s7 실행 전에
+  python arena/cli.py run   --strategy s1|s2|s3a|s3a.ko|s3b|s4|s4.int8|s4.bbq|s4.kure|s5a|s5b|s6|s7 [--s5b-sparse s3a|s3a.ko] [--s6-first s5a|s4] [--s7-seed-k 10 --s7-alpha 0.3 --s7-graph neo4j|build] --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
 
 코퍼스 폴더 위치는 전부 인자다 (Windows · M1 Mac 둘 다). 설정(버전·커밋·파일)은 arena/corpus/c-all@v1.json.
 gold가 확정되기 전이라 `run`은 장난감 질의로만 돌린다 — gold 버전 이름에 `toy`를 넣는다.
@@ -103,7 +104,12 @@ def make_strategy(name, args, cfg, policy, embedder, splade=None, docs=None, nod
         return S2BM25(cv, es_url=args.es_url)
     if name == "s7":
         from arena.strategies.s7_graph import S7Graph
-        return S7Graph(S2BM25(cv, es_url=args.es_url), docs, nodes, seed_k=args.s7_seed_k, alpha=args.s7_alpha, chunk_k=args.chunk_k)
+        builder = None
+        if getattr(args, "s7_graph", None) == "neo4j":   # 적재본 — 코퍼스로 만든 그래프와 지문이 같을 때만 (HYO-153)
+            from arena import neo4j_graph
+            builder = neo4j_graph.builder(args.neo4j_url)
+        return S7Graph(S2BM25(cv, es_url=args.es_url), docs, nodes, seed_k=args.s7_seed_k, alpha=args.s7_alpha, chunk_k=args.chunk_k,
+                       graph_builder=builder)
     if name == "s3a":
         from arena.strategies.s3a_splade import S3aSplade
         return S3aSplade(cv, splade)
@@ -238,6 +244,25 @@ def cmd_graph_check(args):
     print(text)
 
 
+def cmd_graph_load(args):
+    """graph@v1을 Neo4j에 적재하고 다시 읽어 지문을 비교한다 (HYO-153). 같지 않으면 실패 코드."""
+    from arena import graph, neo4j_graph
+    cfg = corpus.load_config(args.config)
+    docs = corpus.load_corpus(cfg, args.snapshots, args.adr, _kv(args.repo, "--repo"), _kv(args.supplement, "--supplement"))
+    G, _ = graph.build(docs, jhs_metrics.load_nodes(args.nodes))
+    t0 = time.perf_counter()
+    loaded = neo4j_graph.load(G, args.neo4j_url)
+    load_s = time.perf_counter() - t0
+    back, stored_fp = neo4j_graph.read(G.graph["version"], args.neo4j_url)
+    built, got = graph.stats(G), graph.stats(back)
+    same = neo4j_graph.fingerprint(back) == stored_fp == loaded["fingerprint"]
+    out = {"loaded": loaded, "load_seconds": round(load_s, 3), "same_fingerprint": same,
+           "same_counts": {k: built[k] == got[k] for k in ("nodes", "edges", "kinds", "rels")}, "stats": got}
+    print(json.dumps(out, ensure_ascii=False, indent=1))
+    if not same or not all(out["same_counts"].values()):
+        raise SystemExit("Neo4j에서 읽은 그래프가 적재한 그래프와 다르다")
+
+
 def cmd_run(args):
     cfg, policy, policy_path, docs, chunks, counter, chunk_secs = build(args)
     queries = harness.load_queries(args.queries)
@@ -361,6 +386,10 @@ def main(argv=None):
                    help="S7 시드 문서 수 k (BM25 상위 k 문서). s7에서만. 생략하면 dev에서 정한 10 (2026-10-28). 결과 폴더 키에 안 들어간다 → 값마다 --results를 따로 쓴다")
     p.add_argument("--s7-alpha", type=float, default=None,
                    help="S7 순간이동 확률 α (0~1 열린 구간). networkx 감쇠 계수는 1−α로 넘긴다. s7에서만. 생략하면 dev에서 정한 0.3 (2026-10-28)")
+    p.add_argument("--s7-graph", choices=["neo4j", "build"], default=None,
+                   help="S7 그래프 출처 — neo4j(기본, graph-load로 적재한 것 · 코퍼스로 만든 그래프와 지문이 다르면 거부) · "
+                        "build(코퍼스로 바로 — Neo4j 없이 확인할 때). §6 변경 2026-10-28 (HYO-153)")
+    p.add_argument("--neo4j-url", default=None, help="Neo4j HTTP 주소 (기본: ARENA_NEO4J_URL 또는 http://127.0.0.1:7474)")
     p.add_argument("--nodes", default=None,
                    help="노드 어휘 (JHS 지표 — component 근거의 별칭). 생략하면 s7은 nodes@v2(그래프 노드), 나머지는 nodes@v1")
     p.set_defaults(fn=cmd_run)
@@ -376,6 +405,11 @@ def main(argv=None):
     p.add_argument("--qrels")
     p.add_argument("--out", help="결과 JSON 저장 경로")
     p.set_defaults(fn=cmd_graph_check)
+    p = sub.add_parser("graph-load", help="S7 그래프 graph@v1을 Neo4j에 적재 — 다시 읽어 노드·관계 수와 지문을 비교 (HYO-153)")
+    add_corpus_args(p)
+    p.add_argument("--nodes", default=str(NODES_V2_DEFAULT))
+    p.add_argument("--neo4j-url", default=None, help="Neo4j HTTP 주소 (기본: ARENA_NEO4J_URL 또는 http://127.0.0.1:7474)")
+    p.set_defaults(fn=cmd_graph_load)
     args = ap.parse_args(argv)
     if getattr(args, "queries", None) and args.cmd == "graph-check" and not args.qrels:
         ap.error("graph-check --queries에는 --qrels가 함께 있어야 한다")
@@ -385,13 +419,14 @@ def main(argv=None):
         ap.error(f"--s6-first {args.s6_first}는 --strategy s6에서만 뜻이 있다 (지금 {args.strategy}) — 조용히 무시하지 않는다")
     if args.cmd == "run":
         if args.strategy != "s7":
-            for flag, v in (("--s7-seed-k", args.s7_seed_k), ("--s7-alpha", args.s7_alpha)):
+            for flag, v in (("--s7-seed-k", args.s7_seed_k), ("--s7-alpha", args.s7_alpha), ("--s7-graph", args.s7_graph)):
                 if v is not None:
                     ap.error(f"{flag} {v}는 --strategy s7에서만 뜻이 있다 (지금 {args.strategy}) — 조용히 무시하지 않는다")
         else:
             from arena.strategies import s7_graph
             args.s7_seed_k = s7_graph.SEED_K if args.s7_seed_k is None else args.s7_seed_k      # dev 파일럿 고정값 (2026-10-28)
             args.s7_alpha = s7_graph.ALPHA if args.s7_alpha is None else args.s7_alpha
+            args.s7_graph = args.s7_graph or "neo4j"        # 그래프 전략은 같은 Neo4j에서 잰다 (§8 · §6 변경 2026-10-28)
             if args.s7_seed_k < 1:
                 ap.error(f"--s7-seed-k {args.s7_seed_k} — 1 이상이어야 한다")
             if not 0 < args.s7_alpha < 1:
@@ -401,6 +436,9 @@ def main(argv=None):
     if getattr(args, "es_url", 1) is None:
         from arena import es
         args.es_url = es.DEFAULT_URL
+    if getattr(args, "neo4j_url", 1) is None:
+        from arena import neo4j_graph
+        args.neo4j_url = neo4j_graph.DEFAULT_URL
     args.fn(args)
 
 
