@@ -2355,7 +2355,7 @@ def _():
     assert sr["mean"]["@1"] == 0.0 and sr["mean"]["@5"] == 1.0
 
 
-@case("CLI s7: --strategy s7 · --s7-seed-k/--s7-alpha는 s7에서만(아니면 오류) · s7이면 둘 다 필수 · 범위 검사 · --nodes 기본은 s7=nodes@v2, 그 밖은 nodes@v1 · make_strategy가 S7Graph를 만든다")
+@case("CLI s7: --strategy s7 · --s7-seed-k/--s7-alpha는 s7에서만(아니면 오류) · 생략하면 dev 고정값 k=10·α=0.3 · 범위 검사 · --nodes 기본은 s7=nodes@v2, 그 밖은 nodes@v1 · make_strategy가 S7Graph를 만든다")
 def _():
     import contextlib
     import io
@@ -2382,9 +2382,11 @@ def _():
         for extra in (["--strategy", "s2", "--s7-alpha", "0.3"], ["--strategy", "s5a", "--s7-seed-k", "5"]):
             a, msg = parse(*extra)
             assert a is None and "s7에서만" in msg and "조용히 무시하지 않는다" in msg, (extra, msg)
-        for extra in (["--strategy", "s7"], ["--strategy", "s7", "--s7-alpha", "0.3"], ["--strategy", "s7", "--s7-seed-k", "5"]):
+        assert (mod.SEED_K, mod.ALPHA) == (10, 0.3)                                     # dev 파일럿 고정값 (2026-10-28)
+        for extra, want in ((["--strategy", "s7"], (10, 0.3)), (["--strategy", "s7", "--s7-alpha", "0.5"], (10, 0.5)),
+                            (["--strategy", "s7", "--s7-seed-k", "5"], (5, 0.3))):
             a, msg = parse(*extra)
-            assert a is None and "함께" in msg, (extra, msg)
+            assert a is not None and (a.s7_seed_k, a.s7_alpha) == want, (extra, msg)
         for extra in (["--s7-seed-k", "0", "--s7-alpha", "0.3"], ["--s7-seed-k", "5", "--s7-alpha", "0"], ["--s7-seed-k", "5", "--s7-alpha", "1"]):
             assert parse("--strategy", "s7", *extra)[0] is None, extra
         a, _ = parse("--strategy", "s7", "--s7-seed-k", "10", "--s7-alpha", "0.3")

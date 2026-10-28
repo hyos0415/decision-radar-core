@@ -219,6 +219,8 @@ K는 지금 `jhs.py match`가 문자열 일치로 하는 일이다. 규모에서
 - **알려진 한계 (고치지 않음)** — URL 일치만 쓰므로 같은 문서가 다른 호스트에 있으면 못 잇는다(dev J04: source_hint `developers.openai.com` ↔ 정답 `platform.openai.com`). 스택 행의 별칭 찾기는 §5 component 근거와 같은 규칙이라 「외부 모델·서비스」 표의 회사 이름 행(「OpenAI `gpt-6-sol`」)에도 `openai` 패키지가 걸린다. `tech:llama-cpp`가 릴리스 153개로 허브다(PPR 감쇠가 줄이는지 파일럿에서 본다)
 - **PPR을 어디서 돌리나** — dev 파일럿은 networkx(`nx.pagerank(personalization=…)`). Neo4j에서 GDS 플러그인으로 돌릴지, Neo4j에서 꺼낸 그래프에 networkx로 돌릴지는 HYO-76 적재 때 정한다 — 어느 쪽이든 graph@v1과 노드·관계 수가 같은지 먼저 확인한다
 
+**변경 (2026-10-28, HYO-36 — S7 고정값, 사용자 결정, test 결과 0건)** — 위 「dev에서 정할 것」을 정한다: **시드 문서 수 k = 10 · 순간이동 확률 α = 0.3** (networkx 감쇠 0.7). dev 19질의 9칸 중 nDCG@10 최고(0.534, BM25 0.538) — 등록 규칙 그대로. k=10 줄이 α 세 값 모두에서 k=5·20 이상이고, α 0.3과 0.5의 차이(0.012)는 잡음 안이라 규칙(nDCG)과 격자 가운데 값을 따랐다. 기록 `eval/arena/s7-pilot-dev-2026-10-28.md`(+ `.json`). 구현 `arena/strategies/s7_graph.py` `SEED_K` · `ALPHA`(CLI 기본값). 순위 규칙은 바꾸지 않았다 — 어느 칸도 BM25를 넘지 못했고 손실은 「PPR 문서 먼저」에서 나왔지만(기록 「읽은 것」), 결과를 본 뒤 정의를 바꾸지 않는다
+
 ## 7. 사전 등록
 
 ### 7-1. 예측 격자 (필수, 가벼움)

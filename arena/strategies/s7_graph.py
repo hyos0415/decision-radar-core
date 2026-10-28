@@ -25,6 +25,9 @@ PPR_MAX_ITER = 100                                 # networkx 기본값이지만
 PPR_TOL = 1e-6
 SCORE_DIGITS = 12                                  # 같은 점수 판정 — 부동소수 잡음(1e-17)이 동점 규칙을 깨지 않게 반올림해 비교한다
 CHUNK_K = 100
+SEED_K = 10                                        # dev 파일럿에서 정함 (2026-10-28, eval/arena/s7-pilot-dev-2026-10-28.md) — test 전 고정
+ALPHA = 0.3                                        # 순간이동 확률 (같은 파일럿)
+FIXED_STATUS = "기본값은 dev 파일럿에서 정함 (2026-10-28, 사용자 결정) — k∈{5,10,20} × α∈{0.15,0.3,0.5} 중 dev nDCG@10 최고"
 
 
 def _check_int(name, v):
@@ -41,7 +44,7 @@ class S7Graph:
     id = "S7"
     version = "v1"
 
-    def __init__(self, bm25, docs, nodes, seed_k, alpha, chunk_k=CHUNK_K, graph_builder=None):
+    def __init__(self, bm25, docs, nodes, seed_k=SEED_K, alpha=ALPHA, chunk_k=CHUNK_K, graph_builder=None):
         """bm25 = S2BM25 · docs = 코퍼스 문서 · nodes = nodes@v2 · alpha = 순간이동 확률 (0, 1) 열린 구간.
         graph_builder = (docs, nodes) → (그래프, 보고) — 테스트가 그래프를 주입하는 틈, 기본은 graph.build."""
         _check_int("seed_k", seed_k)
@@ -71,6 +74,7 @@ class S7Graph:
                       "build_seconds": None if self.graph_build_seconds is None else round(self.graph_build_seconds, 3),
                       "build_seconds_note": "색인 구축 시간(index_build_seconds)에 포함"},
             "seed_k": self.seed_k,
+            "fixed_values": FIXED_STATUS,
             "teleport_alpha": self.teleport_alpha,
             "nx_damping": self.nx_damping,
             "alpha_note": "teleport_alpha = 시드로 돌아갈 확률(등록한 α) · nx_damping = networkx pagerank(alpha=) = 1 − teleport_alpha",

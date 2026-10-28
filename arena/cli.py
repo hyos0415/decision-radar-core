@@ -3,7 +3,7 @@
   python arena/cli.py stats --snapshots <radar-snapshots> --adr <adr> --repo decision-radar=<경로> ... [--out stats.json]
   python arena/cli.py nodes-check --queries q.jsonl <같은 코퍼스 인자>   # 노드 어휘 nodes@v1 확인 (HYO-34)
   python arena/cli.py graph-check [--queries q.jsonl --qrels qrels.json] <같은 코퍼스 인자>   # S7 그래프 graph@v1 (HYO-149)
-  python arena/cli.py run   --strategy s1|s2|s3a|s3a.ko|s3b|s4|s4.int8|s4.bbq|s4.kure|s5a|s5b|s6|s7 [--s5b-sparse s3a|s3a.ko] [--s6-first s5a|s4] [--s7-seed-k K --s7-alpha A] --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
+  python arena/cli.py run   --strategy s1|s2|s3a|s3a.ko|s3b|s4|s4.int8|s4.bbq|s4.kure|s5a|s5b|s6|s7 [--s5b-sparse s3a|s3a.ko] [--s6-first s5a|s4] [--s7-seed-k 10 --s7-alpha 0.3] --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
 
 코퍼스 폴더 위치는 전부 인자다 (Windows · M1 Mac 둘 다). 설정(버전·커밋·파일)은 arena/corpus/c-all@v1.json.
 gold가 확정되기 전이라 `run`은 장난감 질의로만 돌린다 — gold 버전 이름에 `toy`를 넣는다.
@@ -358,9 +358,9 @@ def main(argv=None):
     p.add_argument("--results", default=str(HERE / "results"))
     p.add_argument("--es-url", default=None)
     p.add_argument("--s7-seed-k", type=int, default=None,
-                   help="S7 시드 문서 수 k (BM25 상위 k 문서 — dev 파일럿 {5,10,20}). s7에서만, s7이면 필수. 결과 폴더 키에 안 들어간다 → 칸마다 --results를 따로 쓴다")
+                   help="S7 시드 문서 수 k (BM25 상위 k 문서). s7에서만. 생략하면 dev에서 정한 10 (2026-10-28). 결과 폴더 키에 안 들어간다 → 값마다 --results를 따로 쓴다")
     p.add_argument("--s7-alpha", type=float, default=None,
-                   help="S7 순간이동 확률 α (0~1 열린 구간 — dev 파일럿 {0.15,0.3,0.5}). networkx 감쇠 계수는 1−α로 넘긴다. s7에서만, s7이면 필수")
+                   help="S7 순간이동 확률 α (0~1 열린 구간). networkx 감쇠 계수는 1−α로 넘긴다. s7에서만. 생략하면 dev에서 정한 0.3 (2026-10-28)")
     p.add_argument("--nodes", default=None,
                    help="노드 어휘 (JHS 지표 — component 근거의 별칭). 생략하면 s7은 nodes@v2(그래프 노드), 나머지는 nodes@v1")
     p.set_defaults(fn=cmd_run)
@@ -389,8 +389,9 @@ def main(argv=None):
                 if v is not None:
                     ap.error(f"{flag} {v}는 --strategy s7에서만 뜻이 있다 (지금 {args.strategy}) — 조용히 무시하지 않는다")
         else:
-            if args.s7_seed_k is None or args.s7_alpha is None:
-                ap.error("--strategy s7에는 --s7-seed-k와 --s7-alpha가 함께 있어야 한다 (기본값 없음 — dev 파일럿이 고른다)")
+            from arena.strategies import s7_graph
+            args.s7_seed_k = s7_graph.SEED_K if args.s7_seed_k is None else args.s7_seed_k      # dev 파일럿 고정값 (2026-10-28)
+            args.s7_alpha = s7_graph.ALPHA if args.s7_alpha is None else args.s7_alpha
             if args.s7_seed_k < 1:
                 ap.error(f"--s7-seed-k {args.s7_seed_k} — 1 이상이어야 한다")
             if not 0 < args.s7_alpha < 1:
