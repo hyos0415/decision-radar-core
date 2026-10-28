@@ -8,8 +8,8 @@
       실제 모델(claude-sonnet-5-5)로 지문 바뀐 기술만 부르고, 키가 없으면 「미분류 N」을 남기고 건너뛴다. 분류한 게 있으면 그 파일만 커밋·push
   python -m pipeline.importance stack-diff --tiers tiers.json [--targets [radar-targets.json]]
       수집기가 보는 이름과 등급 파일이 아는 이름을 견준다 (수집기만 · 관문만 · 양쪽)
-  python -m pipeline.importance override --tiers tiers.json --tech PyYAML --set-tiers L6 [--sensitive] [--local] [--path dev]
-      사람이 고친 값 — 자동 분류보다 우선하고, 다시 분류해도 지워지지 않는다
+  python -m pipeline.importance override --tiers tiers.json --tech PyYAML --set-tiers L6 [--sensitive] [--local] [--path dev] [--set-version 6.0]
+      사람이 고친 값 — 자동 분류보다 우선하고, 다시 분류해도 지워지지 않는다. --set-version은 manifest가 없는 기술의 우리 버전 (HYO-148)
   python -m pipeline.importance show --tiers tiers.json
   python -m pipeline.importance evaluate ...       (evaluate.py 참고)
 
@@ -119,9 +119,25 @@ def build_gate(model, tiers_path, *, real_api=False, call_log=None, limit=None, 
     else:
         info = {"given": True}
     backend = backend or make_backend(model, allow_real=real_api, log=CallLog(call_log))
-    gate = Gate(backend, store, load_vendor_terms(), limit or policy.WEEKLY_LIMIT, other_stack=other_stack)
+    versions, vinfo = stack_versions(targets)
+    gate = Gate(backend, store, load_vendor_terms(), limit or policy.WEEKLY_LIMIT, other_stack=other_stack, versions=versions)
     gate.other_info = {**info, "names": len(other_stack)}
+    gate.version_info = vinfo
     return gate, backend
+
+
+def stack_versions(targets_path=None):
+    """내 대상 전부의 manifest → 우리 버전 {정규화 이름: [{name, manifest, spec, version, repo}]} (HYO-148). 등급 파일에 넣지 않고 매번 읽는다.
+    → (versions, info {"file", "technologies", "missing", "error"?}). 대상을 못 읽으면 빈 버전 + error — eol은 확인 불가로 남는다 (조용히 넘기지 않는다)."""
+    from .signals import read_repo_versions
+    try:
+        found, missing, path = load_targets(targets_path)
+    except SystemExit as e:
+        return {}, {"error": f"대상 목록을 못 읽어 우리 버전을 모른다: {e}"}
+    out = {}
+    for name, root, ex in found:
+        read_repo_versions(root, ex, name, out)
+    return out, {"file": str(path), "technologies": len(out), "missing": [n for n, _ in missing]}
 
 
 def classify(tiers, model, *, repos=(), targets=None, extra=None, real_api=False, refresh=False, plan=False, call_log=None,
@@ -317,6 +333,8 @@ def cmd_override(a):
         ov["local"] = a.local
     if a.path:
         ov["path"] = a.path
+    if a.set_version:
+        ov["version"] = [v.strip() for v in a.set_version.split(",") if v.strip()]
     if a.note:
         ov["note"] = a.note
     store.save()
@@ -374,6 +392,7 @@ def main(argv=None):
     o.add_argument("--sensitive", action=argparse.BooleanOptionalAction, default=None)
     o.add_argument("--local", action=argparse.BooleanOptionalAction, default=None)
     o.add_argument("--path", choices=["prod", "dev"])
+    o.add_argument("--set-version", help="우리가 쓰는 버전 (쉼표로 여럿) — manifest가 없는 기술용, manifest 값보다 이긴다 (HYO-148)")
     o.add_argument("--note")
     o.set_defaults(fn=cmd_override)
     s = sp.add_parser("show")

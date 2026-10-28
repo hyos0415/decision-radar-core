@@ -139,7 +139,7 @@ def cmd_run(a):
                             "EXTRA_TERM": keyword_match.EXTRA_TERM, "EXTRA_TERM_CAP": keyword_match.EXTRA_TERM_CAP,
                             "NOT_PENALTY": keyword_match.NOT_PENALTY, "EXCLUDE_PENALTY": keyword_match.EXCLUDE_PENALTY},
                 "lane_a_gate": ({"model": a.gate, "tiers": str(a.tiers), **res["gate_summary"], "calls": backend.log.totals(),
-                                 "other_stack": getattr(gate, "other_info", None)}
+                                 "other_stack": getattr(gate, "other_info", None), "versions": getattr(gate, "version_info", None)}
                                 if gate is not None else "not-implemented (--gate로 켠다: pipeline.importance)")}
     write_json(out / "run.json", manifest)
     write_json(out / "profile.resolved.json", profile)
@@ -151,6 +151,8 @@ def cmd_run(a):
         s = res["gate_summary"]
         print(funnel_line({"items": c["items"], "lane_a": c["lane_a"], "kept": s["total_kept"], "cap": s["label"],
                            "gate_counts": s["status_counts"], "to_detect": len(s["shown"])}))
+        for x in s.get("newer_line_eol") or []:      # 판정이 아니라 알림 (HYO-148) — 우리 줄도 지원 밖일 수 있다
+            print(f"  알림: {x['technology']} 우리 {', '.join(x['ours'])} < 지원 종료된 {x['announced']} 줄 — 우리 줄도 지원 밖일 수 있다 (확인 필요)")
     print(f"-> {out}")
     return 0
 

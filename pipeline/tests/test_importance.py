@@ -21,7 +21,7 @@ from collector import stack  # noqa: E402
 from collector.sources import github  # noqa: E402
 from pipeline import profile_filter  # noqa: E402
 from pipeline import interest_profile as ip  # noqa: E402
-from pipeline.importance import agents_backend, backends, cli as cli_mod, evaluate, gate as gate_mod, policy, signals, successor, tiers  # noqa: E402
+from pipeline.importance import agents_backend, backends, cli as cli_mod, evaluate, gate as gate_mod, policy, scope, signals, successor, tiers  # noqa: E402
 from pipeline.importance.backends import (Backend, BoundaryError, CallLog, LabelAnswer, NewsQuery, StubBackend,  # noqa: E402
                                            TechQuery, labels_from_scores, make_backend)
 from pipeline.importance.tiers import TierStore  # noqa: E402
@@ -480,6 +480,109 @@ def test_normalize_changes_prerelease_major_and_lone_minor_patch():
     assert r["changes"] == ["minor_patch"] and r["model_changes"] == ["major", "minor_patch"] and not r["keep"], r   # L1 × major ✅가 프리릴리스로 사라진다
     r2 = gate_mod.Gate(StubBackend(changes={"e": ["major", "minor_patch"]}), st)(_item("e", "electron/electron electron v45.0.0", tech="electron"))
     assert r2["changes"] == ["major"] and r2["keep"], r2
+
+
+def test_versions_from_repo_and_kept_out_of_fingerprint():
+    """우리 버전 (HYO-148): manifest 버전·하한 · requires-python · 이미지 태그. 등급 신호(지문)에는 들어가지 않는다 — 패치마다 재분류하지 않게."""
+    from pipeline.importance.cli import queries_from_repos
+    sv = signals.spec_version
+    assert (sv("^39.2.6"), sv(">=6,<7"), sv("~=1.2"), sv("==0.22.3"), sv("1.x"), sv(">=1.2.0 <2"), sv("~9")) == ("39.2.6", "6", "1.2", "0.22.3", "1", "1.2.0", "9")
+    assert [sv(s) for s in ["", "*", "latest", "<2", "!=1.0", ">1.0", "workspace:*", "file:../x", "git+https://x"]] == [None] * 9   # 모르는 것을 지어내지 않는다
+    assert signals.image_version("python:3.12-slim") == "3.12" and signals.image_version("vllm/vllm-openai:latest") is None
+    with tempfile.TemporaryDirectory() as d:
+        _repo(d)
+        _write(Path(d) / "pyproject.toml", '[project]\nname="x"\nrequires-python=">=3.12"\ndependencies=["fastapi>=0.1","pydantic==2.0"]\n'
+                                          '[tool.poetry.dependencies]\npython="^3.12"\nhttpx={version="^0.27"}\n')
+        _write(Path(d) / "package.json", json.dumps({"devDependencies": {"electron": "^39.2.6", "vite": "*"}}))
+        v = signals.read_repo_versions(d, label="r")
+        qs = queries_from_repos([Path(d)])
+    g = lambda n: [x["version"] for x in v.get(signals.norm(n), [])]   # noqa: E731
+    assert g("openai-agents") == ["0.22.3"] and g("PyYAML") == ["6"] and g("foo") == ["1.2"] and g("requests") == [] and g("pydantic") == ["2.0"]
+    assert g("electron") == ["39.2.6"] and g("vite") == [] and g("httpx") == ["0.27"]
+    assert sorted(set(g("python"))) == ["3.12"]                                               # requires-python · poetry · python 이미지 태그
+    assert g("python:3.12-slim") == ["3.12"] and g("docker.elastic.co/elasticsearch/elasticsearch:9.5.4") == ["9.5.4"]
+    assert v[signals.norm("electron")][0]["repo"] == "r" and v[signals.norm("electron")][0]["spec"] == "^39.2.6"
+    assert all(set(q.signals) <= {"manifest", "group", "pin", "image"} for q in qs)           # 버전은 지문(신호)에 없다
+
+
+# 정답지(gold-w42 · gold-backfill)와 W44의 실제 문장
+EOL_LINES = {
+    "electron42": "> Electron 42.x.y has reached end-of-support as per the project's support policy.",
+    "pydantic": "This release drops support for Python 3.9 and adds support for Python 3.15.",
+    "genai": "* Drop support for Python 3.9 - EOL ([b542082](https://x))",
+    "genai2": "* Removing Python 3.9 support due to EOL ([8bc2b10](https://x))",
+    "tokenizers": "- **Drop Python 3.9** (#1952) — `requires-python = \">=3.10\"`; 3.9 users stay on `0.22.x`.",
+    "agents": "### Python 3.9 is no longer supported\nSince Python 3.9 is EOLed three months ago, this SDK no longer support the version.",
+    "vite": "Vite 7 and below are no longer supported. If you are using Vite 7, please upgrade to Vite 8.",
+    "bare": "This line (41.x.y) has reached end-of-life.",
+}
+
+
+def test_scope_eol_targets_and_line_match():
+    t = lambda k, own="x": scope.eol_targets(EOL_LINES[k], ["python", "electron", "vite"], own)   # noqa: E731
+    assert t("electron42", "electron") == [("electron", (42,), "eq")]
+    for k in ("pydantic", "genai", "genai2", "tokenizers", "agents"):
+        assert t(k) == [("python", (3, 9), "eq")], (k, t(k))                                    # 3.15 「adds support」 · `>=3.10`은 대상이 아니다
+    assert t("vite") == [("vite", (7,), "le")]
+    assert t("bare", "electron") == [("electron", (41,), "eq")]                                 # 이름 없는 줄 표기는 그 행의 기술
+    assert scope.eol_targets("pydantic 2.14 drops support for Python 3.9", ["pydantic", "python"], "pydantic") == [("python", (3, 9), "eq")]   # 주어인 기술 버전은 대상이 아니다
+    assert scope.eol_targets("Remove support for ruff-lsp", ["ruff"], "ruff") == [] and scope.eol_targets("requires-python 3.9 dropped", ["python"], "x") == []
+    m = scope.line_match
+    assert m((39, 2, 6), (42,)) is False and m((42, 1), (42,)) is True and m((3, 12), (3, 9)) is False and m((3, 9, 1), (3, 9)) is True
+    assert m((7, 2, 6), (7,), "le") is True and m((8, 0), (7,), "le") is False and m((3,), (3, 9)) is None   # `>=3`으로는 3.9인지 모른다
+    rel = {"meta": {"dependency": "electron"}}
+    assert scope.release_version({**rel, "title": "electron/electron electron v42.11.17"}) == (42, 11, 17)
+    assert scope.release_version({**rel, "title": "ggml-org/llama.cpp b6512"}) is None and scope.release_version({"title": "Python 3.12 EOL"}) is None
+    assert scope.line_depth("python", (3, 12)) == 2 and scope.line_depth("langgraph", (0, 6)) == 2 and scope.line_depth("electron", (42,)) == 1
+
+
+def test_gate_eol_scoped_to_our_line_and_newer_line_alert():
+    """W44: Electron ^39.2.6인데 「42.x.y has reached end-of-support」가 L1 × 우리 버전 EOL로 남았다 → 다른 줄이면 그 기술의 eol을 뺀다.
+    우리 줄이면 남기고, 확인할 수 없으면(버전을 모름 · 문장에서 못 뽑음) 남긴다 (사용자 Q1). security는 빼지 않고 줄만 기록한다 (Q2)."""
+    st = _store(electron={"tiers": ["L1"]}, pydantic={"tiers": ["L4"]})
+    vers = {"electron": [{"version": "39.2.6"}], "python": [{"version": "3.12"}]}
+    be = StubBackend(changes={"e42": ["eol", "minor_patch"], "e39": ["eol"], "s": ["security"], "p": ["breaking", "eol"], "p2": ["eol"], "u": ["eol"]})
+    g = gate_mod.Gate(be, st, versions=vers)
+    r = g(_item("e42", "electron/electron electron v42.11.17", tech="electron", text=EOL_LINES["electron42"]))
+    assert not r["keep"] and r["changes"] == ["eol"] and r["model_changes"] == ["eol", "minor_patch"], r   # 모델 라벨은 그대로 남는다
+    assert {(x["tier"], x["change"]) for x in r["rows"]} == {("L1", "minor_patch")}, r          # 다 빠지면 minor·patch로 친다
+    note = r["scope"][0]["notes"][0]
+    assert note["verdict"] == "other" and note["newer_line_eol"] == [{"technology": "electron", "ours": ["39.2.6"], "announced": "42"}]
+    assert r["scope"][0]["release_line"]["line"] == "other"
+    own = g(_item("e39", "electron/electron electron v39.8.9", tech="electron", text="> Electron 39.x.y has reached end-of-support."))
+    assert own["keep"] and [k["change"] for k in own["kept_by"]] == ["eol"] and own["scope"][0]["release_line"]["line"] == "ours"
+    sec = g(_item("s", "electron/electron electron v43.8.1", tech="electron", text="contains the fix for GHSA-jr5w-w6x2-84p9"))
+    assert sec["keep"] and sec["scope"][0]["release_line"]["line"] == "other"                   # 다른 줄 security는 남긴다 (기록만)
+    p = g(_item("p", "pydantic/pydantic v2.14.0", tech="pydantic", text=EOL_LINES["pydantic"]))
+    assert p["keep"] and [k["change"] for k in p["kept_by"]] == ["breaking"], p                 # Python 3.9는 우리(3.12) 줄이 아니다
+    assert "newer_line_eol" not in p["scope"][0]["notes"][0]                                    # 우리가 더 새 줄이면 알림도 없다
+    st.data["overrides"]["python"] = {"technology": "python", "version": ["3.9"]}               # 사람이 적은 버전이 이긴다
+    assert g(_item("p2", "pydantic/pydantic v2.14.0", tech="pydantic", text=EOL_LINES["pydantic"]))["keep"]
+    del st.data["overrides"]["python"]
+    unk = g(_item("u", "electron/electron electron v42.0.0", tech="electron", text="Support window changes; see the timeline page."))
+    assert unk["keep"] and unk["scope"][0]["notes"][0]["verdict"] == "unknown"                  # 못 뽑으면 남긴다 (Q1)
+    no_ver = gate_mod.Gate(StubBackend(changes={"e42": ["eol"]}), st)(_item("e42", "electron v42.11.17", tech="electron", text=EOL_LINES["electron42"]))
+    assert no_ver["keep"] and no_ver["scope"][0]["notes"][0]["verdict"] == "unknown"           # 우리 버전을 모르면 예전 그대로
+    entries = [{"id": "e42", "gate": r}, {"id": "e42b", "gate": r}, {"id": "p", "gate": p}]
+    assert gate_mod.cap_lane_a(entries)["newer_line_eol"] == [{"technology": "electron", "ours": ["39.2.6"], "announced": "42", "ids": ["e42", "e42b"]}]
+
+
+def test_gate_model_retirement_needs_our_model_mentioned():
+    """댓글(2026-10-27): W44 OpenAI deprecations diff(gpt-6-* 없음)의 모델 은퇴가 gpt-6-luna에 붙었다 → L2는 같은 계열·같은 버전이 글에 있어야 남긴다."""
+    st = _store(**{"gpt-6-luna": {"tiers": ["L2"]}, "openai-agents": {"tiers": ["L4"]}, "amazon bedrock": {"tiers": ["L2"]}})
+    be = StubBackend(changes=lambda q: ["model_retirement", "deprecation"] if q.id != "r" else ["model_retirement"])
+    g = gate_mod.Gate(be, st, {"openai": ["openai", "gpt"], "aws": ["bedrock"]})
+    other = g(_item("d", "[openai] deprecations (페이지 변경)", vendor="openai", text="gpt-5.4-nano | gpt-5.4-nano-2026-03-17\ngpt-5.1 | gpt-5.1-2025-11-13\nGPT-6.1 Luna preview"))
+    assert other["keep"] and ("gpt-6-luna", "L2", "model_retirement") not in {(k["technology"], k["tier"], k["change"]) for k in other["kept_by"]}, other
+    assert ("gpt-6-luna", "L2", "deprecation") in {(k["technology"], k["tier"], k["change"]) for k in other["kept_by"]}   # 다른 종류는 그대로
+    ours = g(_item("r", "[openai] deprecations (페이지 변경)", vendor="openai", text="2026-12-01: gpt-6-luna → shutdown"))
+    assert ("gpt-6-luna", "L2", "model_retirement") in {(k["technology"], k["tier"], k["change"]) for k in ours["kept_by"]}, ours
+    note = next(s for s in ours["scope"] if s["technology"] == "gpt-6-luna")["notes"][0]
+    assert note == {"change": "model_retirement", "verdict": "ours", "mentioned": ["gpt-6-luna"]}
+    bed = g(_item("r", "[aws] Bedrock model lifecycle", vendor="aws", text="Titan Image v1 retires"))
+    assert bed["keep"] and bed["scope"][0]["notes"][0]["verdict"] == "unknown"                  # 이름에 버전이 없으면 볼 수 없다 → 남긴다
+    assert successor.mentions("Claude Sonnet 3.7 retired", "claude-sonnet-5-5") == [] and successor.mentions("x", "Amazon Bedrock") is None
+    assert successor.mentions("claude-haiku-4-5-20251001 · Claude Haiku 4.5", "claude-haiku-4-5-20251001") == ["claude-haiku-4-5-20251001", "Claude Haiku 4.5"]
 
 
 def _ga(status, keep=False, techs=()):
@@ -1934,7 +2037,13 @@ def mutations():
         ("두 등급인데 첫 등급 행만 적용", [(policy, "decide", _first_tier_only)], test_two_tiers_any_row_keeps_and_records_which),
         ("후속 모델: 버전을 안 견줌 (같은 계열이면 다 후속)", [(successor, "_version", lambda parts: (len(parts),) if len(parts) > 3 else (0,))], test_successor_parse_and_find),
         ("후속 모델: 날짜 스냅숏을 버전으로 셈", [(successor, "_DATE_DIGITS", 99)], test_successor_parse_and_find),
-        ("후속 모델: L2가 아닌 기술도 봄", [(gate_mod.Gate, "_successors", lambda self, item, names: successor.find(item.get("title") or "", names))], test_gate_successor_model_is_script_judged_l2_only_and_last),
+        ("우리 것: eol·은퇴 범위 정리를 안 함 (W44 Electron 42 EOL)", [(scope, "narrow", lambda labels, *a, **k: (list(labels), []))], test_gate_eol_scoped_to_our_line_and_newer_line_alert),
+        ("우리 것: 줄 비교가 늘 같은 줄", [(scope, "line_match", lambda ours, ann, op="eq": True)], test_gate_eol_scoped_to_our_line_and_newer_line_alert),
+        ("우리 것: 줄 비교가 늘 다른 줄 (우리 줄 EOL도 뺌)", [(scope, "line_match", lambda ours, ann, op="eq": False)], test_gate_eol_scoped_to_our_line_and_newer_line_alert),
+        ("우리 것: 「and below」를 안 봄", [(scope, "_LE", r"()")], test_scope_eol_targets_and_line_match),
+        ("우리 것: 사람 overrides 버전을 무시", [(scope.Versions, "__call__", lambda self, name: self.auto.get(signals.norm(name)) or [])], test_gate_eol_scoped_to_our_line_and_newer_line_alert),
+        ("우리 것: 은퇴 언급 검사가 늘 언급 있음", [(successor, "mentions", lambda text, name: ["x"])], test_gate_model_retirement_needs_our_model_mentioned),
+        ("우리 것: 은퇴 언급을 버전 없이 계열로만", [(successor, "_version", lambda parts: (0,))], test_gate_model_retirement_needs_our_model_mentioned),        ("후속 모델: L2가 아닌 기술도 봄", [(gate_mod.Gate, "_successors", lambda self, item, names: successor.find(item.get("title") or "", names))], test_gate_successor_model_is_script_judged_l2_only_and_last),
         ("후속 모델을 심각도 「나머지」와 같게", [(policy, "SEVERITY", {k: v for k, v in policy.SEVERITY.items() if k != "successor_model"})], test_gate_successor_model_is_script_judged_l2_only_and_last),
         ("프리릴리스 major를 안 뺌", [(policy, "is_prerelease", lambda title: False)], test_normalize_changes_prerelease_major_and_lone_minor_patch),
         ("관문이 변화 종류 정리를 안 함 (모델 라벨 그대로)", [(policy, "normalize_changes", lambda changes, title="": list(changes))], test_normalize_changes_prerelease_major_and_lone_minor_patch),

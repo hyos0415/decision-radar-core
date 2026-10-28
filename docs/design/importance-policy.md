@@ -101,6 +101,16 @@ tier-screen v2(`eval/tier-screen/results-v2.md`)에서 Elasticsearch·Neo4j 서�
 
 **변경 (2026-10-21, 사용자 위임 — HYO-131 정답지 판정 중 빈칸, 결정표·지표는 그대로)**: 정답지(레인 A W42 · 과거 릴리스) 사람 판정 중 정의가 답을 하나로 정하지 못한 곳을 메운다 — 사용자 「알아서 일관되게」 → Claude가 정하고 판정 페이지에 같은 문구로 보였다(`eval/importance/lanea-rules-2026-10-21.md`). ① **원칙**: 고치기 쉬운지가 아니라 이번 릴리스에서 무슨 일이 일어났는지로 고른다 — 급한 정도는 결정표(등급 × 종류)가 따진다 ② **breaking vs deprecation**: 설정 블록·옵션·플래그·API를 **이번에 이미 없앴거나 이름·기본 동작을 바꿔** 우리 쪽을 고쳐야 계속 동작하면 breaking이다 — 옵션 하나만 바꾸면 되는 경우도, 「예전에 deprecated였던 것을 이번에 제거」도. deprecation은 **이번엔 아직 동작**하고 나중에 없앤다는 예고뿐인 것 ③ **프리릴리스**(alpha · beta · rc · dev · nightly)는 major로 치지 않는다(정식 x.0.0에서만) — 본문에 breaking · security 등이 적혀 있으면 그 종류는 고른다. 사용자에게 「버전대로 major」·「프리릴리스는 전부 해당 없음」과 함께 물었고 이것으로 위임받았다 ④ **minor·patch는 다른 종류가 없을 때만** — 사전 판정 눈가림 표본에서 모델은 드문 종류 옆에 minor_patch를 덧붙였고(5/10) 사람은 안 붙였다. 정답지를 얼릴 때 모든 출처에 같은 정리를 적용했다(`eval/importance/freeze_review_gold.py`). 분류 프롬프트(`pipeline/importance/prompts.py`)의 정의 문구는 이 변경에서 고치지 않는다 — 고치면 분류기가 바뀌어 다시 재야 하므로 따로 한다
 
+**변경 (2026-10-27, 사용자 — HYO-148, 결정표·분류 프롬프트·지표는 그대로)**: **「우리 버전 EOL」과 「모델 은퇴」가 우리 것인지는 스크립트가 정한다** (규율 1, `pipeline/importance/scope.py`). 계기: 2026-W44에 Electron `^39.2.6`인데 v42.11.17·v42.11.18의 「Electron 42.x.y has reached end-of-support」가 `L1 × 우리 버전 EOL`로 남았다(정의 위반). 관문은 `pin: range`만 받고 버전 숫자는 몰랐다. 정답지의 `eol` 12건(W42 1 · 과거 릴리스 11)도 대부분 「drops support for Python 3.9」·「Vite 7 and below are no longer supported」 같은 **다른 기술 버전의 지원 중단**이었다 — 모델 라벨 `eol`의 실제 뜻은 「어떤 버전의 지원 종료」이고, 이 표의 「우리 버전 EOL」(**우리가 쓰는** 버전)보다 넓다. 그래서 둘을 가른다.
+- 모델은 그대로 「어떤 버전의 지원 종료(eol)」를 짚는다 — 프롬프트·스키마·Jev 질문·정답지 라벨을 바꾸지 않는다(등록된 분류기 측정을 다시 하지 않아도 된다)
+- 관문은 기술마다 지원 종료 문장에서 (기술, 버전, 「이하」인가)를 뽑아 **우리 버전**과 견준다. 주어 꼴(「Electron 42.x.y has reached end-of-support」 · 「Python 3.9 is no longer supported」 · 「Vite 7 and below are …」) · 목적어 꼴(「drops support for Python 3.9」 · 「Removing Python 3.9 support」) · 이름 없는 줄 표기(「41.x.y has reached end-of-life」 → 그 행의 기술). 비교는 문장에 적힌 자릿수만큼(「42」는 첫 숫자, 「3.9」는 둘째까지). **우리 줄이면 남기고, 다른 줄만이면 그 기술의 eol 라벨을 뺀다. 못 뽑았거나 우리 버전을 모르면 남긴다** (사용자 결정 — 드물고(W44 391건 중 2건) 가장 무거운 L0·L1·L4 칸이라 조용히 잃지 않게. 예전 동작과 같다)
+- 우리 버전은 대상 repo manifest에서 관문을 돌릴 때마다 읽는다(`signals.read_repo_versions` — requirements·pyproject(`requires-python` → python 포함)·package.json·이미지 태그. 고정 값 또는 하한, 상한만·떠 있음은 모름). 등급 파일의 지문에는 넣지 않는다 — 넣으면 패치를 올릴 때마다 등급을 다시 부른다. manifest가 없는 기술(finance_verifier 등 — §7)은 사람이 `override --set-version`으로 적고, 그 값이 manifest보다 이긴다
+- **모델 은퇴**: L2 기술은 계열 + **같은 버전**이 제목·본문에 나올 때만 남긴다(`successor.mentions` — 후속 모델 판정의 「더 높은 버전」을 「같은 버전」으로). 계기(HYO-148 댓글): W44 OpenAI deprecations diff(본문에 gpt-6-* 없음)의 은퇴가 `gpt-6-luna`에, Anthropic 은퇴 페이지 diff(「Claude Sonnet 3.7」만)의 은퇴가 `claude-sonnet-5-5`에 붙었다. 이름에 버전이 없는 기술(Amazon Bedrock)은 볼 수 없어 남긴다
+- **빼기만 한다** — 모델이 안 짚은 종류를 더하지 않는다(`normalize_changes`와 같은 원칙). 그 밖의 종류는 손대지 않는다. **다른 줄의 security도 빼지 않는다** (사용자 결정 — C1, 그리고 우리 줄은 그 수정을 못 받아 오히려 더 위험할 수 있다). 의존성 릴리스가 우리 줄인지(`release_line`)는 기록만 한다
+- 기록: 관문 결과의 `scope`(기술마다 무엇을 왜 뺐나/남겼나 · 근거 문장의 버전 · 우리 버전). 모델 원래 라벨은 `model_changes`에 그대로
+- **못 고치는 것**: 「우리 줄(39)이 이미 지원 밖」은 아무 소식도 말하지 않으면 알 수 없다. 다른 줄이라 뺀 eol 중 **우리보다 새 줄**의 지원 종료는 실행 요약에 「알림: electron 우리 39.2.6 < 지원 종료된 42 줄 — 우리 줄도 지원 밖일 수 있다」로 한 줄 남긴다(판정이 아니라 알림 — 「새 줄이 끝나면 옛 줄도 끝났다」는 Electron·Python에선 맞지만 Node LTS에선 틀린다). 지원 일정을 구조화된 출처(endoflife.date 등)로 읽는 것은 따로 정한다(사용자 결정 — 새 이슈)
+확인 (같은 날, API 없음): 정답지 W41 102 · W42 151 · 과거 릴리스 187에 정답 라벨을 그대로 넣고 전/후를 견주면 **남김/버림이 바뀌는 항목 0** — 빠지는 라벨 6개(전부 「Python 3.9 지원 중단」, 우리는 3.12)는 다른 종류(breaking)로 남거나 원래 버림이다. 남는 eol: plugin-react 6.0.0 「Vite 7 and below」(우리 vite 7.2.6 — 우리 줄, L7이라 버림) · torch 2.11·2.12(CUDA — 버전을 모름) · vllm 0.24.0(문장 못 뽑음). 정답지 은퇴 남김 2건(W41)은 둘 다 본문에 우리 모델이 있다 → C1 영향 없음. 저장된 관문 결과에 모델 라벨을 그대로 다시 걸면 W43은 바뀌는 것 없음 · W44는 남김 31 → 29(Electron 42 EOL 2건이 버림) · 은퇴 페이지 두 건은 L2 은퇴 행만 빠지고 deprecation으로 남는다 · 보이는 5칸 그대로 · 알림 1줄(electron 39 < 42)
+
 ## 4. 결정표 — 등급 × 변화 → 남김(✅) / 버림(❌)
 
 초안을 그대로 확정했다.
@@ -135,6 +145,8 @@ tier-screen v2(`eval/tier-screen/results-v2.md`)에서 Elasticsearch·Neo4j 서�
 
 **변경 (2026-10-27, 사용자 — HYO-147, 결정표·정렬 기준·5/N 표시는 그대로)**: 상한을 **기술당 1칸 먼저** 채운다. 위 정렬 순서대로 훑으며 기술마다 첫 후보만 고르고, 칸이 남으면 나머지를 같은 순서로 채운다(보이는 것도 잘린 것도 정렬 순서). 묶는 기술은 그 후보를 남긴 행 중 가장 높은 행(등급 → 심각도 → 기술 이름)의 기술이다. 이유: 2026-W44 관문 남김 31건 중 5칸이 전부 Electron이었다 — 같은 날 42·43·44·45 줄에 나온 **같은 보안 수정 한 묶음**(노트가 같다)과 45.0.0이 칸을 다 가져가, Anthropic API 2026-10-21·모델 은퇴 페이지 · OpenAI deprecations · langfuse security가 밀렸다. 정렬 키에 다양성이 없어서 생긴 일이다. 저장된 관문 결과에 다시 걸어 본 전/후(모델 호출 없음): W41 바뀐 칸 0 (4/4) · W42 1 (OpenAI changelog → anthropic SDK 1.12.0 deprecation) · W43 1 (claude-code v2.1.299 deprecation → Amazon Bedrock 가격 — 둘 다 L2, claude-code가 claude-sonnet-5-5 기술로 묶여서) · W44 4 (Electron 4건 → Anthropic 모델 은퇴 페이지 · OpenAI deprecations · Bedrock 가격 · langfuse security). 잘린 Electron 4건은 그대로 로그(`truncated`)에 남는다. 같은 W44가 드러낸 다른 틈 — 관문이 **우리 버전 숫자**를 몰라 "42.x 지원 종료"를 「우리 버전 EOL」로 붙였고 정작 우리 Electron 39가 지원 밖이라는 말은 없었다(§7 열린 문제) — 은 이 변경이 고치지 않는다 (HYO-148)
 
+**변경 (2026-10-27, 사용자 — HYO-148, 결정표·보정 축·상한은 그대로)**: 판정 앞에 **범위 정리** 한 단계를 둔다 — 등급으로 행을 고르기 전에, 기술마다 「우리 버전 EOL」·「모델 은퇴」 라벨이 우리 버전·우리 모델인지 보고 아니면 그 기술의 라벨에서 뺀다(§3 변경 2026-10-27). 순서: 모델 라벨 → `normalize_changes`(프리릴리스 major · 덧붙인 minor_patch) → 범위 정리(기술마다) → 후속 모델 행 → 결정표·보정 축. 다 빠지면 그 기술은 minor·patch로 친다(「다른 줄의 EOL 공지」는 우리에게 그 정도다)
+
 ## 5. 결정 기록 (2026-09-30, 사용자)
 
 | # | 질문 | 메모 |
@@ -165,6 +177,7 @@ tier-screen v2(`eval/tier-screen/results-v2.md`)에서 Elasticsearch·Neo4j 서�
 
 - "놓친 것"은 사람이 따로 찾아야 잰다 — 4주 동안 무엇을 어떻게 찾아볼지 (예: 주 1회 대상 기술 릴리스 노트를 직접 훑기)
 - 우리 버전 EOL은 manifest에 버전이 적혀 있어야 계산된다 — finance_verifier는 manifest가 없다
+  → (2026-10-27, HYO-148) 관문이 manifest 버전을 읽어 다른 줄의 EOL을 뺀다(§3 변경). manifest가 없는 기술은 `override --set-version`(사람 입력). 아무 소식도 없을 때 우리 줄이 이미 지원 밖인지는 여전히 모른다 — 구조화된 지원 일정 출처는 새 이슈
 - 호스팅 모델의 "운영 기본값 vs 비교용" 구분은 코드를 읽어야 안다 (medical-mate-ai `providers.py`의 기본 Extractor vs 가격표 항목) — 제품의 몫
 
 ## 8. 분류기 등록 (2026-10-06, 사용자 — 결과 0건, HYO-67)
