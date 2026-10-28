@@ -5,6 +5,7 @@ package.json(dependencies · devDependencies, HYO-122) · Dockerfile `FROM` · c
 신호 칸: manifest(파일 이름|None) · group("main"|"dev"|NPM_DEV) · pin("pinned"|"range"|"floating") · image(bool) · image_ref.
 NPM_DEV = package.json devDependencies — dev 그룹(S2 → L7)이 아니다. Electron·Vite 앱은 번들되는 런타임(electron·react)을 devDependencies에 둔다 (HYO-122 ⑩).
 못 한 것: tiers.py의 NOT_IMPLEMENTED.
+우리 버전(read_repo_versions, HYO-148)은 위 신호와 따로 읽는다 — 등급 지문에 넣지 않으려고. 관문의 범위 정리(scope.py)가 쓴다.
 """
 import fnmatch
 import re
@@ -150,3 +151,86 @@ def read_repo_signals(repo, exclude=()):
     for ref, s in read_images(repo, exclude).items():
         sig[ref.lower()] = s
     return sig
+
+
+# ---------------------------------------------------------------------------- 우리 버전 (importance-policy §3·§4 변경 2026-10-27, HYO-148)
+# 위 신호와 따로 둔다 — 신호는 등급 파일의 지문(tiers.fingerprint)에 들어가서, 버전을 넣으면 패치를 올릴 때마다 등급을 다시 부른다.
+# 관문이 돌 때마다 manifest에서 새로 읽는다 (cli.build_gate → Gate(versions=…)). 사람이 적은 overrides `version`이 이긴다.
+_SPEC_CLAUSE = re.compile(r"^\s*(===|==|~=|>=|\^|~|=)?\s*v?(\d+(?:\.\d+)*)(?:\.[x*])*", re.I)
+
+
+def spec_version(spec):
+    """버전 문자열 → 우리 버전(고정 값 또는 하한) | None. `^39.2.6` → 39.2.6 · `>=6,<7` → 6 · `~=1.2` → 1.2 · `1.x` → 1.
+    상한만(`<2`)·제외(`!=`)·초과(`>`)·떠 있음(`*`·latest)·경로·git은 None — 모르는 것을 지어내지 않는다."""
+    for clause in re.split(r"\|\||,", spec or ""):
+        c = clause.strip()
+        if not c or c.startswith(("<", "!", ">")) and not c.startswith(">="):
+            continue
+        m = _SPEC_CLAUSE.match(c)
+        if m:
+            return m.group(2)
+    return None
+
+
+def requirement_spec(line):
+    """requirements 한 줄 → (이름, 버전 문자열) | None. parse_requirement와 같은 줄을 받는다."""
+    s = line.split(" #")[0].strip()
+    if not s or s.startswith(("#", "-", "git+", "http://", "https://")):
+        return None
+    m = _REQ.match(s)
+    return (m.group(1), m.group(3) or "") if m else None
+
+
+def image_version(ref):
+    """이미지 태그 → 버전 | None. `python:3.12-slim` → 3.12 · `…/elasticsearch:9.5.4` → 9.5.4 · latest·태그 없음 → None."""
+    tag = ref.rsplit(":", 1)[1] if ":" in ref.rsplit("/", 1)[-1] else ""
+    m = re.match(r"v?(\d+(?:\.\d+)*)", tag)
+    return m.group(1) if m else None
+
+
+def _add_version(out, name, manifest, spec, version, repo):
+    if version:
+        row = {"name": name, "manifest": manifest, "spec": spec, "version": version, "repo": repo}
+        if row not in out.setdefault(norm(name), []):
+            out[norm(name)].append(row)
+
+
+def read_repo_versions(repo, exclude=(), label=None, out=None):
+    """repo 폴더 → {정규화 이름: [{name, manifest, spec, version, repo}]}. 대상 repo가 여럿이면 out에 이어 쓴다 — 한 기술에 버전이 여럿일 수 있다.
+    읽는 곳: requirements*.txt · pyproject(dependencies · optional · groups · poetry · requires-python → python) · package.json ·
+    Dockerfile FROM · compose image (태그 → 그 이미지, python 이미지는 python에도)."""
+    repo, out = Path(repo), {} if out is None else out
+    label = label or repo.name
+    for f in _files(repo, exclude, lambda n: fnmatch.fnmatchcase(n, "requirements*.txt")):
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            r = requirement_spec(line)
+            if r:
+                _add_version(out, r[0], f.name, r[1], spec_version(r[1]), label)
+    for py in _files(repo, exclude, lambda n: n == "pyproject.toml"):
+        d = tomllib.loads(py.read_text(encoding="utf-8"))
+        proj = d.get("project", {})
+        rp = proj.get("requires-python")
+        if isinstance(rp, str):
+            _add_version(out, "python", "pyproject.toml requires-python", rp, spec_version(rp), label)
+        specs = list(proj.get("dependencies", []))
+        for group in list(proj.get("optional-dependencies", {}).values()) + list(d.get("dependency-groups", {}).values()):
+            specs += [s for s in group if isinstance(s, str)]
+        for s in specs:
+            r = requirement_spec(s)
+            if r:
+                _add_version(out, r[0], "pyproject.toml", r[1], spec_version(r[1]), label)
+        poetry = d.get("tool", {}).get("poetry", {})
+        deps = [poetry.get("dependencies", {})] + [b.get("dependencies", {}) for b in poetry.get("group", {}).values()]
+        for dd in deps:
+            for n, v in dd.items():
+                v = v.get("version", "") if isinstance(v, dict) else v
+                if isinstance(v, str):
+                    _add_version(out, n, "pyproject.toml", v, spec_version(v), label)
+    for e in stack.package_json_entries(repo, exclude):
+        _add_version(out, e["name"], e["file"], e.get("spec") or "", spec_version(e.get("spec")), label)
+    for ref, s in read_images(repo, exclude).items():
+        v = image_version(ref)
+        _add_version(out, ref, s["image_ref"], ref, v, label)
+        if ref.rsplit("/", 1)[-1].split(":")[0].lower() == "python":
+            _add_version(out, "python", s["image_ref"], ref, v, label)
+    return out
