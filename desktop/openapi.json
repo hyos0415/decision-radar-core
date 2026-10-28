@@ -956,6 +956,129 @@
         }
       }
     },
+    "/topics/parent-candidates": {
+      "get": {
+        "summary": "Topic Parent Candidates",
+        "description": "직접 묶기 선택창 — 같은 주 화제를 제목으로 찾는다 (순위순). 읽기만.",
+        "operationId": "topicParentCandidates",
+        "parameters": [
+          {
+            "name": "week",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "주차. 없으면 가장 새 주차",
+              "title": "Week"
+            },
+            "description": "주차. 없으면 가장 새 주차"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "제목에 든 글자 (대소문자 무시)",
+              "default": "",
+              "title": "Q"
+            },
+            "description": "제목에 든 글자 (대소문자 무시)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicParentCandidateList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/topics/saved": {
       "get": {
         "summary": "Saved Topics",
@@ -1145,6 +1268,206 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TopicActionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/{topic_id}/parent-feedback": {
+      "post": {
+        "summary": "Topic Parent Feedback",
+        "description": "부모 제안에 맞음/아님으로 답한다 (HYO-152). 지금 계산되는 제안에만 답할 수 있다 — 짝·갈래는 서버가 적는다.",
+        "operationId": "topicParentFeedback",
+        "parameters": [
+          {
+            "name": "topic_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Topic Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopicParentFeedbackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicParentResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/{topic_id}/parent": {
+      "post": {
+        "summary": "Topic Set Parent",
+        "description": "직접 묶기 — 부모 화제를 정한다. parent_id가 null이면 직접 묶은 부모를 푼다.",
+        "operationId": "topicSetParent",
+        "parameters": [
+          {
+            "name": "topic_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Topic Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopicParentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopicParentResult"
                 }
               }
             }
@@ -4892,6 +5215,232 @@
         ],
         "title": "TopicList"
       },
+      "TopicParentCandidate": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "rank": {
+            "type": "integer",
+            "title": "Rank"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "rank"
+        ],
+        "title": "TopicParentCandidate"
+      },
+      "TopicParentCandidateList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TopicParentCandidate"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "제목에 검색어가 든 같은 주 화제, 순위순"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "TopicParentCandidateList"
+      },
+      "TopicParentFeedbackRequest": {
+        "properties": {
+          "week": {
+            "type": "string",
+            "title": "Week",
+            "description": "화제가 속한 주차"
+          },
+          "parent_id": {
+            "type": "string",
+            "title": "Parent Id",
+            "description": "답하는 부모 제안의 화제 id — 지금 계산되는 제안과 같아야 한다"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "reject"
+            ],
+            "title": "Verdict",
+            "description": "accept: 맞음(하위가 맞다) · reject: 아님(하위가 아니다)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "week",
+          "parent_id",
+          "verdict"
+        ],
+        "title": "TopicParentFeedbackRequest"
+      },
+      "TopicParentManual": {
+        "properties": {
+          "topic_id": {
+            "type": "string",
+            "title": "Topic Id",
+            "description": "사용자가 직접 묶은 부모 화제 id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "description": "그 화제 제목"
+          }
+        },
+        "type": "object",
+        "required": [
+          "topic_id",
+          "title"
+        ],
+        "title": "TopicParentManual"
+      },
+      "TopicParentRequest": {
+        "properties": {
+          "week": {
+            "type": "string",
+            "title": "Week",
+            "description": "화제가 속한 주차"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id",
+            "description": "직접 묶을 부모 화제 id (같은 주). null이면 직접 묶은 부모를 푼다"
+          }
+        },
+        "type": "object",
+        "required": [
+          "week",
+          "parent_id"
+        ],
+        "title": "TopicParentRequest"
+      },
+      "TopicParentResult": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "accept",
+                  "reject",
+                  "manual",
+                  "manual_clear"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict",
+            "description": "저장한 응답 — 저장할 게 없었으면 null"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "verdict",
+          "message"
+        ],
+        "title": "TopicParentResult"
+      },
+      "TopicParentSuggestion": {
+        "properties": {
+          "topic_id": {
+            "type": "string",
+            "title": "Topic Id",
+            "description": "부모 후보 화제 id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "description": "부모 후보 화제 제목"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "부모 후보 화제 대표 글 링크"
+          },
+          "rank": {
+            "type": "integer",
+            "title": "Rank",
+            "description": "부모 후보의 그 주 순위"
+          },
+          "rule": {
+            "type": "string",
+            "enum": [
+              "P1-prefix",
+              "P1-shared",
+              "P2"
+            ],
+            "title": "Rule",
+            "description": "발화한 짝 다수의 갈래 — P1-prefix: 이름 앞부분 · P1-shared: 앞 2토막 공유 · P2: 활용 언급"
+          },
+          "pairs": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Pairs",
+            "description": "발화한 글 짝 [자식 글 id, 부모 글 id]"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "accept",
+                  "reject"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict",
+            "description": "이 자식·부모에 낸 마지막 응답 (맞음/아님) — 아직 안 답했으면 null"
+          }
+        },
+        "type": "object",
+        "required": [
+          "topic_id",
+          "title",
+          "url",
+          "rank",
+          "rule",
+          "pairs"
+        ],
+        "title": "TopicParentSuggestion",
+        "description": "「~의 하위로 보임」 제안 (HYO-152) — 규칙(P1·P2)이 같은 주 다른 화제를 부모로 짚었다. 자동으로 숨기거나 접지 않는다."
+      },
       "TopicPost": {
         "properties": {
           "source": {
@@ -5015,6 +5564,28 @@
             "type": "string",
             "title": "Capture Seed",
             "description": "이 화제에서 capture 창을 열 때 미리 채울 글 — 결정 질문은 사람이 이어 쓴다"
+          },
+          "parent_suggestion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TopicParentSuggestion"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "규칙이 짚은 부모 화제 제안 — 없으면 null (HYO-152)"
+          },
+          "parent_manual": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TopicParentManual"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "사용자가 직접 묶은 부모 화제 (마지막 직접 묶기, 풀면 null)"
           }
         },
         "type": "object",

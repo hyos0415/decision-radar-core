@@ -403,6 +403,22 @@ class TopicPost(BaseModel):
     signal: str = Field(description="인기 한 마디 (예 `HN 2,123점` · `r/LocalLLaMA 주간 3위`) — 없으면 빈 문자열")
 
 
+class TopicParentSuggestion(BaseModel):
+    """「~의 하위로 보임」 제안 (HYO-152) — 규칙(P1·P2)이 같은 주 다른 화제를 부모로 짚었다. 자동으로 숨기거나 접지 않는다."""
+    topic_id: str = Field(description="부모 후보 화제 id")
+    title: str = Field(description="부모 후보 화제 제목")
+    url: str = Field(description="부모 후보 화제 대표 글 링크")
+    rank: int = Field(description="부모 후보의 그 주 순위")
+    rule: Literal["P1-prefix", "P1-shared", "P2"] = Field(description="발화한 짝 다수의 갈래 — P1-prefix: 이름 앞부분 · P1-shared: 앞 2토막 공유 · P2: 활용 언급")
+    pairs: list[list[str]] = Field(description="발화한 글 짝 [자식 글 id, 부모 글 id]")
+    verdict: Optional[Literal["accept", "reject"]] = Field(default=None, description="이 자식·부모에 낸 마지막 응답 (맞음/아님) — 아직 안 답했으면 null")
+
+
+class TopicParentManual(BaseModel):
+    topic_id: str = Field(description="사용자가 직접 묶은 부모 화제 id")
+    title: str = Field(description="그 화제 제목")
+
+
 class TopicRow(BaseModel):
     id: str = Field(description="토픽 id (t-<해시>) — 같은 글 묶음이면 주를 다시 만들어도 같다")
     week: str
@@ -417,6 +433,8 @@ class TopicRow(BaseModel):
     posts: list[TopicPost] = Field(description="토픽에 묶인 모든 글 (파일 순서 = 인기 순)")
     saved: bool = Field(description="저장한 화제인가")
     capture_seed: str = Field(description="이 화제에서 capture 창을 열 때 미리 채울 글 — 결정 질문은 사람이 이어 쓴다")
+    parent_suggestion: Optional[TopicParentSuggestion] = Field(default=None, description="규칙이 짚은 부모 화제 제안 — 없으면 null (HYO-152)")
+    parent_manual: Optional[TopicParentManual] = Field(default=None, description="사용자가 직접 묶은 부모 화제 (마지막 직접 묶기, 풀면 null)")
 
 
 class TopicList(BaseModel):
@@ -453,3 +471,30 @@ class TopicActionResult(BaseModel):
     ok: bool
     saved: bool = Field(description="지금 저장된 상태인가")
     message: str
+
+
+class TopicParentFeedbackRequest(BaseModel):
+    week: str = Field(description="화제가 속한 주차")
+    parent_id: str = Field(description="답하는 부모 제안의 화제 id — 지금 계산되는 제안과 같아야 한다")
+    verdict: Literal["accept", "reject"] = Field(description="accept: 맞음(하위가 맞다) · reject: 아님(하위가 아니다)")
+
+
+class TopicParentRequest(BaseModel):
+    week: str = Field(description="화제가 속한 주차")
+    parent_id: Optional[str] = Field(description="직접 묶을 부모 화제 id (같은 주). null이면 직접 묶은 부모를 푼다")
+
+
+class TopicParentResult(BaseModel):
+    ok: bool
+    verdict: Optional[Literal["accept", "reject", "manual", "manual_clear"]] = Field(description="저장한 응답 — 저장할 게 없었으면 null")
+    message: str
+
+
+class TopicParentCandidate(BaseModel):
+    id: str
+    title: str
+    rank: int
+
+
+class TopicParentCandidateList(BaseModel):
+    items: list[TopicParentCandidate] = Field(description="제목에 검색어가 든 같은 주 화제, 순위순")
