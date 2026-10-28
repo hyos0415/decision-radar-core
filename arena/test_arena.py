@@ -2034,6 +2034,54 @@ def _():
             "component:medical-mate-ai/obs"} <= set(v2.components) - set(real.components)
 
 
+@case("S7 graph@v1: 스택 행 USES · manifest PINS(문서 있는 버전은 그 릴리스, 없으면 version 노드) · NEXT · ADR · source_hint · RECORDED_AS · 경로 존재율")
+def _():
+    from arena import graph
+    nodes = jm.Nodes({"version": "nodes@test", "technologies": [
+        {"id": "tech:lc", "label": "LangChain", "aliases": [{"text": "LangChain", "source": "s"}, {"text": "langchain-ai/langchain", "source": "s"}]},
+        {"id": "tech:lca", "label": "langchain-anthropic", "aliases": [{"text": "langchain-anthropic", "source": "s"}]},
+        {"id": "tech:leann", "label": "LEANN", "aliases": [{"text": "LEANN", "source": "s"}]}],
+        "components": [{"id": "component:dr/product", "repo": "dr", "name": "product", "source": "s"},
+                       {"id": "component:dr/runtime", "repo": "dr", "name": "runtime", "source": "adr:0009"},
+                       {"id": "component:dr/retrieval-arena", "repo": "dr", "name": "retrieval-arena", "source": "adr:0004"}]})
+    rel = lambda t: {"repo": "langchain-ai/langchain", "tag": t}                                     # noqa: E731
+    adr = lambda n, fm: {"doc_id": f"adr:{n}", "corpus": "c-adr", "source_type": "adr", "meta": {},     # noqa: E731
+                         "text": "---\n" + fm + "\n---\n# 본문"}
+    docs = [
+        {"doc_id": "github-release:lc@langchain==1.4.3", "corpus": "c-doc", "source_type": "release_note", "meta": rel("langchain==1.4.3")},
+        {"doc_id": "github-release:lc@langchain==1.5.0", "corpus": "c-doc", "source_type": "release_note", "meta": rel("langchain==1.5.0")},
+        {"doc_id": "github-release:lc@langchain-openai==1.0", "corpus": "c-doc", "source_type": "release_note", "meta": rel("langchain-openai==1.0")},
+        {"doc_id": "source-hint:leann", "corpus": "c-doc", "source_type": "official_doc", "meta": {"url": "https://www.github.com/x/LEANN/releases/"}},
+        {"doc_id": "stack:dr/CLAUDE.md#stack", "corpus": "c-code", "source_type": "stack", "meta": {"repo": "dr", "path": "CLAUDE.md"},
+         "text": "| 의존성 | component |\n|---|---|\n| langchain · langchain-anthropic | product (spike, ADR 0009) |"},
+        {"doc_id": "stack:dr/product/requirements.txt", "corpus": "c-code", "source_type": "stack",
+         "meta": {"repo": "dr", "path": "product/requirements.txt"}, "text": "# 주석\nlangchain==1.4.3\nlangchain-anthropic>=1.7\nnumpy==2"},
+        adr("0009", "technology: LangChain\naffected:\n- {repo: dr, component: runtime}"),
+        adr("0004", "technology: LEANN\naffected:\n- {repo: dr, component: retrieval-arena}\nrevisit_when:\n"
+                    "- {id: c1, source_hint: github.com/x/leann/releases}\n- {id: c2, source_hint: repo:dr/product/requirements.txt}\n"
+                    "- {id: c3, source_hint: docs.nowhere.io}")]
+    G, report = graph.build(docs, nodes)
+    e = lambda a, b, r: any(d["rel"] == r for d in G.get_edge_data(a, b, default={}).values())        # noqa: E731
+    assert e("component:dr/product", "tech:lc", "USES") and e("component:dr/product", "tech:lca", "USES")
+    assert e("tech:lc", "github-release:lc@langchain==1.4.3", "HAS_RELEASE")                      # 모노레포는 tag의 패키지로
+    assert report["unlinked_releases"] == ["github-release:lc@langchain-openai==1.0"]
+    assert e("stack:dr/product/requirements.txt", "github-release:lc@langchain==1.4.3", "PINS")    # 문서 있는 버전은 그 릴리스로
+    assert e("stack:dr/product/requirements.txt", "version:tech:lca@1.7", "PINS")                  # 없으면 version 노드
+    assert G.nodes["version:tech:lca@1.7"]["doc"] is False and G["stack:dr/product/requirements.txt"]["version:tech:lca@1.7"][0]["op"] == ">="
+    assert report["unparsed_pins"] == ["stack:dr/product/requirements.txt: numpy==2"]
+    assert e("stack:dr/product/requirements.txt", "component:dr/product", "DECLARES")              # manifest 디렉터리 = component
+    assert e("github-release:lc@langchain==1.4.3", "github-release:lc@langchain==1.5.0", "NEXT")
+    assert e("adr:0009", "tech:lc", "DECIDES") and e("adr:0009", "component:dr/runtime", "AFFECTS")
+    assert e("component:dr/product", "component:dr/runtime", "RECORDED_AS")                         # 스택 행이 ADR 0009를 인용
+    assert e("adr:0004", "source-hint:leann", "REVISIT_SOURCE") and e("adr:0004", "stack:dr/product/requirements.txt", "REVISIT_SOURCE")
+    assert report["unmatched_hints"] == ["adr:0004 c3: docs.nowhere.io"]
+    assert graph.stats(G)["kinds"]["release"] == 4
+    q = {"qid": "K1", "type": "K", "split": "dev", "nodes": [{"technology": "LEANN", "repo": "dr", "component": "retrieval-arena"}]}
+    row = graph.reachability(G, [q], {"K1": {"adr:0004": 2, "github-release:lc@langchain==1.5.0": 2, "hn:x": 1}}, nodes)[0]
+    assert row["g2"] == {"n": 2, "in_graph": 2, "@1": 1, "@2": 1, "@3": 1}                         # 1.5.0은 LEANN에서 4홉
+    assert row["g1"]["in_graph"] == 0
+
+
 @case("하네스: run_queries가 대표 청크를 남긴다 · save_results extra 파일 (이름 검사) · peak_memory · build_cost(cold 여부)")
 def _():
     from types import SimpleNamespace

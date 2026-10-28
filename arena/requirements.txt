@@ -3,6 +3,7 @@
 ranx==0.3.21
 tokenizers==0.23.2
 PyYAML==6.0.3
+networkx==3.6.1   # HYO-149: S7 그래프 graph@v1 (arena/graph.py) · PPR — torch가 이미 끌어온 버전 그대로 고정
 
 # ranx가 끌어오는 것 (pip install ranx 결과). 숫자 라이브러리가 바뀌면 지표가 달라질 수 있어 함께 적는다
 numpy==2.5.4

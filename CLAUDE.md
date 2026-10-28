@@ -22,6 +22,7 @@
 | litellm (별도 venv) | product (`spike/agents_sdk`의 Claude 경로) |
 | fastapi · uvicorn | desktop (`desktop/backend` — 앱 백엔드, localhost) |
 | ranx · tokenizers (+ ranx가 끄는 numpy·scipy·pandas·numba) | arena (`arena/` — 하네스 지표 · 청크 상한 계량) |
+| networkx | arena (`arena/graph.py` — S7 그래프 graph@v1 · PPR, HYO-149) |
 | Electron 45 · electron-vite 5 · React 19 · Tailwind 4 · shadcn/ui(Radix) · Geist · Pretendard 글꼴 · react-markdown + remark-gfm · remark-frontmatter (npm, `desktop/package.json`) | desktop (E6 데스크톱 앱 화면·껍데기, HYO-49) |
 | Elasticsearch (docker `infra/`, 9.5.4 + analysis-nori, basic) | arena |
 | Neo4j (docker `infra/`, 5.26.31 + n10s) | arena |
