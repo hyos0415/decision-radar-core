@@ -1486,14 +1486,19 @@ def scenario_hyo152(tmp):
     # P2 갈래 · 앞 2토막 공유 갈래 — 갈래 이름이 제안에 실린다
     t2 = topics + [topic("t-app", 9, item("github:dev/photo-tool", "I built a photo tool using DeepSeek-V4.1-Flash for tagging", "github")),
                    topic("t-fp4", 10, item("hf-model:nv/Qwen3.8-Flash-FP4", "nv/Qwen3.8-Flash-FP4 · Hugging Face")),
-                   topic("t-gg2", 11, item("hf-model:isa/Qwen3.8-Flash-Coder-GGUF", "isa/Qwen3.8-Flash-Coder-GGUF · Hugging Face"))]
-    json.dump({"week": "2026-W43", "method": "test", "k": 11, "counts": {}, "topics": t2}, open(wk, "w", encoding="utf-8"), ensure_ascii=False)
+                   topic("t-gg2", 11, item("hf-model:isa/Qwen3.8-Flash-Coder-GGUF", "isa/Qwen3.8-Flash-Coder-GGUF · Hugging Face")),
+                   # 부모 자체를 담은 화제: 원본 모델 글과 GGUF 글이 한 화제 — GGUF 글만 보면 블로그 글의 하위지만, 원본 글이 블로그 글과 이름이 같다
+                   topic("t-lfm", 12, item("hf-model:o/Lfm-9", "o/Lfm-9 · Hugging Face"), item("hf-model:o/Lfm-9-GGUF", "o/Lfm-9-GGUF · Hugging Face")),
+                   topic("t-blog", 13, item("hn:900", "Lfm-9: Built for fast on-device agents", "hn"))]
+    json.dump({"week": "2026-W43", "method": "test", "k": 13, "counts": {}, "topics": t2}, open(wk, "w", encoding="utf-8"), ensure_ascii=False)
     os.utime(wk, (time.time() + 5, time.time() + 5))  # 캐시는 파일 mtime으로 갱신된다
     rows = {t["id"]: t for t in c.get("/topics").json()["items"]}
     check("파일이 바뀌면 캐시를 버린다 → 새 화제의 제안", rows["t-app"]["parent_suggestion"] and rows["t-app"]["parent_suggestion"]["topic_id"] == "t-base"
           and rows["t-app"]["parent_suggestion"]["rule"] == "P2", rows["t-app"]["parent_suggestion"])
     check("앞 2토막 공유 → P1-shared", rows["t-gg2"]["parent_suggestion"] and rows["t-gg2"]["parent_suggestion"]["topic_id"] == "t-fp4"
           and rows["t-gg2"]["parent_suggestion"]["rule"] == "P1-shared", rows["t-gg2"]["parent_suggestion"])
+    check("부모와 이름이 같은 글을 담은 화제 → 그 부모는 제안하지 않는다 (v3 변경 2026-10-28)",
+          rows["t-lfm"]["parent_suggestion"] is None and rows["t-blog"]["parent_suggestion"] is None, rows["t-lfm"]["parent_suggestion"])
 
     # 응답 — 서버가 계산한 짝·갈래를 적는다 (클라이언트 값 무시)
     body = {"week": "2026-W43", "parent_id": "t-base", "verdict": "accept"}
@@ -1547,7 +1552,7 @@ def scenario_hyo152(tmp):
     r = c.get("/topics/parent-candidates", params={"week": "2026-W43", "q": "deepseek"}).json()["items"]
     check("후보 검색: 제목 부분 일치(대소문자 무시) · 순위순", [x["id"] for x in r] == ["t-base", "t-gguf", "t-app"] and r[0]["rank"] == 1 and "title" in r[0], r)
     check("후보 검색: q 없으면 전체 · limit", len(c.get("/topics/parent-candidates", params={"week": "2026-W43", "limit": 3}).json()["items"]) == 3
-          and len(c.get("/topics/parent-candidates").json()["items"]) == 11)
+          and len(c.get("/topics/parent-candidates").json()["items"]) == 13)
     check("후보 검색: limit 51 → 422 · 모르는 주차 404", c.get("/topics/parent-candidates", params={"limit": 51}).status_code == 422
           and c.get("/topics/parent-candidates", params={"week": "2026-W01"}).status_code == 404)
 

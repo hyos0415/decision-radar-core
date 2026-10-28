@@ -968,13 +968,17 @@ class RadarService:
                 for it, is_named, _ in flags:
                     if is_named:
                         pairs[(it["id"], pit["id"], pj)] = (it, pit)
-        fires = {}  # 부모 화제 index → {"fwd": [(자식 글, 부모 글, 갈래)], "rev": 거꾸로 발화한 짝 수}
+        # 내 화제 안에 부모 글과 이름이 같은 글이 있으면 그 화제는 부모 자체를 담고 있다 — 하위가 아니다 (등록 v3 변경 2026-10-28)
+        my_names = {topic_hier.squash(n) for n in (topic_hier.model_name(it) for it in mine) if n}
+        fires = {}  # 부모 화제 index → {"fwd": [(자식 글, 부모 글, 갈래)], "rev": 거꾸로 발화했거나 부모를 담은 짝 수}
         for (cid, pid, pj), (ci, pit) in pairs.items():
             side, br = topic_hier.parent_branch(ci, pit)
             if side is None:
                 continue
             d = fires.setdefault(pj, {"fwd": [], "rev": 0})
-            if side == "b":
+            if side == "b" and topic_hier.squash(topic_hier.model_name(pit)) in my_names:
+                d["rev"] += 1
+            elif side == "b":
                 d["fwd"].append((cid, pid, br))
             else:
                 d["rev"] += 1
