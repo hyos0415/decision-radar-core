@@ -44,6 +44,16 @@ export type Flow = RunResult['flow']
 /** 지난 알림 (HYO-110·113) — OS 알림 한 통과, 그 알림이 가리킨 항목의 지금 상태 */
 export type NotificationEntry = S['NotificationEntry']
 
+/** 화제 탭 (HYO-133) · 부모 후보 제안 (HYO-152) */
+export type TopicList = S['TopicList']
+export type TopicRow = S['TopicRow']
+export type TopicPost = S['TopicPost']
+export type SavedTopic = S['SavedTopic']
+export type TopicParentSuggestion = S['TopicParentSuggestion']
+export type TopicParentCandidate = S['TopicParentCandidate']
+export type TopicParentResult = S['TopicParentResult']
+export type TopicParentVerdict = S['TopicParentFeedbackRequest']['verdict']
+
 export type Health = S['Health']
 export type Mode = Health['mode']
 
@@ -125,6 +135,39 @@ export const api = {
         body: conversation === undefined ? {} : { conversation }
       })
     ).then((r) => r.job),
+  /** 그 주의 상위 화제 — week를 안 주면 가장 새 주차. 화제 파일이 없으면 week가 null */
+  topics: (week?: string) =>
+    unwrap(client.GET('/topics', { params: { query: week ? { week } : {} } })),
+  savedTopics: () => unwrap(client.GET('/topics/saved')).then((r) => r.items),
+  saveTopic: (id: string, week: string) =>
+    unwrap(
+      client.POST('/topics/{topic_id}/save', {
+        params: { path: { topic_id: id } },
+        body: { week }
+      })
+    ),
+  unsaveTopic: (id: string) =>
+    unwrap(client.POST('/topics/{topic_id}/unsave', { params: { path: { topic_id: id } } })),
+  /** 부모 제안에 맞음(accept) · 아님(reject)으로 답한다 — 다시 부르면 답이 바뀐다 */
+  topicParentFeedback: (id: string, week: string, parent_id: string, verdict: TopicParentVerdict) =>
+    unwrap(
+      client.POST('/topics/{topic_id}/parent-feedback', {
+        params: { path: { topic_id: id } },
+        body: { week, parent_id, verdict }
+      })
+    ),
+  /** 직접 묶기 — parent_id가 null이면 풀기 */
+  topicSetParent: (id: string, week: string, parent_id: string | null) =>
+    unwrap(
+      client.POST('/topics/{topic_id}/parent', {
+        params: { path: { topic_id: id } },
+        body: { week, parent_id }
+      })
+    ),
+  topicParentCandidates: (week: string, q: string, limit = 8) =>
+    unwrap(client.GET('/topics/parent-candidates', { params: { query: { week, q, limit } } })).then(
+      (r) => r.items
+    ),
   jobs: () => unwrap(client.GET('/jobs')).then((r) => r.items),
   schedule: () => unwrap(client.GET('/schedule')),
   job: (id: string) => unwrap(client.GET('/jobs/{job_id}', { params: { path: { job_id: id } } }))

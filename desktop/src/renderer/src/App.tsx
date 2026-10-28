@@ -14,6 +14,7 @@ import {
 import { InboxList } from './components/InboxList'
 import { ItemDetail } from './components/ItemDetail'
 import { DecisionsView } from './components/DecisionsView'
+import { TopicsView } from './components/TopicsView'
 import { RunsView } from './components/RunsView'
 import { NotificationsPanel } from './components/NotificationsPanel'
 import { PageHeader } from './components/Status'
@@ -288,6 +289,8 @@ function App(): React.JSX.Element {
   let body: React.ReactNode
   if (ready && view === 'decisions') {
     body = <DecisionsView selectedId={decisionId} onSelect={setDecisionId} refreshKey={tick} />
+  } else if (ready && view === 'topics') {
+    body = <TopicsView refreshKey={tick} />
   } else if (ready && view === 'runs') {
     body = (
       <RunsView
