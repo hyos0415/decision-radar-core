@@ -203,6 +203,26 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/topics/parent-candidates': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * Topic Parent Candidates
+     * @description 직접 묶기 선택창 — 같은 주 화제를 제목으로 찾는다 (순위순). 읽기만.
+     */
+    get: operations['topicParentCandidates']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/topics/saved': {
     parameters: {
       query?: never
@@ -248,6 +268,46 @@ export interface paths {
     put?: never
     /** Unsave Topic */
     post: operations['unsaveTopic']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/topics/{topic_id}/parent-feedback': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Topic Parent Feedback
+     * @description 부모 제안에 맞음/아님으로 답한다 (HYO-152). 지금 계산되는 제안에만 답할 수 있다 — 짝·갈래는 서버가 적는다.
+     */
+    post: operations['topicParentFeedback']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/topics/{topic_id}/parent': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Topic Set Parent
+     * @description 직접 묶기 — 부모 화제를 정한다. parent_id가 null이면 직접 묶은 부모를 푼다.
+     */
+    post: operations['topicSetParent']
     delete?: never
     options?: never
     head?: never
@@ -1592,6 +1652,122 @@ export interface components {
        */
       items: components['schemas']['TopicRow'][]
     }
+    /** TopicParentCandidate */
+    TopicParentCandidate: {
+      /** Id */
+      id: string
+      /** Title */
+      title: string
+      /** Rank */
+      rank: number
+    }
+    /** TopicParentCandidateList */
+    TopicParentCandidateList: {
+      /**
+       * Items
+       * @description 제목에 검색어가 든 같은 주 화제, 순위순
+       */
+      items: components['schemas']['TopicParentCandidate'][]
+    }
+    /** TopicParentFeedbackRequest */
+    TopicParentFeedbackRequest: {
+      /**
+       * Week
+       * @description 화제가 속한 주차
+       */
+      week: string
+      /**
+       * Parent Id
+       * @description 답하는 부모 제안의 화제 id — 지금 계산되는 제안과 같아야 한다
+       */
+      parent_id: string
+      /**
+       * Verdict
+       * @description accept: 맞음(하위가 맞다) · reject: 아님(하위가 아니다)
+       * @enum {string}
+       */
+      verdict: 'accept' | 'reject'
+    }
+    /** TopicParentManual */
+    TopicParentManual: {
+      /**
+       * Topic Id
+       * @description 사용자가 직접 묶은 부모 화제 id
+       */
+      topic_id: string
+      /**
+       * Title
+       * @description 그 화제 제목
+       */
+      title: string
+    }
+    /** TopicParentRequest */
+    TopicParentRequest: {
+      /**
+       * Week
+       * @description 화제가 속한 주차
+       */
+      week: string
+      /**
+       * Parent Id
+       * @description 직접 묶을 부모 화제 id (같은 주). null이면 직접 묶은 부모를 푼다
+       */
+      parent_id: string | null
+    }
+    /** TopicParentResult */
+    TopicParentResult: {
+      /** Ok */
+      ok: boolean
+      /**
+       * Verdict
+       * @description 저장한 응답 — 저장할 게 없었으면 null
+       */
+      verdict: ('accept' | 'reject' | 'manual' | 'manual_clear') | null
+      /** Message */
+      message: string
+    }
+    /**
+     * TopicParentSuggestion
+     * @description 「~의 하위로 보임」 제안 (HYO-152) — 규칙(P1·P2)이 같은 주 다른 화제를 부모로 짚었다. 자동으로 숨기거나 접지 않는다.
+     */
+    TopicParentSuggestion: {
+      /**
+       * Topic Id
+       * @description 부모 후보 화제 id
+       */
+      topic_id: string
+      /**
+       * Title
+       * @description 부모 후보 화제 제목
+       */
+      title: string
+      /**
+       * Url
+       * @description 부모 후보 화제 대표 글 링크
+       */
+      url: string
+      /**
+       * Rank
+       * @description 부모 후보의 그 주 순위
+       */
+      rank: number
+      /**
+       * Rule
+       * @description 발화한 짝 다수의 갈래 — P1-prefix: 이름 앞부분 · P1-shared: 앞 2토막 공유 · P2: 활용 언급
+       * @enum {string}
+       */
+      rule: 'P1-prefix' | 'P1-shared' | 'P2'
+      /**
+       * Pairs
+       * @description 발화한 글 짝 [자식 글 id, 부모 글 id]
+       */
+      pairs: string[][]
+      /**
+       * Verdict
+       * @description 이 자식·부모에 낸 마지막 응답 (맞음/아님) — 아직 안 답했으면 null
+       */
+      verdict?: ('accept' | 'reject') | null
+    }
     /** TopicPost */
     TopicPost: {
       /**
@@ -1683,6 +1859,10 @@ export interface components {
        * @description 이 화제에서 capture 창을 열 때 미리 채울 글 — 결정 질문은 사람이 이어 쓴다
        */
       capture_seed: string
+      /** @description 규칙이 짚은 부모 화제 제안 — 없으면 null (HYO-152) */
+      parent_suggestion?: components['schemas']['TopicParentSuggestion'] | null
+      /** @description 사용자가 직접 묶은 부모 화제 (마지막 직접 묶기, 풀면 null) */
+      parent_manual?: components['schemas']['TopicParentManual'] | null
     }
     /** TopicSaveRequest */
     TopicSaveRequest: {
@@ -2568,6 +2748,86 @@ export interface operations {
       }
     }
   }
+  topicParentCandidates: {
+    parameters: {
+      query?: {
+        /** @description 주차. 없으면 가장 새 주차 */
+        week?: string | null
+        /** @description 제목에 든 글자 (대소문자 무시) */
+        q?: string
+        limit?: number
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['TopicParentCandidateList']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
   savedTopics: {
     parameters: {
       query?: never
@@ -2731,6 +2991,166 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['TopicActionResult']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  topicParentFeedback: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        topic_id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['TopicParentFeedbackRequest']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['TopicParentResult']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  topicSetParent: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        topic_id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['TopicParentRequest']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['TopicParentResult']
         }
       }
       /** @description 서비스 오류 — detail 한 줄 */

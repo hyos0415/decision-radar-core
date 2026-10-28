@@ -57,6 +57,7 @@ from radar.revisit import revisit  # noqa: E402
 from radar.stub_model import StubChat  # noqa: E402
 from common import ops  # noqa: E402
 from pipeline.detect_feed import funnel_line, url_key  # noqa: E402
+from pipeline import topic_hier  # noqa: E402
 from pipeline.importance.card_action import card_action  # noqa: E402
 from common.core import SKILL_RADAR, Ctx, RadarError, radar  # noqa: E402
 from common.env import MODEL as REAL_MODEL, load_dotenv  # noqa: E402
@@ -70,6 +71,8 @@ EVENTS_FILE = "events.jsonl"
 RUNS_FILE = "runs.jsonl"
 SHADOW_FILE = "shadow.jsonl"  # API 그림자 기록 (HYO-99 3단계) — 화면에 안 띄운다
 TOPICS_SAVED_FILE = "topics-saved.json"  # 저장한 화제 {"items": [...]} — 주차 파일과 따로 둔 복사본
+TOPIC_HIER_FEEDBACK_FILE = "topic-hier-feedback.jsonl"  # 화제 부모 제안 응답 (HYO-152) — 추가만 하는 JSONL, 마지막 응답이 센다
+BRANCH_ORDER = ("P1-prefix", "P1-shared", "P2")  # 갈래 동률이면 이 순서
 WEEK_NAME = re.compile(r"^\d{4}-W\d{2}$")  # 화제 주차 파일 이름 (pipeline.topics의 `<주차>.json`)
 CAPTURE_SEED_POSTS = 5  # capture 창에 미리 채우는 글 수
 ALERTS_FILE = "alerts.json"  # revisit 충족 알림 — Inbox 항목 (화면 설계 ③). 앱 데이터에만, ADR repo에는 안 쓴다
@@ -144,6 +147,8 @@ class RadarService:
         # 레인 C 화제 (HYO-127) — `python -m pipeline.topics run --out <폴더>`가 쓴 `<주차>.json`을 읽기만 한다. 저장한 화제는 따로 (복사본)
         self.topics_dir = os.path.abspath(os.environ.get("RADAR_TOPICS_DIR") or os.path.join(self.data_dir, "topics"))
         self.topics_saved_path = os.path.join(self.data_dir, TOPICS_SAVED_FILE)
+        self.topic_feedback_path = os.path.join(self.data_dir, TOPIC_HIER_FEEDBACK_FILE)
+        self._hier_cache = {}  # {주차: (파일 mtime, 인덱스, {토픽 id: 제안 계산})} — 주차 파일이 바뀌면 버린다
         self.jobs = None  # jobs.Jobs가 붙는다 (접수된 capture를 Inbox에)
         self.snapshot_dir = os.path.join(self.data_dir, "snapshots")
         self.tmp = os.path.join(self.data_dir, "tmp")
@@ -862,14 +867,196 @@ class RadarService:
         f = self._topic_file(week)
         k = int(f.get("k") or 0)
         saved = {x["id"] for x in self._saved_topics()}
+        fb = self._hier_feedback(week)
+        by_id = {t["id"]: t for t in f.get("topics") or []}
         rows = []
         for t in (f.get("topics") or [])[:k]:
             posts = self._topic_posts(t)
             rows.append({"id": t["id"], "week": week, "rank": t["rank"], "section": t["section"], "title": t["title"], "url": t["url"],
                          "n_sources": t["n_sources"], "sources": t["sources"], "n_items": t["n_items"],
                          "signal": posts[0]["signal"] if posts else "", "posts": posts, "saved": t["id"] in saved,
-                         "capture_seed": self._capture_seed(week, t["title"], posts)})
+                         "capture_seed": self._capture_seed(week, t["title"], posts),
+                         "parent_suggestion": self._parent_suggestion_view(week, f, t["id"], fb),
+                         "parent_manual": self._parent_manual_view(by_id, fb["manual"].get(t["id"]))})
         return {"week": week, "weeks": weeks, "method": f.get("method"), "k": k, "counts": f.get("counts"), "items": rows}
+
+    # ── 화제 계층 제안 모드 + 피드백 루프 (HYO-152, 등록: eval/topics/hier-registration.md v3) ──
+
+    def _hier_feedback(self, week):
+        """그 주의 응답 — 마지막 것만. {"answer": {(자식, 부모): accept|reject}, "manual": {자식: 부모 화제 id}}.
+        직접 묶기는 자식마다 마지막 manual/manual_clear가 이긴다 (clear면 없음)."""
+        answer, manual = {}, {}
+        try:
+            lines = open(self.topic_feedback_path, encoding="utf-8").read().splitlines()
+        except OSError:
+            lines = []
+        for ln in lines:
+            try:
+                r = json.loads(ln)
+            except ValueError:
+                continue
+            if r.get("week") != week:
+                continue
+            c, p, v = r.get("child_topic"), r.get("parent_topic"), r.get("verdict")
+            if v in ("accept", "reject"):
+                answer[(c, p)] = v
+            elif v == "manual":
+                manual[c] = p
+            elif v == "manual_clear":
+                manual.pop(c, None)
+        return {"answer": answer, "manual": manual}
+
+    def _append_hier_feedback(self, rec):
+        """호출자가 self.lock을 잡고 있어야 한다."""
+        with open(self.topic_feedback_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    @staticmethod
+    def _hier_flags(it):
+        """(부모가 될 수 있나, 자식이 될 수 있나) — 규칙이 발화하려면 부모 쪽엔 모델 이름이, 자식 쪽엔 양자화 표시 또는 「쓴다」 동사가 있어야 한다."""
+        nm = topic_hier.model_name(it)
+        child = bool((nm and topic_hier.MARKERS & set(topic_hier.tokens(nm))) or topic_hier.USE_VERB.search(it.get("title") or ""))
+        return bool(nm), child
+
+    def _hier_cache_entry(self, week, f):
+        """주차 파일 mtime으로 캐시 — 화제가 수천 개여도 짝 검사는 발화할 수 있는 글끼리만 한다."""
+        try:
+            mt = os.path.getmtime(os.path.join(self.topics_dir, week + ".json"))
+        except OSError:
+            mt = None
+        hit = self._hier_cache.get(week)
+        if hit and hit[0] == mt:
+            return hit
+        named, childish = [], []
+        for ti, t in enumerate(f.get("topics") or []):
+            for it in t.get("items") or []:
+                is_named, is_child = self._hier_flags(it)
+                if is_named:
+                    named.append((ti, it))
+                if is_child:
+                    childish.append((ti, it))
+        hit = (mt, {"named": named, "childish": childish}, {})
+        self._hier_cache[week] = hit
+        return hit
+
+    def _compute_parent_suggestion(self, week, f, topic_id):
+        """topic_id의 부모 후보 계산 — 없으면 None. 응답(verdict)은 섞지 않는다 (캐시되는 값)."""
+        _, idx, memo = self._hier_cache_entry(week, f)
+        if topic_id in memo:
+            return memo[topic_id]
+        topics = f.get("topics") or []
+        ti = next((i for i, t in enumerate(topics) if t["id"] == topic_id), None)
+        res = None
+        if ti is not None:
+            res = self._suggest(topics, ti, idx)
+        memo[topic_id] = res
+        return res
+
+    @staticmethod
+    def _suggest(topics, ti, idx):
+        mine = topics[ti].get("items") or []
+        flags = [(it, *RadarService._hier_flags(it)) for it in mine]
+        # 후보 짝 (내 글, 다른 화제 글) — 발화할 수 있는 쪽이 짝의 어느 한쪽에 있는 것만
+        pairs = {}
+        for pj, pit in idx["named"]:
+            if pj != ti:
+                for it, _, is_child in flags:
+                    if is_child:
+                        pairs[(it["id"], pit["id"], pj)] = (it, pit)
+        for pj, pit in idx["childish"]:
+            if pj != ti:
+                for it, is_named, _ in flags:
+                    if is_named:
+                        pairs[(it["id"], pit["id"], pj)] = (it, pit)
+        # 내 화제 안에 부모 글과 이름이 같은 글이 있으면 그 화제는 부모 자체를 담고 있다 — 하위가 아니다 (등록 v3 변경 2026-10-28)
+        my_names = {topic_hier.squash(n) for n in (topic_hier.model_name(it) for it in mine) if n}
+        fires = {}  # 부모 화제 index → {"fwd": [(자식 글, 부모 글, 갈래)], "rev": 거꾸로 발화했거나 부모를 담은 짝 수}
+        for (cid, pid, pj), (ci, pit) in pairs.items():
+            side, br = topic_hier.parent_branch(ci, pit)
+            if side is None:
+                continue
+            d = fires.setdefault(pj, {"fwd": [], "rev": 0})
+            if side == "b" and topic_hier.squash(topic_hier.model_name(pit)) in my_names:
+                d["rev"] += 1
+            elif side == "b":
+                d["fwd"].append((cid, pid, br))
+            else:
+                d["rev"] += 1
+        best = None
+        for pj, d in fires.items():
+            if d["rev"] or not d["fwd"]:
+                continue  # 양방향 발화는 모르는 것으로 두고 후보에서 뺀다
+            key = (-len(d["fwd"]), topics[pj]["rank"])
+            if best is None or key < best[0]:
+                best = (key, pj, d["fwd"])
+        if best is None:
+            return None
+        _, pj, fwd = best
+        cnt = {b: sum(1 for x in fwd if x[2] == b) for b in BRANCH_ORDER}
+        rule = max(BRANCH_ORDER, key=lambda b: (cnt[b], -BRANCH_ORDER.index(b)))
+        pt = topics[pj]
+        order = {it["id"]: n for n, it in enumerate(mine)}
+        return {"topic_id": pt["id"], "title": pt["title"], "url": pt["url"], "rank": pt["rank"], "rule": rule,
+                "pairs": [[c, p] for c, p, _ in sorted(fwd, key=lambda x: (order.get(x[0], 0), x[1]))]}
+
+    def _parent_suggestion_view(self, week, f, topic_id, fb):
+        sug = self._compute_parent_suggestion(week, f, topic_id)
+        if sug is None:
+            return None
+        return {**sug, "verdict": fb["answer"].get((topic_id, sug["topic_id"]))}
+
+    @staticmethod
+    def _parent_manual_view(by_id, parent_id):
+        t = by_id.get(parent_id) if parent_id else None
+        return {"topic_id": t["id"], "title": t["title"]} if t else None
+
+    def topic_parent_feedback(self, topic_id, week, parent_id, verdict):
+        """부모 제안에 맞음(accept)·아님(reject)로 답한다. 지금 계산되는 제안에만 답할 수 있고, 짝·갈래는 서버가 계산한 것을 적는다."""
+        f = self._topic_file(week)
+        if not any(x["id"] == topic_id for x in f.get("topics") or []):
+            raise ServiceError(404, f"{week}에 화제 {topic_id}가 없다")
+        sug = self._compute_parent_suggestion(week, f, topic_id)
+        if sug is None or sug["topic_id"] != parent_id:
+            raise ServiceError(404, f"화제 {topic_id}에 부모 제안 {parent_id}가 없다 — 지금 제안은 {sug['topic_id'] if sug else '없음'}")
+        rec = {"week": week, "child_topic": topic_id, "parent_topic": parent_id, "pairs": sug["pairs"], "rule": sug["rule"],
+               "verdict": verdict, "by": "user-feedback", "at": now_iso()}
+        with self.lock:
+            self._append_hier_feedback(rec)
+        self.log("topic_parent_feedback", topic_id, week=week, parent=parent_id, rule=sug["rule"], verdict=verdict)
+        return {"ok": True, "verdict": verdict, "message": "맞다고 답했어요" if verdict == "accept" else "아니라고 답했어요"}
+
+    def topic_set_parent(self, topic_id, week, parent_id):
+        """직접 묶기 — parent_id의 화제를 부모로. None이면 직접 묶은 부모를 푼다."""
+        f = self._topic_file(week)
+        by_id = {x["id"]: x for x in f.get("topics") or []}
+        if topic_id not in by_id:
+            raise ServiceError(404, f"{week}에 화제 {topic_id}가 없다")
+        with self.lock:
+            if parent_id is None:
+                cur = self._hier_feedback(week)["manual"].get(topic_id)
+                if cur is None:
+                    return {"ok": True, "verdict": None, "message": "직접 묶은 부모가 없어요"}
+                rec_parent, verdict, msg = cur, "manual_clear", "직접 묶은 부모를 풀었어요"
+            else:
+                if parent_id not in by_id:
+                    raise ServiceError(404, f"{week}에 부모 화제 {parent_id}가 없다")
+                if parent_id == topic_id:
+                    raise ServiceError(400, "자기 자신을 부모로 묶을 수 없다")
+                rec_parent, verdict, msg = parent_id, "manual", "직접 묶었어요"
+            self._append_hier_feedback({"week": week, "child_topic": topic_id, "parent_topic": rec_parent, "pairs": [], "rule": "manual",
+                                        "verdict": verdict, "by": "user-feedback", "at": now_iso()})
+        self.log("topic_parent_manual", topic_id, week=week, parent=rec_parent, verdict=verdict)
+        return {"ok": True, "verdict": verdict, "message": msg}
+
+    def topic_parent_candidates(self, week, q, limit):
+        """직접 묶기 선택창 — 그 주 화제 중 제목에 q가 든 것, 순위순."""
+        week = week or (self._topic_weeks() or [None])[0]
+        if week is None:
+            return []
+        needle = (q or "").strip().lower()
+        out = [{"id": t["id"], "title": t["title"], "rank": t["rank"]} for t in self._topic_file(week).get("topics") or []
+               if needle in (t.get("title") or "").lower()]
+        return sorted(out, key=lambda x: x["rank"])[:limit]
 
     def saved_topics(self):
         return list(reversed(self._saved_topics()))  # 저장한 순서대로 쌓이므로 뒤집으면 최근 것 먼저

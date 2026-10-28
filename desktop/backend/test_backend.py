@@ -181,6 +181,7 @@ def main():
         scenario_hyo95(tmp)
         scenario_hyo110(tmp)
         scenario_hyo127(tmp)
+        scenario_hyo152(tmp)
         scenario_hyo132(tmp)
         scenario_hyo144(tmp)
         scenario_hyo142(tmp)
@@ -1434,6 +1435,134 @@ def scenario_hyo127(tmp):
     adata = os.path.join(tmp, "data127a")
     devdata.seed(adata, "andbread")
     check("프로필 시드도 화제 예시를 만든다", os.path.exists(os.path.join(adata, "topics", devdata.TOPICS_FIXTURE_WEEK + ".json")))
+
+
+def scenario_hyo152(tmp):
+    """HYO-152 — 화제 계층 제안 모드 + 피드백 루프: 부모 제안(갈래·짝) · 양방향이면 없음 · 응답 저장(서버가 짝·갈래를 적는다) · 현재 제안이 아니면 404 · 직접 묶기 · 후보 검색."""
+    print("\n— HYO-152: 화제 부모 제안·피드백 —")
+    import time
+    import jobs as jobs_mod
+    data = os.path.join(tmp, "data152")
+    os.makedirs(os.path.join(data, "topics"))
+
+    def item(iid, title, source="huggingface"):
+        return {"id": iid, "source": source, "title": title, "url": "https://example.com/" + iid, "pop": 1.0, "signal": "HF 좋아요 1"}
+
+    def topic(tid, rank, *items):
+        return {"id": tid, "rank": rank, "section": "single", "title": items[0]["title"], "url": items[0]["url"], "n_sources": 1,
+                "sources": {"huggingface": len(items)}, "n_items": len(items), "items": list(items)}
+
+    topics = [
+        topic("t-base", 1, item("hf-model:deepseek-ai/DeepSeek-V4.1-Flash", "deepseek-ai/DeepSeek-V4.1-Flash · Hugging Face")),
+        topic("t-other", 2, item("hf-model:acme/Unrelated-Thing", "acme/Unrelated-Thing · Hugging Face")),
+        topic("t-gguf", 3, item("hf-model:unsloth/DeepSeek-V4.1-Flash-GGUF", "unsloth/DeepSeek-V4.1-Flash-GGUF · Hugging Face"),
+              item("hf-model:bartowski/DeepSeek-V4.1-Flash-GGUF", "bartowski/DeepSeek-V4.1-Flash-GGUF · Hugging Face")),
+        # 양방향: A의 글이 B의 글의 부모이기도 하고 자식이기도 하다
+        topic("t-a", 4, item("hf-model:o/Foo-Bar-2", "o/Foo-Bar-2 · Hugging Face"), item("hf-model:o/Zed-Lite-3-GGUF", "o/Zed-Lite-3-GGUF · Hugging Face")),
+        topic("t-b", 5, item("hf-model:o/Zed-Lite-3", "o/Zed-Lite-3 · Hugging Face"), item("hf-model:o/Foo-Bar-2-GGUF", "o/Foo-Bar-2-GGUF · Hugging Face")),
+        # 부모 후보가 둘 — 발화한 짝이 더 많은 쪽(t-many)이 이긴다
+        topic("t-few", 6, item("hf-model:o/Qwen9-Next", "o/Qwen9-Next · Hugging Face")),
+        topic("t-many", 7, item("hf-model:o/Qwen9-Next-Base", "o/Qwen9-Next-Base · Hugging Face"), item("hf-model:mirror/Qwen9-Next-Base", "mirror/Qwen9-Next-Base · Hugging Face")),
+        topic("t-kid", 8, item("hf-model:o/Qwen9-Next-Base-AWQ", "o/Qwen9-Next-Base-AWQ · Hugging Face")),
+    ]
+    wk = os.path.join(data, "topics", "2026-W43.json")
+    json.dump({"week": "2026-W43", "method": "test", "k": 8, "counts": {}, "topics": topics}, open(wk, "w", encoding="utf-8"), ensure_ascii=False)
+    svc = RadarService(data)
+    c = TestClient(server.create_app(svc, jobs=jobs_mod.Jobs(svc, start=False)))
+    rows = {t["id"]: t for t in c.get("/topics").json()["items"]}
+
+    sg = rows["t-gguf"]["parent_suggestion"]
+    check("GGUF 화제 → 원본 모델 화제를 부모로 제안 (P1-prefix · 짝 둘)", sg and sg["topic_id"] == "t-base" and sg["rank"] == 1 and sg["rule"] == "P1-prefix"
+          and sg["pairs"] == [["hf-model:unsloth/DeepSeek-V4.1-Flash-GGUF", "hf-model:deepseek-ai/DeepSeek-V4.1-Flash"],
+                              ["hf-model:bartowski/DeepSeek-V4.1-Flash-GGUF", "hf-model:deepseek-ai/DeepSeek-V4.1-Flash"]]
+          and sg["verdict"] is None and sg["title"] == topics[0]["title"] and sg["url"] == topics[0]["url"], sg)
+    check("부모·무관한 화제는 제안 없음 · 직접 묶기도 없음", rows["t-base"]["parent_suggestion"] is None and rows["t-other"]["parent_suggestion"] is None
+          and rows["t-gguf"]["parent_manual"] is None)
+    check("양방향 발화(t-a ↔ t-b) → 제안 없음", rows["t-a"]["parent_suggestion"] is None and rows["t-b"]["parent_suggestion"] is None)
+    check("부모 후보가 여럿이면 발화한 짝이 많은 쪽 하나 — 같으면 순위 낮은(앞선) 쪽",
+          rows["t-kid"]["parent_suggestion"]["topic_id"] == "t-many" and rows["t-kid"]["parent_suggestion"]["rule"] == "P1-prefix",
+          rows["t-kid"]["parent_suggestion"])
+
+    # P2 갈래 · 앞 2토막 공유 갈래 — 갈래 이름이 제안에 실린다
+    t2 = topics + [topic("t-app", 9, item("github:dev/photo-tool", "I built a photo tool using DeepSeek-V4.1-Flash for tagging", "github")),
+                   topic("t-fp4", 10, item("hf-model:nv/Qwen3.8-Flash-FP4", "nv/Qwen3.8-Flash-FP4 · Hugging Face")),
+                   topic("t-gg2", 11, item("hf-model:isa/Qwen3.8-Flash-Coder-GGUF", "isa/Qwen3.8-Flash-Coder-GGUF · Hugging Face")),
+                   # 부모 자체를 담은 화제: 원본 모델 글과 GGUF 글이 한 화제 — GGUF 글만 보면 블로그 글의 하위지만, 원본 글이 블로그 글과 이름이 같다
+                   topic("t-lfm", 12, item("hf-model:o/Lfm-9", "o/Lfm-9 · Hugging Face"), item("hf-model:o/Lfm-9-GGUF", "o/Lfm-9-GGUF · Hugging Face")),
+                   topic("t-blog", 13, item("hn:900", "Lfm-9: Built for fast on-device agents", "hn"))]
+    json.dump({"week": "2026-W43", "method": "test", "k": 13, "counts": {}, "topics": t2}, open(wk, "w", encoding="utf-8"), ensure_ascii=False)
+    os.utime(wk, (time.time() + 5, time.time() + 5))  # 캐시는 파일 mtime으로 갱신된다
+    rows = {t["id"]: t for t in c.get("/topics").json()["items"]}
+    check("파일이 바뀌면 캐시를 버린다 → 새 화제의 제안", rows["t-app"]["parent_suggestion"] and rows["t-app"]["parent_suggestion"]["topic_id"] == "t-base"
+          and rows["t-app"]["parent_suggestion"]["rule"] == "P2", rows["t-app"]["parent_suggestion"])
+    check("앞 2토막 공유 → P1-shared", rows["t-gg2"]["parent_suggestion"] and rows["t-gg2"]["parent_suggestion"]["topic_id"] == "t-fp4"
+          and rows["t-gg2"]["parent_suggestion"]["rule"] == "P1-shared", rows["t-gg2"]["parent_suggestion"])
+    check("부모와 이름이 같은 글을 담은 화제 → 그 부모는 제안하지 않는다 (v3 변경 2026-10-28)",
+          rows["t-lfm"]["parent_suggestion"] is None and rows["t-blog"]["parent_suggestion"] is None, rows["t-lfm"]["parent_suggestion"])
+
+    # 응답 — 서버가 계산한 짝·갈래를 적는다 (클라이언트 값 무시)
+    body = {"week": "2026-W43", "parent_id": "t-base", "verdict": "accept"}
+    r = c.post("/topics/t-gguf/parent-feedback", json={**body, "rule": "P2", "pairs": [["x", "y"]]})
+    check("맞음 → 200 · verdict accept", r.status_code == 200 and r.json()["ok"] and r.json()["verdict"] == "accept", r.text)
+    recs = [json.loads(x) for x in open(svc.topic_feedback_path, encoding="utf-8")]
+    check("기록: 등록된 모양 · 짝·갈래는 서버 계산값 · by user-feedback",
+          len(recs) == 1 and set(recs[0]) == {"week", "child_topic", "parent_topic", "pairs", "rule", "verdict", "by", "at"}
+          and recs[0]["rule"] == "P1-prefix" and recs[0]["pairs"] == sg["pairs"] and recs[0]["by"] == "user-feedback"
+          and recs[0]["child_topic"] == "t-gguf" and recs[0]["parent_topic"] == "t-base" and recs[0]["verdict"] == "accept", recs)
+    check("GET /topics에 verdict가 비친다", {t["id"]: t for t in c.get("/topics").json()["items"]}["t-gguf"]["parent_suggestion"]["verdict"] == "accept")
+    c.post("/topics/t-gguf/parent-feedback", json={**body, "verdict": "reject"})
+    recs = [json.loads(x) for x in open(svc.topic_feedback_path, encoding="utf-8")]
+    check("응답을 바꾸면 마지막 것이 보이고 이력은 남는다", len(recs) == 2 and recs[0]["verdict"] == "accept" and recs[1]["verdict"] == "reject"
+          and {t["id"]: t for t in c.get("/topics").json()["items"]}["t-gguf"]["parent_suggestion"]["verdict"] == "reject")
+    check("현재 제안이 아닌 부모에 답하면 404 (기록 안 늘어남)", c.post("/topics/t-gguf/parent-feedback", json={**body, "parent_id": "t-other"}).status_code == 404
+          and c.post("/topics/t-base/parent-feedback", json={**body, "parent_id": "t-gguf"}).status_code == 404
+          and len(open(svc.topic_feedback_path, encoding="utf-8").read().splitlines()) == 2)
+    check("없는 화제 · 모르는 주차 → 404 · 모양이 틀리면 422", c.post("/topics/t-nope/parent-feedback", json=body).status_code == 404
+          and c.post("/topics/t-gguf/parent-feedback", json={**body, "week": "2026-W01"}).status_code == 404
+          and c.post("/topics/t-gguf/parent-feedback", json={**body, "verdict": "manual"}).status_code == 422)
+    evs = events(svc)
+    check("행동 로그: topic_parent_feedback", any(e["event"] == "topic_parent_feedback" and e["item"] == "t-gguf"
+                                              and e["detail"]["verdict"] == "reject" and e["detail"]["rule"] == "P1-prefix" for e in evs))
+
+    # 직접 묶기
+    r = c.post("/topics/t-other/parent", json={"week": "2026-W43", "parent_id": "t-base"})
+    check("직접 묶기 → manual", r.status_code == 200 and r.json()["verdict"] == "manual", r.text)
+    row = {t["id"]: t for t in c.get("/topics").json()["items"]}["t-other"]
+    check("parent_manual에 부모가 뜬다", row["parent_manual"] == {"topic_id": "t-base", "title": topics[0]["title"]}, row["parent_manual"])
+    last = json.loads(open(svc.topic_feedback_path, encoding="utf-8").read().splitlines()[-1])
+    check("직접 묶기 기록: pairs 빈 목록 · rule manual", last["pairs"] == [] and last["rule"] == "manual" and last["verdict"] == "manual"
+          and last["child_topic"] == "t-other" and last["parent_topic"] == "t-base")
+    c.post("/topics/t-other/parent", json={"week": "2026-W43", "parent_id": "t-many"})
+    row = {t["id"]: t for t in c.get("/topics").json()["items"]}["t-other"]
+    check("다시 묶으면 마지막 것이 이긴다", row["parent_manual"]["topic_id"] == "t-many")
+    r = c.post("/topics/t-other/parent", json={"week": "2026-W43", "parent_id": None})
+    last = json.loads(open(svc.topic_feedback_path, encoding="utf-8").read().splitlines()[-1])
+    check("풀기 → manual_clear 기록 · parent_manual 없음", r.json()["verdict"] == "manual_clear" and last["verdict"] == "manual_clear"
+          and last["parent_topic"] == "t-many" and {t["id"]: t for t in c.get("/topics").json()["items"]}["t-other"]["parent_manual"] is None)
+    n = len(open(svc.topic_feedback_path, encoding="utf-8").read().splitlines())
+    r = c.post("/topics/t-other/parent", json={"week": "2026-W43", "parent_id": None})
+    check("묶은 게 없는데 풀기 → 아무것도 안 적는다", r.status_code == 200 and r.json()["verdict"] is None
+          and len(open(svc.topic_feedback_path, encoding="utf-8").read().splitlines()) == n)
+    check("직접 묶기: 없는 부모 404 · 자기 자신 400 · 없는 화제 404",
+          c.post("/topics/t-other/parent", json={"week": "2026-W43", "parent_id": "t-nope"}).status_code == 404
+          and c.post("/topics/t-other/parent", json={"week": "2026-W43", "parent_id": "t-other"}).status_code == 400
+          and c.post("/topics/t-nope/parent", json={"week": "2026-W43", "parent_id": "t-base"}).status_code == 404)
+
+    # 후보 검색
+    r = c.get("/topics/parent-candidates", params={"week": "2026-W43", "q": "deepseek"}).json()["items"]
+    check("후보 검색: 제목 부분 일치(대소문자 무시) · 순위순", [x["id"] for x in r] == ["t-base", "t-gguf", "t-app"] and r[0]["rank"] == 1 and "title" in r[0], r)
+    check("후보 검색: q 없으면 전체 · limit", len(c.get("/topics/parent-candidates", params={"week": "2026-W43", "limit": 3}).json()["items"]) == 3
+          and len(c.get("/topics/parent-candidates").json()["items"]) == 13)
+    check("후보 검색: limit 51 → 422 · 모르는 주차 404", c.get("/topics/parent-candidates", params={"limit": 51}).status_code == 422
+          and c.get("/topics/parent-candidates", params={"week": "2026-W01"}).status_code == 404)
+
+    # 예시(스텁) 데이터는 제안 칸이 있어도 오류 없이 돈다
+    sdata = os.path.join(tmp, "data152s")
+    devdata.seed(sdata)
+    ssvc = RadarService(sdata)
+    sc = TestClient(server.create_app(ssvc, jobs=jobs_mod.Jobs(ssvc, start=False)))
+    srows = sc.get("/topics").json()["items"]
+    check("개발 예시 화제: parent_suggestion · parent_manual 칸이 있다", srows and all("parent_suggestion" in x and "parent_manual" in x for x in srows))
 
 
 if __name__ == "__main__":

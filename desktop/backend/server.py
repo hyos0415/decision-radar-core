@@ -101,6 +101,13 @@ def create_app(svc: RadarService = None, scheduler_on: bool = False, jobs: Jobs 
         """화제 탭 (레인 C, HYO-127) — 그 주의 상위 k 토픽. 화제 파일이 없으면 빈 목록. 읽기만."""
         return svc.topics(week)
 
+    @app.get("/topics/parent-candidates", response_model=S.TopicParentCandidateList, operation_id="topicParentCandidates")
+    def topic_parent_candidates(week: Optional[str] = Query(default=None, description="주차. 없으면 가장 새 주차"),
+                                q: str = Query(default="", description="제목에 든 글자 (대소문자 무시)"),
+                                limit: int = Query(default=20, ge=1, le=50)):
+        """직접 묶기 선택창 — 같은 주 화제를 제목으로 찾는다 (순위순). 읽기만."""
+        return {"items": svc.topic_parent_candidates(week, q, limit)}
+
     @app.get("/topics/saved", response_model=S.SavedTopicList, operation_id="savedTopics")
     def saved_topics():
         return {"items": svc.saved_topics()}
@@ -112,6 +119,16 @@ def create_app(svc: RadarService = None, scheduler_on: bool = False, jobs: Jobs 
     @app.post("/topics/{topic_id}/unsave", response_model=S.TopicActionResult, operation_id="unsaveTopic")
     def unsave_topic(topic_id: str):
         return svc.unsave_topic(topic_id)
+
+    @app.post("/topics/{topic_id}/parent-feedback", response_model=S.TopicParentResult, operation_id="topicParentFeedback")
+    def topic_parent_feedback(topic_id: str, body: S.TopicParentFeedbackRequest):
+        """부모 제안에 맞음/아님으로 답한다 (HYO-152). 지금 계산되는 제안에만 답할 수 있다 — 짝·갈래는 서버가 적는다."""
+        return svc.topic_parent_feedback(topic_id, body.week, body.parent_id, body.verdict)
+
+    @app.post("/topics/{topic_id}/parent", response_model=S.TopicParentResult, operation_id="topicSetParent")
+    def topic_set_parent(topic_id: str, body: S.TopicParentRequest):
+        """직접 묶기 — 부모 화제를 정한다. parent_id가 null이면 직접 묶은 부모를 푼다."""
+        return svc.topic_set_parent(topic_id, body.week, body.parent_id)
 
     @app.get("/targets", response_model=S.TargetList, operation_id="targets")
     def targets():
