@@ -269,7 +269,8 @@ def cmd_run(args):
     stack_text = {c["chunk_id"]: c["text"] for c in chunks if c["doc_id"].startswith("stack:")}
     metrics["jhs"], jhs_error = jhs_block(run, rep_chunks, qrels, queries, docs, stack_text, nodes)
     if seeds is not None and not jhs_error:
-        metrics["jhs"]["seed_recall"] = jhs_metrics.seed_recall(seeds, queries, nodes)
+        ents = {qid: strat.entity_seeds(s) for qid, s in seeds.items()}     # 문서 노드를 뺀다 · @all이 주 지표 (§5 변경 2026-10-28)
+        metrics["jhs"]["seed_recall"] = jhs_metrics.seed_recall(ents, queries, nodes, ks=jhs_metrics.SEED_KS_S7)
     system = {
         "index_build_seconds": round(build_secs, 3),
         "chunking_seconds": round(chunk_secs, 3),

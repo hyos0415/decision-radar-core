@@ -5,7 +5,7 @@
   - 버전 혼동 사례 표 (C만)          같은 패키지의 다른 버전(등급 0·판정 없음) — 이전 버전이 정답보다 위면 위험
   - component 근거 사례 표 (E만)     대표 청크가 같은 repo 스택 절의 표 행(기술 별칭 + component) · manifest(디렉터리 = component)
   - 커뮤니티 비율@k                  상위 k 중 reddit·hn
-  - Seed Recall@k                    시드를 내는 전략만 — nodes@v1 id 일치
+  - Seed Recall@k                    시드를 내는 전략만 — nodes@v1 id 일치 · k=None이면 시드 전체(@all, S7 — 변경 2026-10-28)
 정의를 바꾸려면 등록 문서에 `변경`을 먼저 남긴다 (CLAUDE.md 규율 7).
 변경 (2026-10-15, #98): 버전 비교 정규화 · 정답 릴리스를 못 찾는 질의는 「판정 불가」 행 (실행을 멈추지 않는다).
 """
@@ -18,6 +18,7 @@ K = 10                                   # 사례 표의 k — 헤드라인 nDCG
 VERSION_KS = (5, 10, 20)
 COMMUNITY_KS = (5, 10, 20)
 SEED_KS = (1, 3, 5)
+SEED_KS_S7 = (1, 3, 5, None)            # S7 문서 시드 — @all이 주 지표 (§5 변경 2026-10-28)
 COMMUNITY_SOURCE_TYPE = "community"
 _VERSION = re.compile(r"v?(\d+(?:\.\d+)*)")
 
@@ -326,7 +327,9 @@ def community_share(run, queries, doc_source_types, ks=COMMUNITY_KS):
 # --- Seed Recall (시드를 내는 전략만) --------------------------------------------------------------------------------
 
 def seed_recall(seeds, queries, nodes, ks=SEED_KS):
-    """seeds {qid: [node id, … 순위대로]}. B는 뺀다(nodes가 범주). 연결되지 않는 질의 노드는 놓친 것으로 세고 따로 적는다."""
+    """seeds {qid: [node id, … 순위대로]}. B는 뺀다(nodes가 범주). 연결되지 않는 질의 노드는 놓친 것으로 세고 따로 적는다.
+    ks의 None은 시드 전체(@all)."""
+    label = lambda k: "@all" if k is None else f"@{k}"     # noqa: E731
     per_q, unmapped = {}, {}
     for q in queries:
         if q["type"] == "B" or q["qid"] not in seeds:
@@ -335,10 +338,10 @@ def seed_recall(seeds, queries, nodes, ks=SEED_KS):
         total = len(ids) + len(missing)
         if not total:
             continue
-        per_q[q["qid"]] = {f"@{k}": round(len(ids & set(seeds[q["qid"]][:k])) / total, 4) for k in ks}
+        per_q[q["qid"]] = {label(k): round(len(ids & set(seeds[q["qid"]][:k])) / total, 4) for k in ks}
         if missing:
             unmapped[q["qid"]] = missing
-    mean = {f"@{k}": (round(sum(v[f"@{k}"] for v in per_q.values()) / len(per_q), 4) if per_q else None) for k in ks}
+    mean = {label(k): (round(sum(v[label(k)] for v in per_q.values()) / len(per_q), 4) if per_q else None) for k in ks}
     return {"nodes_version": nodes.version, "n": len(per_q), "mean": mean, "per_query": per_q,
             "not_in_graph": unmapped}
 

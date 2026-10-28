@@ -134,6 +134,11 @@ class S7Graph:
                     out.append(n)
         return out
 
+    def entity_seeds(self, seed_nodes):
+        """Seed Recall용 — 시드 목록에서 문서 노드를 뺀 technology·component만 (순서 유지). 문서 노드는 질의 노드와
+        일치할 수 없어 @k 칸만 차지한다 (§5 변경 2026-10-28). seeds.json에는 문서 노드를 포함한 원래 목록을 저장한다."""
+        return [n for n in seed_nodes if n in self.G and self.G.nodes[n]["kind"] in SEED_NEIGHBOR_KINDS]
+
     def index_size_bytes(self):
         return self.bm25.index_size_bytes()           # 그래프는 메모리 안
 

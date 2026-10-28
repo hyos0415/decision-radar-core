@@ -2279,6 +2279,25 @@ def _():
     assert s.last_seeds == ["R3"]                                                      # 이웃 없는 시드
 
 
+@case("S7 Seed Recall (§5 변경 2026-10-28): 문서 노드를 빼고 technology·component만 센다 · @all = 시드 전체 · 등록 그대로(문서 노드 포함)면 @1이 0")
+def _():
+    from types import SimpleNamespace
+    kinds = {"tech:t": "technology", "comp:c": "component", "R1": ("release", True), "A1": "adr"}
+    edges = [("tech:t", "R1"), ("A1", "comp:c")]
+    hits = [("R1#0", 9.0), ("A1#0", 7.0)]
+    s, _, _ = s7_make(hits, kinds, edges, {"R1": [0], "A1": [0]}, seed_k=2)
+    s.search("q", 20)
+    assert s.last_seeds == ["R1", "tech:t", "A1", "comp:c"]                            # seeds.json에는 문서 노드 포함 그대로
+    ents = s.entity_seeds(s.last_seeds)
+    assert ents == ["tech:t", "comp:c"]
+    nodes = SimpleNamespace(version="nodes@test", query_node_ids=lambda q: ({"tech:t", "comp:c"}, []))
+    qs = [{"qid": "K1", "type": "K"}]
+    r = jm.seed_recall({"K1": ents}, qs, nodes, ks=jm.SEED_KS_S7)
+    assert r["mean"] == {"@1": 0.5, "@3": 1.0, "@5": 1.0, "@all": 1.0}, r["mean"]
+    raw = jm.seed_recall({"K1": s.last_seeds}, qs, nodes, ks=jm.SEED_KS_S7)
+    assert raw["mean"]["@1"] == 0.0 and raw["mean"]["@all"] == 1.0                   # 문서 노드가 칸을 차지하면 @1은 0 — 바꾼 이유
+
+
 @case("S7: index가 BM25 색인과 그래프 구축을 함께 한다(한 번) · settings(α·감쇠·max_iter·tol·그래프 통계·구축 초) · 결과 키는 seed_k·α와 무관 · 크기·버전은 BM25 것")
 def _():
     calls = []
