@@ -48,6 +48,8 @@ services:
       - neo4j-data:/data
       - neo4j-plugins:/plugins
     mem_limit: 2g
+    # M1에서 `stop` 때 기본 10초 안에 못 끝나 SIGKILL(137)로 죽었다 (HYO-76)
+    stop_grace_period: 30s
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null 2>&1 || exit 1"]
       interval: 10s

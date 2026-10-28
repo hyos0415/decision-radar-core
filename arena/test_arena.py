@@ -1468,7 +1468,7 @@ def _():
     import importlib
     from types import SimpleNamespace
     cli = importlib.import_module("arena.cli")
-    assert cli.STRATEGY_CHOICES == ["s1", "s2", "s3a", "s3a.ko", "s3b", "s4", "s4.int8", "s4.bbq", "s4.kure", "s5a", "s5b", "s6"]
+    assert cli.STRATEGY_CHOICES == ["s1", "s2", "s3a", "s3a.ko", "s3b", "s4", "s4.int8", "s4.bbq", "s4.kure", "s5a", "s5b", "s6", "s7"]
     assert set(cli.SPLADE_STRATEGIES) == {"s3a", "s5b"} and {"s4.int8", "s4.bbq", "s5b"} <= set(cli.BGE_STRATEGIES)
     assert {"s3a", "s5b", "s4.bbq"} <= set(cli.EMBEDDING_STRATEGIES) and "s1" not in cli.EMBEDDING_STRATEGIES
     args = SimpleNamespace(es_url="http://x", hnsw_m=16, ef_construction=100, num_candidates=100, rrf_k=60, chunk_k=100)
@@ -2110,6 +2110,276 @@ def _():
     assert not warm["cold_build"] and warm["cold_build_seconds"] is None and warm["note"] and warm["build_llm_cost_usd"] == 0.25
     assert cli.build_cost(sysd, [], SimpleNamespace())["cold_build"]                  # BM25: 임베딩 없음 → 늘 cold
     assert set(cli.DIAG_STRATEGIES) <= set(cli.BGE_STRATEGIES) <= set(cli.EMBEDDING_STRATEGIES)
+
+
+# --- S7 구조 그래프 실행 (HYO-36) — ES 없이: 가짜 BM25 + 주입한 그래프 ----------------------------------------------------
+
+class FakeBM25:
+    """S2BM25 자리 — 청크 순위를 고정해 돌려준다."""
+    id, version = "S2", "v1"
+
+    def __init__(self, hits):
+        self._hits, self.took_ms, self.n_indexed, self.asked, self.indexed, self.dropped = hits, [], 0, [], 0, False
+
+    def settings(self):
+        return {"marker": "bm25"}
+
+    def index(self, chunks):
+        self.n_indexed, self.indexed = len(chunks), self.indexed + 1
+
+    def search(self, q, k):
+        self.asked.append(k)
+        return list(self._hits)
+
+    def index_size_bytes(self):
+        return 77
+
+    def server_version(self):
+        return "9.x"
+
+    def drop(self):
+        self.dropped = True
+
+
+def s7_builder(kinds, edges):
+    """kinds {id: kind 또는 (kind, doc)} · edges [(a, b)] → graph.build 자리를 하는 builder."""
+    import networkx as nx
+
+    def builder(docs, nodes):
+        G = nx.MultiDiGraph(version="graph@v1", nodes_version="nodes@test")
+        for n, k in kinds.items():
+            kind, doc = k if isinstance(k, tuple) else (k, None)
+            G.add_node(n, kind=kind, **({} if doc is None else {"doc": doc}))
+        for a, b in edges:
+            G.add_edge(a, b, rel="X")
+        return G, {}
+    return builder
+
+
+def s7_make(hits, kinds, edges, docs_with_chunks, seed_k=1, alpha=0.15, chunk_k=100):
+    """docs_with_chunks {doc: [chunk 이름 접미]} → (S7Graph, FakeBM25, 청크 목록). 색인까지 해 둔다."""
+    from types import SimpleNamespace
+
+    from arena.strategies import s7_graph
+    chunks = [{"chunk_id": f"{d}#{i}", "doc_id": d, "source_type": "repo", "text": "t"}
+              for d, idx in docs_with_chunks.items() for i in idx]
+    bm = FakeBM25(hits)
+    s = s7_graph.S7Graph(bm, [], SimpleNamespace(version="nodes@test"), seed_k=seed_k, alpha=alpha, chunk_k=chunk_k,
+                         graph_builder=s7_builder(kinds, edges))
+    s.index(chunks)
+    return s, bm, chunks
+
+
+
+def s7_docs(res, chunk_to_doc):
+    return [d for d, _, _ in harness.rollup_chunks(res, chunk_to_doc)]
+
+
+@case("S7: 순간이동 α → networkx 감쇠 1−α로 바꿔 넘긴다 — nx.pagerank(alpha=0.85)와 같은 순서, α를 바꾸면 순서가 달라진다 (변환을 빼면 실패)")
+def _():
+    import networkx as nx
+    edges = [("S", "N"), ("S", "M"), ("M", "F1"), ("M", "F2"), ("M", "F3"), ("F1", "F4"), ("N", "T")]
+    names = ["S", "N", "M", "F1", "F2", "F3", "F4", "T"]
+    kinds = {n: ("release", True) for n in names}
+    orders = {}
+    for alpha in (0.15, 0.5):
+        s, _, chunks = s7_make([("S#0", 5.0)], kinds, edges, {n: [0] for n in names}, seed_k=1, alpha=alpha)
+        assert abs(s.nx_damping - (1 - alpha)) < 1e-12 and s.settings()["nx_damping"] == s.nx_damping
+        assert s.settings()["teleport_alpha"] == alpha
+        got = s7_docs(s.search("q", 20), {c["chunk_id"]: c["doc_id"] for c in chunks})
+        G = nx.Graph(edges)
+        ppr = nx.pagerank(G, alpha=1 - alpha, personalization={"S": 1.0}, max_iter=100, tol=1e-6)         # 손으로 변환한 기대값
+        want = sorted(names, key=lambda n: (-round(ppr[n], 12), n))
+        assert got == want, (alpha, got, want)
+        orders[alpha] = got
+    assert orders[0.15] != orders[0.5], orders                   # 이 그래프에서 α가 순서를 바꾼다 — 변환을 빼면(=α를 감쇠로 넘기면) 위 기대값과 어긋난다
+    assert orders[0.15].index("F1") < orders[0.15].index("T") and orders[0.5].index("T") < orders[0.5].index("F1")
+    s = s7_make([("S#0", 5.0)], kinds, edges, {n: [0] for n in names}, alpha=0.15)[0]
+    s.nx_damping = 0.15                                            # 변환을 빠뜨린 구현을 흉내 — 결과가 달라져야 한다 (회귀 증거)
+    assert s7_docs(s.search("q", 20), {f"{n}#0": n for n in names}) != orders[0.15]
+    for bad in (0, 1, -0.1, 1.5, True, None):
+        assert raises(ValueError, s7_make, [], kinds, edges, {"S": [0]}, alpha=bad), bad
+    for bad in (0, -1, True, 2.5):
+        assert raises(ValueError, s7_make, [], kinds, edges, {"S": [0]}, seed_k=bad), bad
+
+
+@case("S7: PPR 문서 먼저 · BM25로 채움(중복 없음) · version 노드(doc=False)·technology·component·청크 없는 노드는 결과에 없다 · 시드 가중치는 BM25 점수 비례 · k로 자른다")
+def _():
+    import networkx as nx
+    kinds = {"tech:t": "technology", "comp:c": "component", "R1": ("release", True), "R2": ("release", True),
+             "R3": ("release", True), "V": ("release", False), "A1": "adr", "D1": "document", "P": ("release", True)}
+    edges = [("tech:t", "R1"), ("tech:t", "R1"), ("tech:t", "R2"), ("R1", "R2"), ("A1", "tech:t"), ("A1", "comp:c"),
+             ("comp:c", "R1"), ("D1", "V"), ("R2", "V"), ("D1", "comp:c"), ("tech:t", "P")]        # R1-tech 평행 관계 2개 · R3 고립 · P는 청크 없음
+    docs = {"R1": [0, 1], "R2": [0], "R3": [0], "A1": [0], "D1": [0], "X": [0]}                    # X = 그래프 밖 문서 (커뮤니티 글)
+    hits = [("R1#1", 9.0), ("X#0", 8.0), ("A1#0", 7.0), ("R3#0", 6.0), ("R1#0", 5.0)]
+    s, bm, chunks = s7_make(hits, kinds, edges, docs, seed_k=3, alpha=0.3)
+    c2d = {c["chunk_id"]: c["doc_id"] for c in chunks}
+    res = s.search("q", 50)
+    assert bm.asked == [100]                                                                      # BM25는 chunk_k만큼 가져온다
+    got = s7_docs(res, c2d)
+    assert len(got) == len(set(got)) == len(res)                                                  # 문서마다 하나 · 중복 없음
+    assert not ({"tech:t", "comp:c", "V", "P"} & set(got))                                        # 문서 아닌 노드 · 청크 없는 노드는 없다
+    # 기대값 — 시드 = 상위 3 BM25 문서(R1, X, A1) 중 그래프 노드(R1, A1), 가중치 9:7
+    Gu = nx.Graph([(a, b) for a, b in edges])
+    Gu.add_nodes_from(kinds)
+    ppr = nx.pagerank(Gu, alpha=0.7, personalization={"R1": 9 / 16, "A1": 7 / 16}, max_iter=100, tol=1e-6)
+    ppr_docs = sorted((n for n in docs if n in Gu and ppr[n] > 0), key=lambda n: (-round(ppr[n], 12), n))
+    assert got[:len(ppr_docs)] == ppr_docs and set(ppr_docs) == {"R1", "A1", "R2", "D1"}, (got, ppr_docs)
+    assert got[len(ppr_docs):] == ["X", "R3"]                                                     # BM25 순서로 채움 (이미 나온 R1·A1은 건너뜀)
+    assert [v for _, v in res] == sorted({v for _, v in res}, reverse=True) and len({v for _, v in res}) == len(res)   # 엄격 감소
+    assert dict((c2d[c], c) for c, _ in res)["R1"] == "R1#1" and dict((c2d[c], c) for c, _ in res)["R2"] == "R2#0"     # BM25가 올린 청크 · 아니면 첫 청크
+    assert [c2d[c] for c, _ in s.search("q", 2)] == got[:2]                                       # k로 자른다
+    # 시드 가중치가 균등이면 달라지는 그래프에서 점수 비례임을 확인 (회귀 증거)
+    uni = nx.pagerank(Gu, alpha=0.7, personalization={"R1": 0.5, "A1": 0.5}, max_iter=100, tol=1e-6)
+    assert [round(ppr[n], 9) for n in ppr_docs] != [round(uni[n], 9) for n in ppr_docs]
+
+
+@case("S7: 같은 PPR 점수는 BM25 순위 → (BM25에 없는 문서는 뒤) 문서 id 순 · 대표 청크 = BM25 청크, 없으면 첫 청크")
+def _():
+    names = ["S", "a", "b", "c", "d"]
+    kinds = {n: ("release", True) for n in names}
+    edges = [("S", n) for n in "abcd"]                                  # a·b·c·d는 S에 대칭으로 붙어 PPR 점수가 같다
+    docs = {"S": [0], "a": [0, 1], "b": [0], "c": [0, 1], "d": [0]}
+    hits = [("S#0", 10.0), ("c#1", 3.0), ("d#0", 2.0)]                  # BM25 순위: S, c, d (a·b는 없음)
+    s, _, chunks = s7_make(hits, kinds, edges, docs, seed_k=1)
+    c2d = {c["chunk_id"]: c["doc_id"] for c in chunks}
+    res = s.search("q", 20)
+    assert s7_docs(res, c2d) == ["S", "c", "d", "a", "b"], res
+    rep = dict((c2d[c], c) for c, _ in res)
+    assert rep["c"] == "c#1" and rep["a"] == "a#0"
+    assert [v for _, v in res] == [5.0, 4.0, 3.0, 2.0, 1.0]
+
+
+@case("S7: 시드가 없으면 BM25 순서 그대로 — 상위 seed_k 안에 그래프 노드가 없으면 그 밖의 그래프 노드가 있어도 시드가 아니다 · last_seeds 빈 목록")
+def _():
+    kinds = {"R1": ("release", True), "R2": ("release", True), "tech:t": "technology"}
+    edges = [("tech:t", "R1"), ("tech:t", "R2"), ("R1", "R2")]
+    docs = {"X": [0, 1], "Y": [0], "R1": [0], "R2": [0]}
+    hits = [("X#0", 9.0), ("Y#0", 8.0), ("R1#0", 7.0), ("X#1", 6.0)]
+    s, _, chunks = s7_make(hits, kinds, edges, docs, seed_k=2)
+    c2d = {c["chunk_id"]: c["doc_id"] for c in chunks}
+    res = s.search("q", 50)
+    assert s7_docs(res, c2d) == ["X", "Y", "R1"] and s.last_seeds == []
+    s2 = s7_make(hits, kinds, edges, docs, seed_k=3)[0]                 # k=3이면 R1이 시드가 된다 — PPR이 R2를 끌어온다
+    assert s7_docs(s2.search("q", 50), c2d)[:2] == ["R1", "R2"] and s2.last_seeds == ["R1", "tech:t"]
+
+
+@case("S7: last_seeds = BM25 순서로 [문서 노드, 1홉 technology·component (id순)] 이어 붙이고 중복은 처음 것만 · 검색마다 새로 채운다")
+def _():
+    kinds = {"tech:t": "technology", "comp:c": "component", "R1": ("release", True), "R2": ("release", True),
+             "A1": "adr", "R3": ("release", True)}
+    edges = [("tech:t", "R1"), ("comp:c", "R1"), ("R1", "R2"), ("A1", "tech:t"), ("A1", "comp:c")]
+    docs = {"R1": [0], "R2": [0], "A1": [0], "R3": [0], "X": [0]}
+    hits = [("R1#0", 9.0), ("X#0", 8.0), ("A1#0", 7.0), ("R3#0", 6.0)]
+    s, bm, _ = s7_make(hits, kinds, edges, docs, seed_k=3)
+    s.search("q", 20)
+    assert s.last_seeds == ["R1", "comp:c", "tech:t", "A1"], s.last_seeds              # R2(이웃 release)는 안 붙는다 · 두 번째 문서의 이웃은 중복이라 건너뜀
+    bm._hits = [("R3#0", 6.0)]
+    s.search("q", 20)
+    assert s.last_seeds == ["R3"]                                                      # 이웃 없는 시드
+
+
+@case("S7: index가 BM25 색인과 그래프 구축을 함께 한다(한 번) · settings(α·감쇠·max_iter·tol·그래프 통계·구축 초) · 결과 키는 seed_k·α와 무관 · 크기·버전은 BM25 것")
+def _():
+    calls = []
+    kinds = {"R1": ("release", True), "tech:t": "technology"}
+    inner = s7_builder(kinds, [("tech:t", "R1")])
+
+    def builder(docs, nodes):
+        calls.append(1)
+        return inner(docs, nodes)
+    from types import SimpleNamespace
+
+    from arena.strategies import s7_graph as mod
+    bm = FakeBM25([("R1#0", 1.0)])
+    s = mod.S7Graph(bm, [], SimpleNamespace(version="nodes@test"), seed_k=10, alpha=0.3, graph_builder=builder)
+    assert s.id == "S7" and s.version == "v1" and s.settings()["graph"]["build_seconds"] is None
+    s.index([{"chunk_id": "R1#0", "doc_id": "R1", "source_type": "repo", "text": "t"}])
+    s.search("a", 100)
+    s.search("b", 100)
+    assert calls == [1] and bm.indexed == 1 and s.n_indexed == 1
+    st = s.settings()
+    assert st["seed_k"] == 10 and st["teleport_alpha"] == 0.3 and abs(st["nx_damping"] - 0.7) < 1e-12
+    assert st["max_iter"] == 100 and st["tol"] == 1e-6 and st["first_stage"]["marker"] == "bm25"
+    assert st["graph"]["version"] == "graph@v1" and st["graph"]["nodes_version"] == "nodes@test" and st["graph"]["stats"]["nodes"] == 2
+    assert st["graph"]["build_seconds"] >= 0 and "undirected" in st["graph"]["ppr_graph"]
+    assert s.index_size_bytes() == 77 and s.server_version() == "9.x" and s.took_ms is bm.took_ms
+    s.drop()
+    assert bm.dropped
+    assert harness.result_key("S7", "v1", "c-all@v1", "dev@v1").startswith("S7.v1__")        # seed_k·α는 키에 안 들어간다 — 칸마다 --results를 따로 쓴다
+
+
+@case("하네스: run_queries(seeds=)가 전략의 last_seeds를 질의마다 담는다 · last_seeds 없는 전략이면 비워 둔다 · jhs_metrics.seed_recall과 이어진다")
+def _():
+    from types import SimpleNamespace
+
+    class Fake(harness.Strategy):
+        last_seeds = []
+
+        def search(self, query, k):
+            self.last_seeds = [f"seed:{query}", "tech:x"]
+            return [("a#0", 2.0)]
+
+    class Plain(harness.Strategy):
+        def search(self, query, k):
+            return [("a#0", 2.0)]
+    qs = [{"qid": "q1", "text": "one"}, {"qid": "q2", "text": "two"}]
+    seeds = {}
+    harness.run_queries(Fake(), qs, {"a#0": "A"}, seeds=seeds)
+    assert seeds == {"q1": ["seed:one", "tech:x"], "q2": ["seed:two", "tech:x"]}
+    seeds = {}
+    harness.run_queries(Plain(), qs, {"a#0": "A"}, seeds=seeds)
+    assert seeds == {}
+    harness.run_queries(Fake(), qs, {"a#0": "A"})                                       # 기본값 None이면 이전과 같다
+    nodes = SimpleNamespace(version="nodes@test", query_node_ids=lambda q: ({"tech:x"}, []))
+    sr = jm.seed_recall({"K1": ["doc", "tech:x"]}, [{"qid": "K1", "type": "K"}], nodes)
+    assert sr["mean"]["@1"] == 0.0 and sr["mean"]["@5"] == 1.0
+
+
+@case("CLI s7: --strategy s7 · --s7-seed-k/--s7-alpha는 s7에서만(아니면 오류) · s7이면 둘 다 필수 · 범위 검사 · --nodes 기본은 s7=nodes@v2, 그 밖은 nodes@v1 · make_strategy가 S7Graph를 만든다")
+def _():
+    import contextlib
+    import io
+    from types import SimpleNamespace
+
+    from arena import cli
+    from arena.strategies import s2_bm25, s7_graph as mod
+    assert "s7" in cli.STRATEGY_CHOICES and "s7" not in cli.EMBEDDING_STRATEGIES
+    base = ["run", "--snapshots", "x", "--adr", "y", "--queries", "q", "--qrels", "r", "--gold-version", "toy@v0"]
+    seen = []
+    orig = cli.cmd_run
+    cli.cmd_run = lambda a: seen.append(a)
+
+    def parse(*extra):
+        seen.clear()
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            try:
+                cli.main(base + list(extra))
+            except SystemExit as e:
+                assert e.code == 2, e.code
+                return None, err.getvalue()
+        return seen[0], ""
+    try:
+        for extra in (["--strategy", "s2", "--s7-alpha", "0.3"], ["--strategy", "s5a", "--s7-seed-k", "5"]):
+            a, msg = parse(*extra)
+            assert a is None and "s7에서만" in msg and "조용히 무시하지 않는다" in msg, (extra, msg)
+        for extra in (["--strategy", "s7"], ["--strategy", "s7", "--s7-alpha", "0.3"], ["--strategy", "s7", "--s7-seed-k", "5"]):
+            a, msg = parse(*extra)
+            assert a is None and "함께" in msg, (extra, msg)
+        for extra in (["--s7-seed-k", "0", "--s7-alpha", "0.3"], ["--s7-seed-k", "5", "--s7-alpha", "0"], ["--s7-seed-k", "5", "--s7-alpha", "1"]):
+            assert parse("--strategy", "s7", *extra)[0] is None, extra
+        a, _ = parse("--strategy", "s7", "--s7-seed-k", "10", "--s7-alpha", "0.3")
+        assert a.s7_seed_k == 10 and a.s7_alpha == 0.3 and a.nodes == str(cli.NODES_V2_DEFAULT) and a.nodes.endswith("nodes@v2.json")
+        assert parse("--strategy", "s2")[0].nodes == str(cli.NODES_DEFAULT) and cli.NODES_DEFAULT.name == "nodes@v1.json"
+        assert parse("--strategy", "s5a")[0].nodes == str(cli.NODES_DEFAULT)
+        assert parse("--strategy", "s7", "--s7-seed-k", "5", "--s7-alpha", "0.5", "--nodes", "mine.json")[0].nodes == "mine.json"
+    finally:
+        cli.cmd_run = orig
+    args = SimpleNamespace(es_url="http://x", chunk_k=50, s7_seed_k=5, s7_alpha=0.5)
+    nodes = SimpleNamespace(version="nodes@test")
+    st = cli.make_strategy("s7", args, {"version": "c-all@v1"}, {"version": "p@v1"}, None, docs=[], nodes=nodes)
+    assert type(st) is mod.S7Graph and type(st.bm25) is s2_bm25.S2BM25 and st.chunk_k == 50 and st.seed_k == 5
+    assert st.nodes is nodes and abs(st.nx_damping - 0.5) < 1e-12 and st.bm25.index_name == s2_bm25.index_name_for("c-all@v1", "s2")
 
 
 if FAILS:
