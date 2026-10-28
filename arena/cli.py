@@ -280,7 +280,7 @@ def cmd_s0_fit(args):
            "fits": n <= limit, "ratio": round(n / limit, 3), "verdict": "fits" if n <= limit else "T0 실행 불가"}
     print(json.dumps(out, ensure_ascii=False, indent=1))
     if args.out:
-        Path(args.out).write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        Path(args.out).write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
 
 
 def cmd_run(args):
