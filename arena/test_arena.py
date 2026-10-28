@@ -2496,6 +2496,26 @@ def _():
     assert st.graph_builder is mod.graph_mod.build
 
 
+@case("S0 Full Context (§6 변경 2026-10-28): 순서 = C-ADR → C-CODE → C-DOC, 안에서 id 순 · 질의는 시스템에 없다 · 출력 해석 — 지어낸 id·중복 버림, 20개 상한, 파싱 실패는 빈 순위")
+def _():
+    from arena.strategies import s0_full as s0
+    docs = [{"doc_id": "z", "corpus": "c-doc", "title": "Z", "text": "z"}, {"doc_id": "b", "corpus": "c-adr", "title": "B", "text": "b"},
+            {"doc_id": "a", "corpus": "c-doc", "title": "A", "text": "a"}, {"doc_id": "m", "corpus": "c-code", "title": "M", "text": "m"},
+            {"doc_id": "c", "corpus": "c-adr", "title": "C", "text": "c"}]
+    assert [d["doc_id"] for d in s0.ordered(docs)] == ["b", "c", "m", "a", "z"]
+    sysp = s0.build_system(docs)
+    assert sysp.index('<doc id="b">') < sysp.index('<doc id="m">') < sysp.index('<doc id="a">') < sysp.index('<doc id="z">')
+    assert sysp.startswith(s0.INSTRUCTIONS) and "질의:" not in sysp and s0.build_user(" q ") == "질의: q"
+    known = {"a", "b", "c"}
+    got, rep = s0.parse('설명 {"docs": ["b", "x", "b", "a"]} 끝', known)
+    assert got == ["b", "a"] and rep == {"parse_error": False, "invented": 1, "duplicates": 1, "over_limit": 0}, (got, rep)
+    assert s0.parse("문서 없음", known) == ([], {"parse_error": True, "invented": 0, "duplicates": 0, "over_limit": 0})
+    assert s0.parse('{"docs": "a"}', known)[1]["parse_error"]
+    many = [f"d{i}" for i in range(25)]
+    got, rep = s0.parse(json.dumps({"docs": many}), set(many))
+    assert got == many[:20] and rep["over_limit"] == 5
+
+
 if FAILS:
     print(f"\nFAILED {len(FAILS)} — {FAILS}")
     sys.exit(1)

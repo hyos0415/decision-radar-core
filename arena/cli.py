@@ -4,6 +4,7 @@
   python arena/cli.py nodes-check --queries q.jsonl <같은 코퍼스 인자>   # 노드 어휘 nodes@v1 확인 (HYO-34)
   python arena/cli.py graph-check [--queries q.jsonl --qrels qrels.json] <같은 코퍼스 인자>   # S7 그래프 graph@v1 (HYO-149)
   python arena/cli.py graph-load <같은 코퍼스 인자>   # graph@v1 → Neo4j 적재 + 다시 읽어 지문 비교 (HYO-153) — s7 실행 전에
+  python arena/cli.py s0-fit <같은 코퍼스 인자> [--out fit.json]   # S0 Full Context가 컨텍스트에 들어가나 (API count_tokens, 무료)
   python arena/cli.py run   --strategy s1|s2|s3a|s3a.ko|s3b|s4|s4.int8|s4.bbq|s4.kure|s5a|s5b|s6|s7 [--s5b-sparse s3a|s3a.ko] [--s6-first s5a|s4] [--s7-seed-k 10 --s7-alpha 0.3 --s7-graph neo4j|build] --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
 
 코퍼스 폴더 위치는 전부 인자다 (Windows · M1 Mac 둘 다). 설정(버전·커밋·파일)은 arena/corpus/c-all@v1.json.
@@ -263,6 +264,25 @@ def cmd_graph_load(args):
         raise SystemExit("Neo4j에서 읽은 그래프가 적재한 그래프와 다르다")
 
 
+def cmd_s0_fit(args):
+    """S0 Full Context가 모델 컨텍스트에 들어가나 (§6 변경 2026-10-28 S0 설계) — API count_tokens(가이드 용도, 무료).
+    넘치면 「T0 실행 불가」. ANTHROPIC_API_KEY가 환경에 있어야 한다."""
+    import anthropic
+
+    from arena.strategies import s0_full
+    _, _, _, docs, _, _, _ = build(args)
+    system = s0_full.build_system(docs)
+    client = anthropic.Anthropic()
+    n = client.messages.count_tokens(model=args.model, system=system,
+                                     messages=[{"role": "user", "content": s0_full.build_user("길이 확인용 질의")}]).input_tokens
+    limit = client.models.retrieve(args.model).max_input_tokens
+    out = {"model": args.model, "docs": len(docs), "chars": len(system), "input_tokens": n, "max_input_tokens": limit,
+           "fits": n <= limit, "ratio": round(n / limit, 3), "verdict": "fits" if n <= limit else "T0 실행 불가"}
+    print(json.dumps(out, ensure_ascii=False, indent=1))
+    if args.out:
+        Path(args.out).write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+
+
 def cmd_run(args):
     cfg, policy, policy_path, docs, chunks, counter, chunk_secs = build(args)
     queries = harness.load_queries(args.queries)
@@ -410,6 +430,11 @@ def main(argv=None):
     p.add_argument("--nodes", default=str(NODES_V2_DEFAULT))
     p.add_argument("--neo4j-url", default=None, help="Neo4j HTTP 주소 (기본: ARENA_NEO4J_URL 또는 http://127.0.0.1:7474)")
     p.set_defaults(fn=cmd_graph_load)
+    p = sub.add_parser("s0-fit", help="S0 Full Context가 모델 컨텍스트에 들어가나 — API count_tokens (무료, ANTHROPIC_API_KEY 필요)")
+    add_corpus_args(p)
+    p.add_argument("--model", default="claude-sonnet-5-5", help="스킬과 같은 모델 (§8)")
+    p.add_argument("--out", help="결과 JSON 저장 경로")
+    p.set_defaults(fn=cmd_s0_fit)
     args = ap.parse_args(argv)
     if getattr(args, "queries", None) and args.cmd == "graph-check" and not args.qrels:
         ap.error("graph-check --queries에는 --qrels가 함께 있어야 한다")
