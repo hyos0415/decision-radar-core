@@ -13,12 +13,13 @@ const radar = {
   getInfo: (): Promise<RadarInfo> => ipcRenderer.invoke('info:get'),
   getTheme: (): Promise<ThemeSource> => ipcRenderer.invoke('theme:get'),
   setTheme: (t: ThemeSource): Promise<ThemeSource> => ipcRenderer.invoke('theme:set', t),
-  openCapture: (): Promise<void> => ipcRenderer.invoke('capture:open'),
+  openCapture: (seed?: string): Promise<void> => ipcRenderer.invoke('capture:open', seed),
   hideCapture: (): void => ipcRenderer.send('capture:hide'),
   navigate: (t: NavTarget): void => ipcRenderer.send('nav:go', t),
   notifyChanged: (item?: string): void => ipcRenderer.send('data:changed', item ?? null),
   onNavigate: (cb: (t: NavTarget) => void): (() => void) => listen('nav', cb),
-  onCaptureShown: (cb: () => void): (() => void) => listen('capture:shown', cb),
+  // seed: 화제에서 열었을 때 미리 채울 글 (없으면 null)
+  onCaptureShown: (cb: (seed: string | null) => void): (() => void) => listen('capture:shown', cb),
   onDataChanged: (cb: () => void): (() => void) => listen('data:changed', cb)
 }
 
