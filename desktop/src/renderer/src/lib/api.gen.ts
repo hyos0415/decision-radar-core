@@ -192,7 +192,7 @@ export interface paths {
     }
     /**
      * Topics
-     * @description 화제 탭 (레인 C, HYO-127) — 그 주의 상위 k 토픽. 화제 파일이 없으면 빈 목록. 읽기만.
+     * @description 화제 탭 (레인 C, HYO-127) — 그 주의 상위 k 토픽 (+ 더 보기). 화제 파일이 없으면 빈 목록. 읽기만.
      */
     get: operations['topics']
     put?: never
@@ -1636,9 +1636,14 @@ export interface components {
       method: string | null
       /**
        * K
-       * @description 이 주차가 보이는 상위 개수
+       * @description 이 주차가 기본으로 보이는 상위 개수 (절반은 여러 출처 자리)
        */
       k: number
+      /**
+       * Max Limit
+       * @description 「더 보기」로 펼칠 수 있는 최대 개수 (HYO-154) — min(120, 그 주 토픽 수). k 아래는 파일 순위 그대로
+       */
+      max_limit: number
       /**
        * Counts
        * @description 그 주 건수 (후보 · 토픽 · 출처를 넘은 토픽 …) — 파이프라인이 쓴 그대로
@@ -1648,7 +1653,7 @@ export interface components {
       } | null
       /**
        * Items
-       * @description 상위 k개, 순위대로
+       * @description 상위 limit개 (없으면 k개), 순위대로
        */
       items: components['schemas']['TopicRow'][]
     }
@@ -2676,6 +2681,8 @@ export interface operations {
       query?: {
         /** @description 주차 (예 2026-W42). 없으면 가장 새 주차 */
         week?: string | null
+        /** @description 보일 개수 (「더 보기」, HYO-154). 없으면 k — k보다 작게 줘도 k, max_limit을 넘으면 max_limit */
+        limit?: number | null
       }
       header?: never
       path?: never

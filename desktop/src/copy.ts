@@ -138,6 +138,9 @@ export const COPY = {
     week: '주차',
     tabs: { week: '이번 주', saved: '저장한 화제' },
     sections: { multi: '여러 출처에 나온 화제', single: '한 출처 화제' },
+    // 더 보기 (HYO-154) — 상위 k 아래는 파일 순위 그대로
+    moreSection: (from: number) => `더 보기 — ${from}위부터`,
+    more: (shown: number, max: number) => `더 보기 (${shown} / ${max})`,
     empty: '아직 화제 파일이 없어요. 주간 수집이 끝나면 여기에 나와요',
     emptyWeek: '이 주차에 보여 줄 화제가 없어요',
     savedEmpty: '저장한 화제가 없어요',

@@ -135,9 +135,14 @@ export const api = {
         body: conversation === undefined ? {} : { conversation }
       })
     ).then((r) => r.job),
-  /** 그 주의 상위 화제 — week를 안 주면 가장 새 주차. 화제 파일이 없으면 week가 null */
-  topics: (week?: string) =>
-    unwrap(client.GET('/topics', { params: { query: week ? { week } : {} } })),
+  /** 그 주의 상위 화제 — week를 안 주면 가장 새 주차. 화제 파일이 없으면 week가 null.
+   *  limit은 「더 보기」(HYO-154) — 없으면 k개, 많아야 max_limit개 */
+  topics: (week?: string, limit?: number) =>
+    unwrap(
+      client.GET('/topics', {
+        params: { query: { ...(week ? { week } : {}), ...(limit ? { limit } : {}) } }
+      })
+    ),
   savedTopics: () => unwrap(client.GET('/topics/saved')).then((r) => r.items),
   saveTopic: (id: string, week: string) =>
     unwrap(

@@ -75,6 +75,7 @@ TOPIC_HIER_FEEDBACK_FILE = "topic-hier-feedback.jsonl"  # 화제 부모 제안 �
 BRANCH_ORDER = ("P1-prefix", "P1-shared", "P2")  # 갈래 동률이면 이 순서
 WEEK_NAME = re.compile(r"^\d{4}-W\d{2}$")  # 화제 주차 파일 이름 (pipeline.topics의 `<주차>.json`)
 CAPTURE_SEED_POSTS = 5  # capture 창에 미리 채우는 글 수
+TOPICS_MORE_MAX = 120  # 화제 탭 「더 보기」 상한 (HYO-154) — 부모 제안 규칙을 오프라인에서 잰 범위 (gold-w42·w43 상위 120)
 ALERTS_FILE = "alerts.json"  # revisit 충족 알림 — Inbox 항목 (화면 설계 ③). 앱 데이터에만, ADR repo에는 안 쓴다
 DEFAULT_STUB = "JHS-014"  # 2턴 스텁 대본 — 2턴에서는 도구 결과 순서만 보고 끝내므로 항목마다 달라도 같다 (stub_policy.capture_step)
 UI_EVENTS = ("app_opened", "item_opened", "notification_shown", "notification_clicked", "capture_opened", "decision_opened",
@@ -858,19 +859,23 @@ class RadarService:
         lines += [f"- {p['signal'] + ' · ' if p['signal'] else ''}{p['title']} {p['url']}".rstrip() for p in posts[:CAPTURE_SEED_POSTS]]
         return "\n".join(lines) + "\n\n결정 질문: "
 
-    def topics(self, week=None):
-        """주차의 상위 k 토픽 (k는 파일이 정한다). 파일이 하나도 없으면 빈 목록 — 오류가 아니다."""
+    def topics(self, week=None, limit=None):
+        """주차의 상위 토픽 — 기본 k개 (k는 파일이 정한다). limit은 「더 보기」: k 아래를 파일 순위 그대로 이어 보이고,
+        TOPICS_MORE_MAX를 넘지 않는다 (HYO-154). 파일이 하나도 없으면 빈 목록 — 오류가 아니다."""
         weeks = self._topic_weeks()
         if not weeks:
-            return {"week": None, "weeks": [], "method": None, "k": 0, "counts": None, "items": []}
+            return {"week": None, "weeks": [], "method": None, "k": 0, "max_limit": 0, "counts": None, "items": []}
         week = week or weeks[0]
         f = self._topic_file(week)
         k = int(f.get("k") or 0)
+        all_topics = f.get("topics") or []
+        max_limit = min(max(k, TOPICS_MORE_MAX), len(all_topics))
+        n = min(max(int(limit or k), k), max_limit)
         saved = {x["id"] for x in self._saved_topics()}
         fb = self._hier_feedback(week)
-        by_id = {t["id"]: t for t in f.get("topics") or []}
+        by_id = {t["id"]: t for t in all_topics}
         rows = []
-        for t in (f.get("topics") or [])[:k]:
+        for t in all_topics[:n]:
             posts = self._topic_posts(t)
             rows.append({"id": t["id"], "week": week, "rank": t["rank"], "section": t["section"], "title": t["title"], "url": t["url"],
                          "n_sources": t["n_sources"], "sources": t["sources"], "n_items": t["n_items"],
@@ -878,7 +883,7 @@ class RadarService:
                          "capture_seed": self._capture_seed(week, t["title"], posts),
                          "parent_suggestion": self._parent_suggestion_view(week, f, t["id"], fb),
                          "parent_manual": self._parent_manual_view(by_id, fb["manual"].get(t["id"]))})
-        return {"week": week, "weeks": weeks, "method": f.get("method"), "k": k, "counts": f.get("counts"), "items": rows}
+        return {"week": week, "weeks": weeks, "method": f.get("method"), "k": k, "max_limit": max_limit, "counts": f.get("counts"), "items": rows}
 
     # ── 화제 계층 제안 모드 + 피드백 루프 (HYO-152, 등록: eval/topics/hier-registration.md v3) ──
 

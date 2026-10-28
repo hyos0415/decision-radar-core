@@ -1319,7 +1319,7 @@ def scenario_hyo127(tmp):
     c = TestClient(server.create_app(svc, jobs=jobs_mod.Jobs(svc, start=False)))
 
     r = c.get("/topics")
-    check("파일 없음 → 빈 목록 (오류 아님)", r.status_code == 200 and r.json() == {"week": None, "weeks": [], "method": None, "k": 0, "counts": None, "items": []}, r.text)
+    check("파일 없음 → 빈 목록 (오류 아님)", r.status_code == 200 and r.json() == {"week": None, "weeks": [], "method": None, "k": 0, "max_limit": 0, "counts": None, "items": []}, r.text)
     check("파일 없음 → 저장 목록도 빈 목록", c.get("/topics/saved").json() == {"items": []})
     check("파일 없음 → 주차를 줘도 빈 목록", c.get("/topics", params={"week": "2026-W41"}).json()["items"] == [])
 
@@ -1360,6 +1360,16 @@ def scenario_hyo127(tmp):
           and [t["id"] for t in d41["items"]] == [t["id"] for t in res["topics"][:3]] and d41["items"][0]["week"] == "2026-W41")
     check("모르는 주차 → 404", c.get("/topics", params={"week": "2026-W01"}).status_code == 404
           and c.get("/topics", params={"week": "../x"}).status_code == 404)
+
+    # 더 보기 (HYO-154) — k 아래를 파일 순위 그대로, k보다 적게는 안 주고, min(120, 토픽 수)를 넘지 않는다
+    n_all = len(res["topics"])
+    check("더 보기: max_limit = min(120, 토픽 수)", d41["max_limit"] == min(service.TOPICS_MORE_MAX, n_all), (d41["max_limit"], n_all))
+    m5 = c.get("/topics", params={"week": "2026-W41", "limit": 5}).json()
+    check("더 보기: limit만큼 파일 순위 그대로", [t["id"] for t in m5["items"]] == [t["id"] for t in res["topics"][:min(5, n_all)]]
+          and m5["k"] == 3, [t["rank"] for t in m5["items"]])
+    check("더 보기: k보다 작게 주면 k", len(c.get("/topics", params={"week": "2026-W41", "limit": 1}).json()["items"]) == 3)
+    check("더 보기: 상한을 넘으면 max_limit", len(c.get("/topics", params={"week": "2026-W41", "limit": 999}).json()["items"]) == d41["max_limit"])
+    check("더 보기: limit 0 → 422", c.get("/topics", params={"limit": 0}).status_code == 422)
 
     # 저장 · 저장 빼기
     tid = top["id"]
