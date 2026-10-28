@@ -178,7 +178,13 @@ function ParentSuggestion({
       <span className="tag" title={`${T.parent.rule[s.rule]} · ${s.title}`}>
         {T.parent.badge(s.title, s.rank)}
       </span>
-      <div className="segmented segmented-sm" role="group" aria-label={T.parent.changeHint}>
+      {/* .segmented-sm은 사이드바용 margin-left: auto를 가진다 — 배지 옆에 붙인다 */}
+      <div
+        className="segmented segmented-sm"
+        style={{ marginLeft: 0 }}
+        role="group"
+        aria-label={T.parent.changeHint}
+      >
         <button
           className={cn(s.verdict === 'accept' && 'active')}
           aria-pressed={s.verdict === 'accept'}
