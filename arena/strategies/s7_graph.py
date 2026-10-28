@@ -57,6 +57,7 @@ class S7Graph:
         self.graph_builder = graph_builder or graph_mod.build
         self.G = self.Gu = None
         self.graph_stats, self.graph_build_seconds = None, None
+        self.graph_source = None                       # build(코퍼스로 바로) · neo4j(적재본 — 지문이 같을 때만, HYO-153)
         self.chunk_to_doc, self.first_chunk = {}, {}
         self.n_indexed = 0
         self.last_seeds = []
@@ -72,7 +73,8 @@ class S7Graph:
             "graph": {"version": graph_mod.VERSION, "nodes_version": self.nodes.version, "stats": self.graph_stats,
                       "ppr_graph": "undirected simple unweighted (방향 무시 · 평행 관계는 하나로 · 가중치 없음)",
                       "build_seconds": None if self.graph_build_seconds is None else round(self.graph_build_seconds, 3),
-                      "build_seconds_note": "색인 구축 시간(index_build_seconds)에 포함"},
+                      "build_seconds_note": "색인 구축 시간(index_build_seconds)에 포함",
+                      "source": self.graph_source},
             "seed_k": self.seed_k,
             "fixed_values": FIXED_STATUS,
             "teleport_alpha": self.teleport_alpha,
@@ -86,7 +88,8 @@ class S7Graph:
     def index(self, chunks):
         self.bm25.index(chunks)
         t0 = time.perf_counter()                      # 그래프 구축도 색인 구축 시간 안이다 (§6: 그래프 구축 시간은 색인 구축 시간에 넣는다)
-        self.G, _ = self.graph_builder(self.docs, self.nodes)
+        self.G, report = self.graph_builder(self.docs, self.nodes)
+        self.graph_source = (report or {}).get("graph_source", "build")
         Gu = nx.Graph()
         Gu.add_nodes_from(self.G.nodes)
         Gu.add_edges_from((u, v) for u, v in self.G.edges())      # 방향·평행 관계를 접는다
