@@ -336,13 +336,20 @@ export function TopicsView({ refreshKey }: { refreshKey: number }): React.JSX.El
   const [saved, setSaved] = useState<SavedTopic[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
   // 사용자가 고른 주차 — null이면 서버가 주는 가장 새 주차
   const week = useRef<string | null>(null)
+  // 「더 보기」로 펼친 개수 (HYO-154) — null이면 k. 주차를 바꾸면 다시 k
+  const limit = useRef<number | null>(null)
 
-  const load = useCallback((w?: string | null): Promise<void> => {
-    if (w !== undefined) week.current = w
+  const load = useCallback((w?: string | null, n?: number | null): Promise<void> => {
+    if (w !== undefined) {
+      week.current = w
+      limit.current = null
+    }
+    if (n !== undefined) limit.current = n
     return api
-      .topics(week.current ?? undefined)
+      .topics(week.current ?? undefined, limit.current ?? undefined)
       .then((d) => {
         setData(d)
         setError(null)
@@ -383,9 +390,19 @@ export function TopicsView({ refreshKey }: { refreshKey: number }): React.JSX.El
 
   const current = data?.week ?? null
   const rows = data?.items ?? []
-  const sections = (['multi', 'single'] as const)
-    .map((s) => ({ key: s, items: rows.filter((r) => r.section === s) }))
-    .filter((g) => g.items.length > 0)
+  const k = data?.k ?? 0
+  const head = rows.slice(0, k)
+  // 상위 k 뒤는 파이프라인 파일 순위 그대로 한 묶음 — 출처 자리 나눔은 상위 k에만 있다
+  const more = rows.slice(k)
+  const groups = [
+    ...(['multi', 'single'] as const).map((s) => ({
+      key: s as string,
+      title: T.sections[s],
+      items: head.filter((r) => r.section === s)
+    })),
+    { key: 'more', title: T.moreSection(k + 1), items: more }
+  ].filter((g) => g.items.length > 0)
+  const canMore = !!data && rows.length < data.max_limit
 
   return (
     <div className="page">
@@ -437,9 +454,9 @@ export function TopicsView({ refreshKey }: { refreshKey: number }): React.JSX.El
               <span className="mono">{T.method(data.method, data.k)}</span>
             </div>
           )}
-          {sections.map((g) => (
+          {groups.map((g) => (
             <section key={g.key} className="feed-group">
-              <h2>{T.sections[g.key]}</h2>
+              <h2>{g.title}</h2>
               <ul className="m-0 list-none p-0">
                 {g.items.map((t) => (
                   <TopicItem
@@ -463,6 +480,24 @@ export function TopicsView({ refreshKey }: { refreshKey: number }): React.JSX.El
               </ul>
             </section>
           ))}
+          {canMore && (
+            <div className="flex items-center justify-center gap-2 px-(--gutter) py-3">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={loadingMore}
+                onClick={() => {
+                  setLoadingMore(true)
+                  void load(
+                    undefined,
+                    Math.min(rows.length + Math.max(k, 1), data.max_limit)
+                  ).finally(() => setLoadingMore(false))
+                }}
+              >
+                {loadingMore ? COPY.term.loading : T.more(rows.length, data.max_limit)}
+              </Button>
+            </div>
+          )}
         </>
       )}
 

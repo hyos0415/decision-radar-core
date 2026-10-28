@@ -441,9 +441,10 @@ class TopicList(BaseModel):
     week: Optional[str] = Field(description="보여 주는 주차. 화제 파일이 하나도 없으면 null")
     weeks: list[str] = Field(description="있는 주차 — 새 것 먼저")
     method: Optional[str] = Field(description="묶기 방법 이름 (예 link+crosspost@v1)")
-    k: int = Field(description="이 주차가 보이는 상위 개수")
+    k: int = Field(description="이 주차가 기본으로 보이는 상위 개수 (절반은 여러 출처 자리)")
+    max_limit: int = Field(description="「더 보기」로 펼칠 수 있는 최대 개수 (HYO-154) — min(120, 그 주 토픽 수). k 아래는 파일 순위 그대로")
     counts: Optional[dict[str, Any]] = Field(description="그 주 건수 (후보 · 토픽 · 출처를 넘은 토픽 …) — 파이프라인이 쓴 그대로")
-    items: list[TopicRow] = Field(description="상위 k개, 순위대로")
+    items: list[TopicRow] = Field(description="상위 limit개 (없으면 k개), 순위대로")
 
 
 class SavedTopic(BaseModel):

@@ -97,9 +97,10 @@ def create_app(svc: RadarService = None, scheduler_on: bool = False, jobs: Jobs 
         return svc.submit_capture(body.conversation, repo=body.repo, topic=body.topic.model_dump() if body.topic else None)
 
     @app.get("/topics", response_model=S.TopicList, operation_id="topics")
-    def topics(week: Optional[str] = Query(default=None, description="주차 (예 2026-W42). 없으면 가장 새 주차")):
-        """화제 탭 (레인 C, HYO-127) — 그 주의 상위 k 토픽. 화제 파일이 없으면 빈 목록. 읽기만."""
-        return svc.topics(week)
+    def topics(week: Optional[str] = Query(default=None, description="주차 (예 2026-W42). 없으면 가장 새 주차"),
+               limit: Optional[int] = Query(default=None, ge=1, description="보일 개수 (「더 보기」, HYO-154). 없으면 k — k보다 작게 줘도 k, max_limit을 넘으면 max_limit")):
+        """화제 탭 (레인 C, HYO-127) — 그 주의 상위 k 토픽 (+ 더 보기). 화제 파일이 없으면 빈 목록. 읽기만."""
+        return svc.topics(week, limit)
 
     @app.get("/topics/parent-candidates", response_model=S.TopicParentCandidateList, operation_id="topicParentCandidates")
     def topic_parent_candidates(week: Optional[str] = Query(default=None, description="주차. 없으면 가장 새 주차"),
