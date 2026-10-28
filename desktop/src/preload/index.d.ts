@@ -8,12 +8,12 @@ declare global {
       getInfo(): Promise<RadarInfo>
       getTheme(): Promise<ThemeSource>
       setTheme(t: ThemeSource): Promise<ThemeSource>
-      openCapture(): Promise<void>
+      openCapture(seed?: string): Promise<void>
       hideCapture(): void
       navigate(t: NavTarget): void
       notifyChanged(item?: string): void
       onNavigate(cb: (t: NavTarget) => void): () => void
-      onCaptureShown(cb: () => void): () => void
+      onCaptureShown(cb: (seed: string | null) => void): () => void
       onDataChanged(cb: () => void): () => void
     }
   }

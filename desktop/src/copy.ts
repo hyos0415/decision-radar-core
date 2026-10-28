@@ -9,6 +9,7 @@ const term = {
   decisions: 'Decisions',
   runs: 'log',
   capture: 'capture',
+  topics: '화제',
   demo: '데모',
   scheduled: '정기',
   loading: '불러오는 중…',
@@ -130,6 +131,46 @@ export const COPY = {
     failed: '실패',
     drafts: '초안',
     alerts: '재검토 알림'
+  },
+
+  // 화제 탭 (components/TopicsView.tsx, HYO-133·152)
+  topics: {
+    week: '주차',
+    tabs: { week: '이번 주', saved: '저장한 화제' },
+    sections: { multi: '여러 출처에 나온 화제', single: '한 출처 화제' },
+    empty: '아직 화제 파일이 없어요. 주간 수집이 끝나면 여기에 나와요',
+    emptyWeek: '이 주차에 보여 줄 화제가 없어요',
+    savedEmpty: '저장한 화제가 없어요',
+    method: (m: string, k: number) => `${m} · 상위 ${k}`,
+    sources: (n: number) => `출처 ${n}곳`,
+    posts: (n: number) => `글 ${n}개`,
+    showPosts: '묶인 글 보기',
+    hidePosts: '묶인 글 접기',
+    save: '저장',
+    unsave: '저장 취소',
+    saved: '저장함',
+    capture: 'capture',
+    captureTitle: '이 화제로 capture 창 열기',
+    open: '새 창에서 열기',
+    savedAt: (d: string) => `${d} 저장`,
+    parent: {
+      badge: (title: string, rank: number) => `${title}(${rank}위)의 하위로 보임`,
+      rule: { 'P1-prefix': '이름 앞부분', 'P1-shared': '앞 2토막 공유', P2: '활용 언급' },
+      accept: '맞음',
+      reject: '아님',
+      answered: { accept: '맞다고 답했어요', reject: '아니라고 답했어요' },
+      changeHint: '답을 바꿀 수 있어요',
+      manualLabel: (title: string) => `직접 묶음: ${title}의 하위`,
+      release: '풀기',
+      attach: '직접 묶기',
+      attachPrompt: '이 화제는',
+      attachSuffix: '의 하위',
+      attachPlaceholder: '부모 화제 제목 검색',
+      searching: '찾는 중…',
+      noCandidates: '맞는 화제가 없어요',
+      cancel: '취소',
+      rank: (n: number) => `${n}위`
+    }
   },
 
   // 지난 알림 패널 (components/NotificationsPanel.tsx)

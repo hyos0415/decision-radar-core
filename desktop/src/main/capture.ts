@@ -64,7 +64,8 @@ export function captureWindow(): BrowserWindow | null {
   return cwin && !cwin.isDestroyed() ? cwin : null
 }
 
-export function showCapture(): void {
+// seed: 화제 탭 등에서 열 때 입력칸에 미리 채울 글. 단축키·트레이는 없이 부른다
+export function showCapture(seed?: string): void {
   createCaptureWindow()
   const w = captureWindow()
   if (!w) return
@@ -83,7 +84,7 @@ export function showCapture(): void {
       if (!w.isDestroyed() && w.isVisible()) w.setOpacity(1)
     }, 50)
   w.focus()
-  w.webContents.send('capture:shown')
+  w.webContents.send('capture:shown', typeof seed === 'string' && seed ? seed : null)
   postEvent('capture_opened')
 }
 

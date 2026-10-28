@@ -29,10 +29,12 @@ export function CaptureApp(): React.JSX.Element {
     document.body.style.background = 'transparent'
     window.radar.getBackend().then(setBackend)
     const off1 = window.radar.onBackendStatus(setBackend)
-    const off2 = window.radar.onCaptureShown(() => {
+    const off2 = window.radar.onCaptureShown((seed) => {
       if (!busyRef.current) {
         setResult(null)
         setError(null)
+        // 화제에서 열렸으면 그 글로 채운다 — 단축키로 열면 쓰던 글을 그대로 둔다
+        if (seed) setText(seed)
       }
       ta.current?.focus()
     })

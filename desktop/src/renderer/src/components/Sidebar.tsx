@@ -5,6 +5,7 @@ import {
   Inbox as InboxIcon,
   Library,
   Loader2,
+  Flame,
   Monitor,
   Moon,
   Play,
@@ -18,7 +19,7 @@ import { shortcutText, timeOnly } from '@renderer/lib/format'
 import type { RadarInfo, ThemeSource } from '../../../shared'
 import { COPY } from '../../../copy'
 
-export type View = 'inbox' | 'decisions' | 'runs'
+export type View = 'inbox' | 'decisions' | 'topics' | 'runs'
 
 export type RunState = {
   active: Job | null // detect · revisit 작업이 접수됐거나 도는 중
@@ -246,6 +247,12 @@ export function Sidebar({
           icon={<Library size={16} />}
           label={COPY.term.decisions}
           onClick={() => onView('decisions')}
+        />
+        <NavItem
+          active={view === 'topics'}
+          icon={<Flame size={16} />}
+          label={COPY.term.topics}
+          onClick={() => onView('topics')}
         />
         <NavItem
           active={view === 'runs'}

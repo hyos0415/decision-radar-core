@@ -168,7 +168,9 @@ if (!app.requestSingleInstanceLock()) {
     }))
     ipcMain.handle('theme:get', () => getTheme())
     ipcMain.handle('theme:set', (_e, v: unknown) => setTheme(v))
-    ipcMain.handle('capture:open', () => showCapture())
+    ipcMain.handle('capture:open', (_e, seed?: unknown) =>
+      showCapture(typeof seed === 'string' ? seed : undefined)
+    )
     ipcMain.on('capture:hide', () => hideCapture())
     ipcMain.on('nav:go', (_e, t: NavTarget) => {
       if (t && ['inbox', 'decisions', 'runs'].includes(t.view)) navigate(t)
@@ -184,7 +186,7 @@ if (!app.requestSingleInstanceLock()) {
     createTray({
       getWindow: () => win,
       onQuit: quitApp,
-      onCapture: showCapture,
+      onCapture: () => showCapture(),
       onRun: (flow) => {
         // the job is accepted at once — tell the window so its run row shows it running
         void postRun(flow).then(() => {
