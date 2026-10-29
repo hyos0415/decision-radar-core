@@ -20,6 +20,8 @@ npm install
 npm run dev          # Electron 창 + 트레이 + 백엔드 자동 기동. 처음엔 개발 데이터를 만든다 (몇 초)
 ```
 
+- `npm install`의 `postinstall`(`scripts/postinstall.mjs`)이 Electron 실행 파일을 받고, macOS에서는 ad-hoc으로 다시 서명한다. Electron 42부터 설치 때 실행 파일을 받지 않고(→ electron-vite가 `Electron uninstall`로 멈춤), macOS 알림이 서명된 앱에서만 뜬다(→ `failed: UNErrorDomain 1`) (HYO-146, 10/28 M1 확인). `--ignore-scripts`로 설치했다면 `node scripts/postinstall.mjs`를 한 번 돌린다
+
 - Python: `RADAR_PYTHON` → `<레포>/.venv` → 메인 worktree의 `.venv` 순으로 찾는다
 - 개발 데이터: `desktop/.dev-data/` (gitignore) — eval 픽스처(ADR 5개·대상 repo 2개) 사본 + 스텁 capture 대기 3건. 다시 만들기: `<python> desktop/backend/devdata.py --reset`
 - **개발 데이터 프로필 고르기** — 기본(default)은 위의 레포 주인 스택이다. `RADAR_DEVDATA=andbread`로 프론트 담당의 스택(Andbread_Frontend = 엔빵)을 고른다. 프로필마다 데이터 폴더가 따로라(`desktop/.dev-data-andbread/`, gitignore) 바꿔 띄워도 섞이지 않는다.

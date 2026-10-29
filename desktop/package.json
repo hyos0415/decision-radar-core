@@ -13,7 +13,8 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
-    "build": "npm run typecheck && electron-vite build"
+    "build": "npm run typecheck && electron-vite build",
+    "postinstall": "node scripts/postinstall.mjs"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
@@ -61,7 +62,6 @@
   },
   "private": true,
   "allowScripts": {
-    "electron@39.8.10": true,
     "esbuild@0.25.12": true,
     "esbuild@0.28.2": true
   }
