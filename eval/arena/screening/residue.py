@@ -45,7 +45,13 @@ async def run(args):
     pool, sources = build_pool(args.results)
     (out / "pool.json").write_text(json.dumps(pool, ensure_ascii=False, indent=1), encoding="utf-8")
     (out / "pool_sources.json").write_text(json.dumps(sources, ensure_ascii=False, indent=1), encoding="utf-8")
-    docs = {d["doc_id"]: d for d in screen.load_docs(args.corpus)}
+    if args.docs_json:              # arena 코퍼스 그대로 (`arena/cli.py docs-dump`) — 10/12 임시 사본 goldq가 남아 있지 않다 (HYO-155)
+        docs = {d["doc_id"]: d for d in json.loads(pathlib.Path(args.docs_json).read_text(encoding="utf-8"))}
+    else:
+        docs = {d["doc_id"]: d for d in screen.load_docs(args.corpus)}
+    missing = sorted({i for ids in pool.values() for i in ids} - set(docs))
+    if missing:
+        raise SystemExit(f"풀 문서가 판정용 코퍼스에 없다: {missing[:5]} (총 {len(missing)})")
     qs = {json.loads(l)["qid"]: json.loads(l) for l in open(args.queries, encoding="utf-8")}
     client = AsyncOpenAI(api_key=screen.openai_key(), max_retries=0)
     sem = asyncio.Semaphore(args.conc)
@@ -91,6 +97,7 @@ if __name__ == "__main__":
     ap.add_argument("results", nargs="+")
     ap.add_argument("--queries", required=True)
     ap.add_argument("--corpus", default=str(pathlib.Path(__file__).parent / "goldq" / "corpus"))
+    ap.add_argument("--docs-json", help="`arena/cli.py docs-dump` 출력 — 주면 --corpus 대신 (test 잔여, HYO-155)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--model", default="gpt-6-luna")
     ap.add_argument("--batch", type=int, default=25)

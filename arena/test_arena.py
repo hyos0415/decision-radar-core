@@ -2516,6 +2516,110 @@ def _():
     assert got == many[:20] and rep["over_limit"] == 5
 
 
+# --- HYO-155: test 열기 — 격자 채점 · 순위만 실행 ----------------------------------------------------------------------
+
+def _grid_fixture():
+    """유형마다 질의 2개. S2는 늘 정답을 2위에, 전략은 질의에 따라 1위/3위 — 차이를 손으로 셀 수 있게."""
+    from arena import grid
+    queries, qrels = [], {}
+    for t in grid.TYPES:
+        for i in (1, 2):
+            qid = f"{t}{i}"
+            queries.append({"qid": qid, "type": t})
+            qrels[qid] = {"g2": 2, "g1": 1, "z": 0} if i == 1 else {"g1": 1, "z": 0}     # 2번 질의는 등급 2가 없다
+    def run_with(pos):
+        docs = ["x0", "x1", "x2", "x3"]
+        out = {}
+        for q in qrels:
+            target = "g2" if "g2" in qrels[q] else "g1"
+            d = [x for x in docs]
+            d.insert(pos(q), target)
+            out[q] = {doc: float(len(d) - i) for i, doc in enumerate(d)}
+        return out
+    runs = {"S2": run_with(lambda q: 1)}
+    for sid in grid.ROWS.values():
+        runs[sid] = run_with(lambda q: 0)                 # 늘 1위 → S2보다 낫다
+    runs["S7"] = run_with(lambda q: 4)                    # 늘 5위 → S2보다 못하다
+    runs["S1"] = {q: r for q, r in run_with(lambda q: 1).items() if q.startswith("K")}     # K만 · S2와 같다
+    return queries, qrels, runs
+
+
+@case("HYO-155 격자 채점: 상/중/하 · 적중(②) · 사용자 칸 분해 · ① 초안 · 엄격 채점에서 등급 2 없는 질의 뺌 · K만 돈 전략은 다른 칸 비움")
+def _():
+    from arena import grid
+    queries, qrels, runs = _grid_fixture()
+    judged = {q: set(rel) for q, rel in qrels.items()}               # 0 포함 판정 (judgments.jsonl 대신)
+    res = grid.score(runs, qrels, queries, judged)
+    s3a_b = res["grid"]["S3a"]["B"]
+    assert s3a_b["verdict"] == "상" and s3a_b["predicted"] == "상" and s3a_b["hit"] and s3a_b["user_cell"], s3a_b
+    assert res["grid"]["S7"]["C"]["verdict"] == "하" and not res["grid"]["S7"]["C"]["hit"]       # 예측 상
+    assert res["grid"]["S7"]["B"]["hit"]                                                      # 예측 하
+    assert sorted(res["registered"]["user_cells"]) == ["S3a×B", "S3b×E", "S4×E", "S7×C", "S7×E"]
+    h = res["hit_rate"]
+    # 행 S3a~S5b(25칸)는 전부 「상」, S7(5칸)은 전부 「하」 — ②에서 상인 칸 수 + S7의 하 예측 칸 수
+    exp = sum(grid.GRID_FINAL[r][t] == "상" for r in grid.ROWS if r != "S7" for t in grid.TYPES) + \
+        sum(grid.GRID_FINAL["S7"][t] == "하" for t in grid.TYPES)
+    assert h["final_30"] == {"hit": exp, "n": 30, "rate": round(exp / 30, 4)}, h
+    assert h["user_5"]["n"] == 5 and h["accepted_25"]["n"] == 25
+    assert h["user_5"]["hit"] + h["accepted_25"]["hit"] == exp
+    exp_d = sum(grid.GRID_DRAFT[r][t] == "상" for r in grid.ROWS if r != "S7" for t in grid.TYPES) + \
+        sum(grid.GRID_DRAFT["S7"][t] == "하" for t in grid.TYPES)
+    assert h["draft_30"]["hit"] == exp_d
+    assert res["strict_dropped_queries"] == 5 and res["grid"]["S3a"]["B"]["strict_verdict"] == "상"
+    assert set(res["strategies"]["S1"]["cells"]) == {"K"} and res["strategies"]["S1"]["cells"]["K"]["verdict"] == "중"
+    ci = res["grid"]["S3a"]["B"]["ci95"]
+    assert ci[0] <= s3a_b["diff"] <= ci[1]
+    assert res["strategies"]["S3a"]["judged@10"] == 0.2          # 질의마다 5문서 중 판정된 것은 정답 하나(x0~x3은 판정 없음)
+
+
+@case("HYO-155 격자 채점 거부: 격자 전략이 빠지면 멈춘다 · 순위만 실행과 run.json이 다르면 멈춘다 · 판정 경계 ±0.05 포함")
+def _():
+    from arena import grid
+    queries, qrels, runs = _grid_fixture()
+    del runs["S5b.ko"]
+    assert raises(SystemExit, grid.score, runs, qrels, queries, {})
+    _, _, runs = _grid_fixture()
+    other = {**runs, "S7": runs["S2"]}
+    assert raises(SystemExit, grid.check_same_runs, runs, other)
+    grid.check_same_runs(runs, dict(runs))
+    assert grid.verdict(0.05) == "상" and grid.verdict(-0.05) == "하" and grid.verdict(0.0499999) == "중"
+    assert grid.verdict(0.1 + 0.2 - 0.25) == "상"                      # 부동소수 0.05000000000000002도 상 · 0.0499…98도 상
+    assert grid.verdict(0.35 - 0.3) == "상", 0.35 - 0.3
+
+
+@case("HYO-155 격자 채점: 결과 폴더 읽기 — 전략 id는 키 앞부분(S5b.ko.v1 → S5b.ko) · 같은 전략 둘이면 멈춘다 · 코퍼스가 섞이면 멈춘다")
+def _():
+    from arena import grid
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        for key in ("S2.v1__c-all@v1__gold@v1.2-test__T0__seed0", "S5b.ko.v1__c-all@v1__gold@v1.2-test__T0__seed0"):
+            (root / key).mkdir()
+            (root / key / "run.json").write_text('{"q": {"d": 1.0}}', encoding="utf-8")
+        assert sorted(grid.load_runs(root)) == ["S2", "S5b.ko"]
+        (root / "S2.v2__c-all@v1__gold@v1.2-test__T0__seed0").mkdir()
+        (root / "S2.v2__c-all@v1__gold@v1.2-test__T0__seed0" / "run.json").write_text("{}", encoding="utf-8")
+        assert raises(SystemExit, grid.load_runs, root)
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        for key in ("S2.v1__c-all@v1__g__T0__seed0", "S4.v1__c-all@v2__g__T0__seed0"):
+            (root / key).mkdir()
+            (root / key / "run.json").write_text("{}", encoding="utf-8")
+        assert raises(SystemExit, grid.load_runs, root)
+
+
+@case("HYO-155 run --rank-only: --qrels와 함께 쓰거나 둘 다 없으면 코퍼스를 읽기 전에 거부")
+def _():
+    import importlib
+    cli = importlib.import_module("arena.cli")
+    base = ["run", "--strategy", "s2", "--queries", "q", "--gold-version", "toy@v0", "--snapshots", "s", "--adr", "a"]
+    for extra in (["--rank-only", "--qrels", "r"], []):
+        try:
+            cli.main(base + extra)
+            raise AssertionError(f"거부되지 않았다: {extra}")
+        except SystemExit as e:
+            assert e.code == 2, extra
+
+
 if FAILS:
     print(f"\nFAILED {len(FAILS)} — {FAILS}")
     sys.exit(1)
