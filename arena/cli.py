@@ -6,6 +6,9 @@
   python arena/cli.py graph-load <같은 코퍼스 인자>   # graph@v1 → Neo4j 적재 + 다시 읽어 지문 비교 (HYO-153) — s7 실행 전에
   python arena/cli.py s0-fit <같은 코퍼스 인자> [--out fit.json]   # S0 Full Context가 컨텍스트에 들어가나 (API count_tokens, 무료)
   python arena/cli.py run   --strategy s1|s2|s3a|s3a.ko|s3b|s4|s4.int8|s4.bbq|s4.kure|s5a|s5b|s6|s7 [--s5b-sparse s3a|s3a.ko] [--s6-first s5a|s4] [--s7-seed-k 10 --s7-alpha 0.3 --s7-graph neo4j|build] --queries q.jsonl --qrels qrels.json --gold-version toy@v0 <같은 코퍼스 인자>
+                    [--rank-only 로 --qrels 대신]   # 순위만 — test 잔여 판정 풀 (HYO-155)
+  python arena/cli.py grid --results <폴더> --queries q.jsonl --qrels qrels.json --judgments j.jsonl [--rank-only-results <폴더>] --out g.json --md g.md   # 30칸 격자 채점 (HYO-155)
+  python arena/cli.py docs-dump <같은 코퍼스 인자> --out docs.json   # 잔여 판정용 문서 본문 (HYO-155)
 
 코퍼스 폴더 위치는 전부 인자다 (Windows · M1 Mac 둘 다). 설정(버전·커밋·파일)은 arena/corpus/c-all@v1.json.
 gold가 확정되기 전이라 `run`은 장난감 질의로만 돌린다 — gold 버전 이름에 `toy`를 넣는다.
@@ -283,11 +286,27 @@ def cmd_s0_fit(args):
         Path(args.out).write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
 
 
+def cmd_grid(args):
+    from arena import grid
+    grid.run_cli(args)
+
+
+def cmd_docs_dump(args):
+    """잔여 판정(eval/arena/screening/residue.py --docs-json)이 읽을 문서 본문 — 전략이 검색한 것과 같은 코퍼스."""
+    cfg = corpus.load_config(args.config)
+    docs = corpus.load_corpus(cfg, args.snapshots, args.adr, _kv(args.repo, "--repo"), _kv(args.supplement, "--supplement"))
+    out = [{"doc_id": d["doc_id"], "title": d["title"], "text": d["text"], "source_type": d["source_type"],
+            "url": (d.get("meta") or {}).get("url", "")} for d in docs]
+    Path(args.out).write_text(json.dumps(out, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
+    print(f"{cfg['version']} 문서 {len(out)}개 → {args.out}")
+
+
 def cmd_run(args):
     cfg, policy, policy_path, docs, chunks, counter, chunk_secs = build(args)
     queries = harness.load_queries(args.queries)
-    qrels = harness.load_qrels(args.qrels)
-    harness.check_gold(queries, qrels, [d["doc_id"] for d in docs])
+    qrels = None if args.rank_only else harness.load_qrels(args.qrels)
+    if qrels is not None:
+        harness.check_gold(queries, qrels, [d["doc_id"] for d in docs])
     nodes = jhs_metrics.load_nodes(args.nodes)                 # 색인을 만들기 전에 — 어휘 파일이 깨졌으면 먼저 멈춘다
     if args.strategy == "s1":                         # S1은 질의의 nodes를 쓴다 — 없는 질의가 섞이면 시작 전에 알린다
         no_nodes = [q["qid"] for q in queries if not q.get("nodes")]
@@ -310,10 +329,13 @@ def cmd_run(args):
     rep_chunks = {}
     seeds = {} if args.strategy == "s7" else None             # S7 — 질의마다 시드 노드 (Seed Recall)
     run, lat = harness.run_queries(strat, queries, chunk_to_doc, k_docs=args.k, chunk_k=args.chunk_k, rep_chunks=rep_chunks, seeds=seeds)
-    metrics = harness.compute_metrics(run, qrels, queries, {d["doc_id"]: d["source_type"] for d in docs})
-    stack_text = {c["chunk_id"]: c["text"] for c in chunks if c["doc_id"].startswith("stack:")}
-    metrics["jhs"], jhs_error = jhs_block(run, rep_chunks, qrels, queries, docs, stack_text, nodes)
-    if seeds is not None and not jhs_error:
+    if args.rank_only:                  # test 잔여 판정용 — 순위만, 점수는 gold를 얼린 뒤 (HYO-155 D2)
+        metrics, jhs_error = {"rank_only": True, "note": "qrels 없이 순위만 뽑았다 — 채점은 `cli.py grid`로 gold를 얼린 뒤"}, None
+    else:
+        metrics = harness.compute_metrics(run, qrels, queries, {d["doc_id"]: d["source_type"] for d in docs})
+        stack_text = {c["chunk_id"]: c["text"] for c in chunks if c["doc_id"].startswith("stack:")}
+        metrics["jhs"], jhs_error = jhs_block(run, rep_chunks, qrels, queries, docs, stack_text, nodes)
+    if seeds is not None and not jhs_error and not args.rank_only:
         ents = {qid: strat.entity_seeds(s) for qid, s in seeds.items()}     # 문서 노드를 뺀다 · @all이 주 지표 (§5 변경 2026-10-28)
         metrics["jhs"]["seed_recall"] = jhs_metrics.seed_recall(ents, queries, nodes, ks=jhs_metrics.SEED_KS_S7)
     system = {
@@ -360,7 +382,7 @@ def cmd_run(args):
     files = {"rep_chunks.json": rep_chunks, **({"seeds.json": seeds} if seeds is not None else {})}
     out = harness.save_results(args.results, key, run, metrics, system, env, extra=files)
     print(f"결과: {out}")
-    print(json.dumps({"overall": metrics["overall"], "latency_ms": system["query_latency_ms"]}, ensure_ascii=False))
+    print(json.dumps({"overall": metrics.get("overall", "rank-only"), "latency_ms": system["query_latency_ms"]}, ensure_ascii=False))
     if jhs_error:
         print(f"JHS 보조 지표 실패 — 헤드라인 결과는 저장했다 ({out / 'metrics.json'}의 jhs.error): {jhs_error}", file=sys.stderr)
         raise SystemExit(1)
@@ -378,7 +400,9 @@ def main(argv=None):
     p.add_argument("--strategy", choices=STRATEGY_CHOICES + DIAG_STRATEGIES, required=True,
                    help="s4.flat · s4.int8flat · s4.bbqflat은 §6 진단 변형 (격자 밖)")
     p.add_argument("--queries", required=True)
-    p.add_argument("--qrels", required=True)
+    p.add_argument("--qrels", help="채점용 qrels — --rank-only가 아니면 필수")
+    p.add_argument("--rank-only", action="store_true",
+                   help="qrels 없이 순위(run.json)만 — test 잔여 판정 풀용. 점수는 gold를 얼린 뒤 grid로 (HYO-155)")
     p.add_argument("--gold-version", required=True)
     p.add_argument("--tier", default="T0")
     p.add_argument("--seed", type=int, default=0)
@@ -435,7 +459,22 @@ def main(argv=None):
     p.add_argument("--model", default="claude-sonnet-5-5", help="스킬과 같은 모델 (§8)")
     p.add_argument("--out", help="결과 JSON 저장 경로")
     p.set_defaults(fn=cmd_s0_fit)
+    p = sub.add_parser("grid", help="최종 비교 채점 — 30칸 예측 격자 · 적중률 · bootstrap CI · 엄격 채점 · judged@10 (HYO-155)")
+    p.add_argument("--results", required=True, help="전략마다 결과 폴더가 든 폴더 (S2와 격자 6전략 필수)")
+    p.add_argument("--queries", required=True)
+    p.add_argument("--qrels", required=True)
+    p.add_argument("--judgments", required=True, help="judgments.jsonl (0 포함) — judged@10")
+    p.add_argument("--rank-only-results", help="순위만 뽑은 실행 폴더 — run.json이 전략마다 같은지 먼저 확인")
+    p.add_argument("--out", help="결과 JSON")
+    p.add_argument("--md", help="표 Markdown")
+    p.set_defaults(fn=cmd_grid)
+    p = sub.add_parser("docs-dump", help="코퍼스 문서(doc_id · title · text)를 JSON으로 — 잔여 판정 입력 (HYO-155)")
+    add_corpus_args(p)
+    p.add_argument("--out", required=True)
+    p.set_defaults(fn=cmd_docs_dump)
     args = ap.parse_args(argv)
+    if args.cmd == "run" and bool(args.rank_only) == bool(args.qrels):
+        ap.error("run에는 --qrels(채점) 또는 --rank-only(순위만) 중 하나만 준다")
     if getattr(args, "queries", None) and args.cmd == "graph-check" and not args.qrels:
         ap.error("graph-check --queries에는 --qrels가 함께 있어야 한다")
     if getattr(args, "s5b_sparse", None) is not None and args.strategy != "s5b":

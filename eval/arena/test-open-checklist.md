@@ -36,27 +36,45 @@ test는 사전 등록된 최종 비교에서 **한 번만** 연다(`docs/design/
 
 ## 2. 열기 전에 할 것 — 준비 (Claude, 결과 없이)
 
-- [ ] **P1. 격자 채점 스크립트** — 지금 코드에 없다. 실행 결과 폴더 + qrels → 30칸 상/중/하 · 적중률(공동 · 분해) · paired bootstrap CI · 엄격 채점과 갈리는 칸 · judged@10 · 옛 판/새 판 점수. **test를 열기 전에 커밋한다(채점 방법도 등록)**. dev 결과로 시운전만 한다
-- [ ] **P2. test 잔여 판정 카드 페이지** — 위 「카드 페이지」 규칙대로. 10/27 재판정 카드 페이지를 바탕으로 한다
-- [ ] **P3. 환경 재현 확인** — dev로 한 번: S2 0.538 · S4 0.704 · S5b.ko 0.686 · S6 0.718 · S7 0.534가 그대로 나오면 색인·모델·그래프가 등록 때와 같다. HF 토큰(SPLADE-v3) · 임베딩 캐시 · Neo4j 지문 · OpenAI 키(Luna) 확인
-- [ ] **P4. test id 해시 대조** — 실행 직전 `test-ids.sha256.txt`와 같은지
+- [x] **P1. 격자 채점** — `arena/grid.py` · `arena/cli.py grid`. 칸 = 전략 − S2의 질의별 nDCG@10 차이 평균(paired) → 상/중/하 · ② 적중(30칸 공동 · 사용자 수정 5 / 초안 수용 25) · ① 초안 적중 · paired bootstrap 95% CI(10,000회, 시드 20261029) · 엄격 채점과 갈리는 칸 · judged@10(`judgments.jsonl` — `qrels.json`에는 0이 없다). 격자 6전략이나 S2가 빠지면 멈춘다. `--rank-only-results`로 순위만 뽑은 실행과 run.json이 같은지 먼저 확인한다. **이 PR의 merge가 채점 방법의 등록이다** — 아래 「구현에서 정한 것」 포함. 테스트 `arena/test_arena.py` HYO-155 4건
+- [x] **P2. test 잔여 판정 카드 페이지** — `eval/arena/screening/residue_cards.py` + `residue_cards.html`(10/27 재판정 페이지 바탕). 판정 질문을 맨 위에 펼치고 카드마다 그 유형의 「답」(G4 행). 전략 이름 · GPT 등급을 가린다. 확인: dev 잔여(10/12) 출력으로 만들면 카드 **44장 = 10/12에 사람이 본 44장**
+- [x] **P2-b. gold 다음 판 묶기** — `eval/arena/screening/build_qrels_next.py`(build_qrels_v11 규칙을 이전 판 위에). 확인: gold@v1 + dev 잔여 + 10/12 카드 등급으로 다시 묶으면 **gold@v1.1과 qrels sha256 `8594535f…` · judgments.jsonl 바이트까지 같다**
+- [x] **P2-c. 순위만 실행** — `cli.py run --rank-only`(qrels 없이 run.json만, metrics에 점수 없음) · `eval/arena/final/split_gold.py`(test는 id 해시를 등록과 대조, `--with-qrels` 없으면 qrels 파일을 만들지 않는다) · `eval/arena/final/run_strategies.sh`(14전략, 등록 고정값 = CLI 기본값)
+- [ ] **P3. 환경 재현 확인** — dev 14전략을 지금 코드·색인으로 다시 돌린 값 (아래 표)
+- [ ] **P4. test id 해시 대조** — `split_gold.py`가 실행 직전에 한다
 
-## 3. 사용자가 정할 것
+### 구현에서 정한 것 (등록 문서가 정하지 않은 세부 — test 결과 0건)
 
-| # | 질문 | 추천 | 이유 |
+| 항목 | 정한 것 | 이유 |
+|---|---|---|
+| 판정 경계 | 차이를 소수 10자리로 반올림한 뒤 ≥ +0.05 · ≤ −0.05 | 0.35 − 0.3 = 0.04999…처럼 부동소수가 경계를 넘나들지 않게 |
+| 엄격 채점의 등급 2 없는 질의 | 엄격 채점에서만 그 질의를 뺀다(두 전략 모두 — paired). 뺀 수를 적는다 | 이상적인 순위의 점수가 0이라 nDCG가 정의되지 않는다 |
+| 잔여 판정 문서 본문 | arena 코퍼스(`cli.py docs-dump` — 전략이 검색한 것과 같은 c-all@v1)에서 읽는다 | 10/12 판정이 읽은 임시 사본(`screening/goldq/corpus`)이 남아 있지 않다. 프롬프트·G4 앵커·배치는 그대로 |
+| 카드의 Luna 근거 문장 | **보이지 않는다** | 10/27 규칙은 「인용 검사 통과분」만 보이게 하는데 잔여 판정에는 인용 검사가 없다 — 등급 없이도 근거 문장이 등급을 드러낸다 |
+| K 질의의 ADR 아닌 문서 | 카드에 넣지 않는다(코드가 0) | build_qrels_v11과 같은 규칙(G4-K) — 사람 시간을 아낀다. 10/12 카드 수(44)와도 맞는다 |
+| S1 | K 질의만 돈다. 격자 밖 · K 칸만 차이를 낸다 | §6 「기준선(K 유형만)」 |
+
+## 3. 사용자 결정 — 2026-10-29 「추천대로」
+
+| # | 질문 | 결정 | 이유 |
 |---|---|---|---|
 | D1 | test에서 돌릴 전략(= 잔여 풀 대상) | dev 잔여와 같은 13개 + S7 = **14개**: S1 · S2 · S3a · S3a.ko · S3b · S4 · S4.int8 · S4.bbq · S4.kure · S5a · S5b · S5b.ko · S6 · S7 | 절차 1 「한 전략도 빼지 않는다」. 격자 칸은 6개만 쓰고 나머지는 변형·탐색 보고. S6.dense는 dev 진단용이라 뺀다 |
-| D2 | 점수를 언제 보나 | 전략 실행은 **빈 qrels**로 순위(`run.json`)만 만든다 → 잔여 카드 확정 → 새 판 얼림 → **그다음 처음 채점** | 카드가 전략을 가려도, 점수를 먼저 보면 판정이 기운다. Claude도 얼리기 전에는 점수를 내지 않는다 |
+| D2 | 점수를 언제 보나 | 전략 실행은 **qrels 없이** 순위(`run.json`)만 → 잔여 카드 확정 → 새 판 얼림 → **그다음 처음 채점** | 카드가 전략을 가려도, 점수를 먼저 보면 판정이 기운다. Claude도 얼리기 전에는 점수를 내지 않는다 |
 | D3 | 새 gold 판 이름 | **gold@v1.2** = v1.1 + test 잔여. dev 부분은 v1.1과 같다 | v1.1(dev 잔여)과 섞이지 않게 |
-| D4 | S7의 dev 잔여 판정 | **하지 않는다** — S7 dev judged@10만 세어 기록 | dev 잔여(10/12)는 S7 이전이라 S7이 거치지 않았다. 다만 S7 고정값은 이미 정했고 헤드라인은 test라, dev 잔여는 숫자 보정 외에 바꾸는 것이 없다. 절차 1(「비교표에 들어가기 전에 같은 절차」)은 test 잔여에서 S7이 들어가므로 지켜진다 |
-| D5 | 기기 | 품질은 **Windows**(임베딩 캐시 · 색인이 있다). 지연·구축 시간은 「4070 — 비교에 안 씀」으로 표시하고 M1 측정은 HYO-112로 | §5 「보고 기준 기기는 M1」 |
+| D4 | S7의 dev 잔여 판정 | **하지 않는다** — S7 dev judged@10만 세어 기록 | 절차 1(「비교표에 들어가기 전에 같은 절차」)은 test 잔여에 S7이 들어가므로 지켜진다. dev 잔여는 이미 정한 고정값을 바꾸지 않는다 |
+| D5 | 기기 | 품질은 **Windows**(임베딩 캐시 · 색인). 지연·구축 시간은 「4070 — 비교에 안 씀」으로 표시하고 M1 측정은 HYO-112로 | §5 「보고 기준 기기는 M1」 |
 
-## 4. 순서와 시간 (어림)
+## 4. 여는 순서 (명령)
 
-1. P1~P3 준비 → PR → 사용자 확인 · merge(= 채점 방법 등록) — 사용자 10~15분
-2. 사용자 「열자」 → P4 → 14전략 test 실행(빈 qrels) — 30~60분
-3. 잔여 풀 → Luna 1차 판정 — dev는 556쌍 $0.108. test는 질의가 약 2배 + S7이라 1,100~1,300쌍 **$0.2~0.3** 예상(풀 크기를 센 뒤 실측으로 다시 말한다)
-4. **사용자 카드 확정 — dev는 카드 44장. test는 80~100장 예상, 사용자 40~60분**
-5. gold@v1.2 얼림 → 채점 → 30칸 적중률 보고서(`eval/arena/test-final-<날짜>.md`)
+레포 루트(main 체크아웃)에서. `W=<작업 폴더>`(gitignore 밖 임시 폴더 — 결과는 끝난 뒤 `eval/arena/`에 기록만 남긴다).
 
-사용자 시간 합계 약 1~1.5시간(대부분 4).
+1. 사용자 「열자」
+2. `python eval/arena/final/split_gold.py eval/arena/gold@v1.1 test $W/in` — test id 해시 대조(P4), qrels는 만들지 않는다
+3. `bash eval/arena/final/run_strategies.sh $W/in test $W/rank gold@v1.1-test-rankonly rank-only` — 14전략 순위만 (30~60분)
+4. `arena/cli.py docs-dump … --out $W/docs.json` → `python eval/arena/screening/residue.py $W/rank/* --queries $W/in/test-queries.jsonl --docs-json $W/docs.json --out $W/residue` — 풀 크기를 먼저 세어 Luna 비용을 말하고 돌린다(dev 556쌍 $0.108 → test 1,100~1,300쌍 **$0.2~0.3** 예상)
+5. `python eval/arena/screening/residue_cards.py $W/residue --docs-json $W/docs.json --queries $W/in/test-queries.jsonl --out $W/cards` → 아티팩트로 올림(db) → **사용자 카드 확정 (80~100장 예상, 40~60분)**
+6. 카드 등급 내려받기(`grades.json`) → `python eval/arena/screening/build_qrels_next.py eval/arena/gold@v1.1 $W/residue $W/cards/cards.json $W/grades.json eval/arena/gold@v1.2` — gold@v1.2 얼림(커밋)
+7. `split_gold.py eval/arena/gold@v1.2 test $W/in2 --with-qrels` → `run_strategies.sh $W/in2 test $W/scored gold@v1.2-test` → `arena/cli.py grid --results $W/scored --queries … --qrels $W/in2/test-qrels.json --judgments eval/arena/gold@v1.2/judgments.jsonl --rank-only-results $W/rank` (순위가 3과 같은지 먼저 확인) — v1.1로도 한 번(옛 판 점수 · 잔여 판정 전 judged@10)
+8. 보고서 `eval/arena/test-final-<날짜>.md` — 30칸 적중률 · 엄격 채점 · 탐색적 전략 · judged@10 전·후
+
+사용자 시간 합계 약 1~1.5시간(대부분 5).
