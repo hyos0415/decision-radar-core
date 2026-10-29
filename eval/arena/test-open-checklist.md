@@ -86,6 +86,7 @@ test는 사전 등록된 최종 비교에서 **한 번만** 연다(`docs/design/
 5. `python eval/arena/screening/residue_cards.py $W/residue --docs-json $W/docs.json --queries $W/in/test-queries.jsonl --out $W/cards` → 아티팩트로 올림(db) → **사용자 카드 확정 (80~100장 예상, 40~60분)**
 6. 카드 등급 내려받기(`grades.json`) → `python eval/arena/screening/build_qrels_next.py eval/arena/gold@v1.1 $W/residue $W/cards/cards.json $W/grades.json eval/arena/gold@v1.2` — gold@v1.2 얼림(커밋)
 7. `split_gold.py eval/arena/gold@v1.2 test $W/in2 --with-qrels` → `run_strategies.sh $W/in2 test $W/scored gold@v1.2-test` → `arena/cli.py grid --results $W/scored --queries … --qrels $W/in2/test-qrels.json --judgments eval/arena/gold@v1.2/judgments.jsonl --rank-only-results $W/rank` (순위가 3과 같은지 먼저 확인) — v1.1로도 한 번(옛 판 점수 · 잔여 판정 전 judged@10)
+   - **변경 (2026-10-29, 사용자 결정 — 채점 결과를 본 뒤)**: 순위 확인에서 S4 · S4.bbq · S4.int8의 run.json이 3과 달라 멈췄다(ES kNN 실행 간 흔들림 추정 · 새로 든 미판정 문서 0 · 30칸 판정 차이 0). **공식 채점은 3의 rank-only 순위로 한다**(`grid --results $W/rank`, 잔여 판정을 받은 바로 그 순위). 채점 실행 결과는 보고서 부록으로 싣는다 — `test-final-2026-10-29.md` 「변경」
 8. 보고서 `eval/arena/test-final-<날짜>.md` — 30칸 적중률 · 엄격 채점 · 탐색적 전략 · judged@10 전·후
 
 사용자 시간 합계 약 1~1.5시간(대부분 5).
