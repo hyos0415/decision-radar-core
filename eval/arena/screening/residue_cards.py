@@ -14,6 +14,7 @@ python residue_cards.py <residue_dir> --docs-json docs.json --queries test-queri
   3. (`--quotes`) 인용 — 모델이 뽑은 「질의에 닿는 줄」 중 **문서(본문·제목)에 글자 그대로 있는 것만**(인용 검사 통과분, 10/27 규칙 2) 등급 없이 표시 +
      한국어 한 줄(판정어 금지). 뽑기는 `residue_quotes.py`(구독 codex exec, GPT-6 Luna)
   4. G5 상한 — `reddit:`·`hn:` 카드는 2 버튼을 막고 「최대 1」을 붙인다(등록된 규칙 그대로, 모델 판단 없음)
+  5. G4-K 경고 — K 카드의 ADR technology가 질의 nodes technology에 없으면 「기술이 다르면 2 아님」 경고(막지 않는다, HYO-157)
 출력: <out>/cards.json (카드 번호 ↔ 질의·문서, 등급 없음) · <out>/index.html (아티팩트로 올릴 페이지 — 등급은 db `grades/cNNN`)
 카드 번호는 판 바뀜에도 그대로다 — 같은 (질의 id, 문서 id) 정렬이라 저장된 등급이 같은 카드에 남는다
 """
@@ -129,6 +130,9 @@ def build_cards(residue_dir, docs, queries, aliases, quotes=None):
                     "url": doc.get("url") or "", "source_type": doc.get("source_type") or "",
                     "snippet": snippet(text, terms), "adr": adr_meta(text) if d.startswith("adr:") else None,
                     "cap": 1 if d.split(":", 1)[0] in COMMUNITY else None}
+            # G4-K — 2는 technology·use가 같은 ADR. technology가 질의 nodes와 다르면 경고만(막지 않는다, 2026-10-29 사용자)
+            techs = {n.get("technology") for n in q.get("nodes") or []}
+            card["k_warn"] = bool(q["type"] == "K" and card["adr"] and card["adr"].get("technology") not in techs)
             if quotes is not None:
                 ev = (quotes.get(qid) or {}).get(d) or {}
                 ev = ev if isinstance(ev, dict) else {"quotes": ev}
