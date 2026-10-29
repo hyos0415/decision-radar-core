@@ -40,8 +40,19 @@ test는 사전 등록된 최종 비교에서 **한 번만** 연다(`docs/design/
 - [x] **P2. test 잔여 판정 카드 페이지** — `eval/arena/screening/residue_cards.py` + `residue_cards.html`(10/27 재판정 페이지 바탕). 판정 질문을 맨 위에 펼치고 카드마다 그 유형의 「답」(G4 행). 전략 이름 · GPT 등급을 가린다. 확인: dev 잔여(10/12) 출력으로 만들면 카드 **44장 = 10/12에 사람이 본 44장**
 - [x] **P2-b. gold 다음 판 묶기** — `eval/arena/screening/build_qrels_next.py`(build_qrels_v11 규칙을 이전 판 위에). 확인: gold@v1 + dev 잔여 + 10/12 카드 등급으로 다시 묶으면 **gold@v1.1과 qrels sha256 `8594535f…` · judgments.jsonl 바이트까지 같다**
 - [x] **P2-c. 순위만 실행** — `cli.py run --rank-only`(qrels 없이 run.json만, metrics에 점수 없음) · `eval/arena/final/split_gold.py`(test는 id 해시를 등록과 대조, `--with-qrels` 없으면 qrels 파일을 만들지 않는다) · `eval/arena/final/run_strategies.sh`(14전략, 등록 고정값 = CLI 기본값)
-- [ ] **P3. 환경 재현 확인** — dev 14전략을 지금 코드·색인으로 다시 돌린 값 (아래 표)
-- [ ] **P4. test id 해시 대조** — `split_gold.py`가 실행 직전에 한다
+- [x] **P3. 환경 재현 확인 (2026-10-29, Windows · main f482d87 코드 · 지금 ES 색인 · Neo4j graph@v1)** — dev 19질의 14전략을 `run_strategies.sh`와 같은 고정값으로 다시 돌렸다. 기록이 있는 값은 전부 같다:
+
+  | 전략 | dev nDCG@10 (오늘) | 기록 |
+  |---|---|---|
+  | S2 | 0.538 | 0.538 (S7 파일럿) |
+  | S4 · S4.int8 · S4.bbq · S4.kure | 0.704 · 0.703 · 0.704 · 0.692 | 같음 (dev-tuning ①⑤ · 재현 확인) |
+  | S5a · S5b.ko · S5b | 0.623 · 0.686 · 0.636 | 같음 (dev-tuning 「최종 기본값」) |
+  | S6 | 0.718 | 같음 |
+  | S7 (Neo4j 그래프) | 0.534 | 같음 (파일럿 · HYO-153) |
+  | S1(K 4질의) · S3a · S3a.ko · S3b | 0.940 · 0.460 · 0.677 · 0.532 | 레포에 기록 없음 — 오늘 값이 기준 |
+
+  같은 결과로 `cli.py grid`를 시운전했다(**dev** — 이미 본 데이터). 질의별 nDCG 평균이 14전략 모두 하네스 `metrics.json`과 같다. dev 격자는 참고로만 둔다(19질의, 유형당 3~4). S7 dev judged@10 = **0.953**(D4 기록 — 상위 10 중 4.7%가 미판정), S4.bbq 0.995, 나머지 1.0
+- [ ] **P4. test id 해시 대조** — `split_gold.py`가 실행 직전에 한다 (해시 계산 방식은 등록 파일과 대조해 맞췄다: 정렬한 id를 줄바꿈으로 이어 sha256)
 
 ### 구현에서 정한 것 (등록 문서가 정하지 않은 세부 — test 결과 0건)
 
