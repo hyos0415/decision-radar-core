@@ -13,6 +13,7 @@ python residue_cards.py <residue_dir> --docs-json docs.json --queries test-queri
   2. 발췌 — 질의 낱말 · 기술 이름(nodes@v2 별칭) · 찾는 버전이 나온 줄과 앞뒤 한 줄. 코드가 기계적으로 찾는다(모델 판단 없음). 전문은 펼쳐서
   3. (`--quotes`) 인용 — 모델이 뽑은 「질의에 닿는 줄」 중 **문서(본문·제목)에 글자 그대로 있는 것만**(인용 검사 통과분, 10/27 규칙 2) 등급 없이 표시 +
      한국어 한 줄(판정어 금지). 뽑기는 `residue_quotes.py`(구독 codex exec, GPT-6 Luna)
+  4. G5 상한 — `reddit:`·`hn:` 카드는 2 버튼을 막고 「최대 1」을 붙인다(등록된 규칙 그대로, 모델 판단 없음)
 출력: <out>/cards.json (카드 번호 ↔ 질의·문서, 등급 없음) · <out>/index.html (아티팩트로 올릴 페이지 — 등급은 db `grades/cNNN`)
 카드 번호는 판 바뀜에도 그대로다 — 같은 (질의 id, 문서 id) 정렬이라 저장된 등급이 같은 카드에 남는다
 """
@@ -27,6 +28,7 @@ SNIPPET_LINES = 14
 LINE_CHARS = 300
 STOP = {"the", "and", "for", "with", "from", "that", "this", "are", "was", "has", "have", "not", "can", "use", "using", "into",
         "what", "which", "when", "version", "support", "supports", "new", "api", "sdk", "model", "models"}
+COMMUNITY = {"reddit", "hn"}       # G5 — 등급 상한 1
 TERM_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.+/-]{2,}|\d+\.\d+(?:\.\d+)*")
 
 
@@ -125,7 +127,8 @@ def build_cards(residue_dir, docs, queries, aliases, quotes=None):
             text = (doc.get("text") or "")[:TEXT_LIMIT]
             card = {"card": len(cards) + 1, "qid": qid, "doc_id": d, "title": doc.get("title") or "", "text": text,
                     "url": doc.get("url") or "", "source_type": doc.get("source_type") or "",
-                    "snippet": snippet(text, terms), "adr": adr_meta(text) if d.startswith("adr:") else None}
+                    "snippet": snippet(text, terms), "adr": adr_meta(text) if d.startswith("adr:") else None,
+                    "cap": 1 if d.split(":", 1)[0] in COMMUNITY else None}
             if quotes is not None:
                 ev = (quotes.get(qid) or {}).get(d) or {}
                 ev = ev if isinstance(ev, dict) else {"quotes": ev}
