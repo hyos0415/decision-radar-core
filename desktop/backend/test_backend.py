@@ -538,6 +538,24 @@ def _scenario_real(tmp, stub_scripts, StubChat):
                                                                   _git(adr_remote, "show", f"main:{line.split(chr(9))[1]}")) is None for line in files.splitlines()))
     check("실사용 revisit: 충족 알림 → Inbox", any(i["kind"] == "revisit" for i in c.get("/inbox").json()["items"]))
     check("실사용 revisit: 행동 로그에 기록 커밋", any(e["event"] == "revisit_record" and e["detail"]["state"] == "exported" for e in events(svc)))
+    check("실사용 revisit: revisit/<주>/가 없으면 detect 입력으로 돌고 그렇다고 말한다 (HYO-159)",
+          svc.revisit_dir is None and any("재검토 출처(revisit/<주차>/)가 없어 detect 입력으로 돈다" in x for x in rv["summary"]), rv["summary"])
+    # HYO-159 — 수집 PC가 revisit/<주>/(source_hint 문서 + 같은 주 detect 입력)를 push하면 revisit은 그것을 본다
+    from pipeline import revisit_feed
+    win = os.path.join(root, "snap-windows")
+    hint = "docs.cloudvendor.example/guardrails/languages"  # 픽스처 ADR의 웹 source_hint
+    revisit_feed.build(os.path.join(root, "seed", "docs", "adr"), os.path.join(win, "revisit", "2026-W44"), week="2026-W44", snapshots=win,
+                       fetcher=type("F", (), {"get": lambda self, url, headers=None: (200, b"<p>hint page</p>") if hint in url else (None, b"")})())
+    _git(win, "add", "-A")
+    _git(win, "commit", "-q", "-m", "revisit 2026-W44")
+    _git(win, "push", "-q", os.path.join(root, "snap.git"), "main")
+    rv2 = c.post("/runs/revisit", json={}).json()
+    check("실사용 revisit: revisit/<주>/를 본다 · 같은 주 detect 입력도 거기서 열린다(충족 판정 그대로 — 알림은 이미 띄워 안 겹친다)",
+          rv2["ok"] and svc.revisit_dir and svc.revisit_dir.replace("\\", "/").endswith("revisit/2026-W44") and "재검토 출처 2026-W44" in rv2["summary"]
+          and any(x.startswith("조건 충족 1건 · 지난번과 달라짐 0건") for x in rv2["summary"]), rv2["summary"])
+    idx = json.load(open(os.path.join(svc.revisit_dir, "index.json"), encoding="utf-8"))
+    check("revisit/<주>/에 source_hint 문서가 들어 있다", (idx.get(hint) or {}).get("file", "").startswith("pages/"), idx.get(hint))
+    check("실사용 detect는 여전히 detect 입력을 본다", svc._input_dir("detect") == svc.snapshot_dir and svc.snapshot_dir.replace("\\", "/").endswith("detect/2026-W44"))
     # 사람이 다른 clone에서 push해 원격이 앞섬 → 다음 실행이 따라잡고(ff) capture 승인도 그 위에 push한다 (기록 커밋이 막히는 경우는 test_export.py)
     human = os.path.join(root, "human")
     _clone(adr_remote, human)

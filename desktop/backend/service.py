@@ -90,6 +90,7 @@ APP_MODES = ("stub", "real")
 ENGINES = ("claude-cli", "api")
 SNAPSHOT_REPO_DEFAULT = os.path.join(os.path.dirname(REPO), "radar-snapshots")
 DETECT_FEEDS = "detect"  # radar-snapshots/detect/<주차>/ — 수집 PC가 관문 → detect 입력까지 만들어 push한다
+REVISIT_FEEDS = "revisit"  # radar-snapshots/revisit/<주차>/ — 같은 주 ADR source_hint 문서 + detect 입력 (HYO-159)
 
 
 class ServiceError(Exception):
@@ -174,6 +175,7 @@ class RadarService:
         self.shadow = False  # 실사용 + claude-cli면 켜진다 (_setup_real)
         self.review_pr = False  # 실사용이면 켜진다 (_setup_real, HYO-158)
         self._gh_client = None
+        self.revisit_dir = None  # 실사용 revisit이 볼 revisit/<주>/ (_prepare_real, HYO-159)
         self.shadow_factory = None  # 테스트가 그림자 모델 자리에 대역을 꽂는다
         self.shadow_async = True  # 테스트는 False — 실행 끝에 바로 돈다
         self.shadow_threads = []
@@ -1156,11 +1158,17 @@ class RadarService:
         feed = _latest_feed(self.snapshot_repo)
         if feed:
             self.snapshot_dir = feed
-            notes.append(f"입력 {os.path.basename(feed)}")
         elif flow == "detect":
             raise RuntimeError(f"detect 입력이 없다 — {os.path.join(self.snapshot_repo, DETECT_FEEDS)}/<주차>/feed.json (수집 PC의 주간 작업이 만든다)")
+        # revisit은 조건의 source_hint 문서가 든 revisit/<주>/를 본다 (HYO-159) — 없으면 detect 입력으로 돌고 출처 문서는 판정 불가로 남는다
+        self.revisit_dir = _latest_week_dir(self.snapshot_repo, REVISIT_FEEDS, "index.json") if flow == "revisit" else None
+        if flow == "detect":
+            notes.append(f"입력 {os.path.basename(feed)}")
+        elif self.revisit_dir:
+            notes.append(f"재검토 출처 {os.path.basename(self.revisit_dir)}")
         else:
-            notes.append("detect 입력이 없어 출처를 못 연다 — 조건은 판정 불가로 남는다")
+            notes.append(f"재검토 출처({REVISIT_FEEDS}/<주차>/)가 없어 " + ("detect 입력으로 돈다" if feed else "출처를 못 연다")
+                         + " — source_hint 문서를 열 수 없어 조건은 판정 불가로 남는다")
         b = hitl.sync_exporter(self.ctx())
         if b:
             notes.append(f"ADR repo를 원격에 못 맞췄다 ({b.get('reason')}) — 로컬 상태로 돈다")
@@ -1268,7 +1276,7 @@ class RadarService:
                 notes = []
                 if self.mode == "real":
                     notes = self._prepare_real(flow)
-                    ctx.env["RADAR_SNAPSHOT_DIR"] = self.snapshot_dir  # 방금 고른 detect 입력
+                    ctx.env["RADAR_SNAPSHOT_DIR"] = self._input_dir(flow)  # 방금 고른 입력 — detect 입력 · revisit 출처
                     if flow == "detect":
                         res["input"] = os.path.basename(self.snapshot_dir)
                         if trigger == "schedule" and self._ran_input(res["input"]):
@@ -1277,7 +1285,7 @@ class RadarService:
                             return {**res, "skipped": "same_input",
                                     "summary": notes + [f"입력 {res['input']}은 이미 돌렸다 — 새 주 입력을 기다린다"]}
                     if self.shadow:  # 주 실행이 ADR을 바꾸기 전에 떠 둔다 — 그림자도 같은 입력을 본다
-                        shadow = self._shadow_prepare(res["id"])
+                        shadow = self._shadow_prepare(res["id"], ctx.env["RADAR_SNAPSHOT_DIR"])
                 queued = {q["item"] for q in hitl.review_queue(ctx)} if flow == "detect" else None
                 rep, diag = asyncio.run(fn(ctx, self.chat(flow, script), ctx.now, self.model_name))
                 if queued is not None:  # 새 detect 초안 = 실행 뒤 검토 대기에 새로 생긴 항목 — 후보 대비 검토율의 분모 (HYO-56, 비교 프로토콜 §7)
@@ -1316,14 +1324,17 @@ class RadarService:
     # 같은 입력(실행 직전 ADR 사본 + 같은 detect 입력)을 API 엔진으로 한 번 더 — Inbox·알림·실행 기록·ADR repo에는 아무것도 안 쓴다.
     # 두 엔진의 결과를 나란히 <data>/shadow.jsonl에 한 줄. 실패해도 주 실행에는 영향이 없다.
 
-    def _shadow_prepare(self, run_id):
+    def _input_dir(self, flow):
+        return (self.revisit_dir if flow == "revisit" else None) or self.snapshot_dir
+
+    def _shadow_prepare(self, run_id, snapshot):
         d = os.path.join(self.data_dir, "shadow", re.sub(r"[^0-9A-Za-z-]", "", run_id))
         try:
             shutil.rmtree(d, ignore_errors=True)
             adr_dir, targets = copy_adr(self.real_info["adr_repo"], os.path.join(d, "adr"))
         except (OSError, ValueError) as e:
             return {"dir": d, "error": f"ADR 사본을 못 떴다: {type(e).__name__}: {e}"}
-        return {"dir": d, "adr_dir": adr_dir, "targets": targets, "snapshot": self.snapshot_dir}
+        return {"dir": d, "adr_dir": adr_dir, "targets": targets, "snapshot": snapshot}
 
     def _shadow_chat(self, flow):
         if self.shadow_factory is not None:
@@ -1474,9 +1485,14 @@ def _overlaps(a, b):
 
 def _latest_feed(snapshot_repo):
     """radar-snapshots/detect/<주차>/ 중 feed.json이 있는 가장 새 주차. 없으면 None."""
-    root = os.path.join(snapshot_repo, DETECT_FEEDS)
+    return _latest_week_dir(snapshot_repo, DETECT_FEEDS, "feed.json")
+
+
+def _latest_week_dir(snapshot_repo, sub, mark):
+    """radar-snapshots/<sub>/<주차>/ 중 mark 파일이 있는 가장 새 주차. 없으면 None."""
+    root = os.path.join(snapshot_repo, sub)
     try:
-        weeks = sorted((n for n in os.listdir(root) if _WEEK_DIR.match(n) and os.path.exists(os.path.join(root, n, "feed.json"))), reverse=True)
+        weeks = sorted((n for n in os.listdir(root) if _WEEK_DIR.match(n) and os.path.exists(os.path.join(root, n, mark))), reverse=True)
     except OSError:
         return None
     return os.path.join(root, weeks[0]) if weeks else None

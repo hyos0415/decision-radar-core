@@ -1,11 +1,12 @@
-"""주간 사슬 한 줄 — 수집 → 얼림 → 등급 → 관문 → detect 입력 → 게시 (HYO-99 3단계). Windows·macOS 같은 코드다.
+"""주간 사슬 한 줄 — 수집 → 얼림 → 등급 → 관문 → detect 입력 → revisit 출처 → 게시 (HYO-99 3단계 · HYO-159). Windows·macOS 같은 코드다.
 
-  python -m collector.weekly [--from {collect,freeze,tiers,gate,feed,publish}] [--week YYYY-Www] [--gate 백엔드] [--no-push] [--dry-run]
+  python -m collector.weekly [--from {collect,freeze,tiers,gate,feed,revisit,publish}] [--week YYYY-Www] [--gate 백엔드] [--no-push] [--dry-run]
 
 실패 규칙: 수집 실패 → 그래도 얼린다(죽은 출처도 manifest에 남는다) · 얼림 실패 → 멈춤 · 등급 실패 → 계속 (키 없음은 weekly-tiers가 이미 건너뜀)
           · 관문 실패(예: OPENAI_API_KEY 없음) → 멈춤, feed·게시 없음 · feed 실패 → 멈춤
+          · revisit 출처 실패(네트워크) → 계속 — detect 입력은 게시한다. 데스크톱 revisit은 가장 새 revisit/<주>/를 본다
           · 게시: radar-snapshots에 detect/<주>/가 이미 커밋돼 있으면 「이미 만듦」 — 덮어쓰지 않는다 (얼린 주를 고치지 않는 것과 같다).
-            관문(유료 API)도 그 경우엔 돌리지 않는다.
+            관문(유료 API)도 그 경우엔 돌리지 않는다. revisit/<주>/도 같다 — 이미 커밋돼 있으면 다시 받지 않고, detect만 커밋된 주에는 revisit만 더한다.
 게시 경로 radar-snapshots/detect/<YYYY-Www>/feed.json 은 데스크톱 앱(desktop/backend/service.py _latest_feed)과의 고정 계약이다.
 출력: collector/out/last-weekly-steps.log (단계 출력, 이어 쓰기) · last-weekly.json (요약). 종료 코드 0 = 멈춘 실패 없음.
 예약 작업의 콘솔 출력(last-weekly.log)과 파일을 나눈다 — Windows는 PowerShell이 `*>`로 잡고 있는 파일에 자식이 쓰면 PermissionError다.
@@ -26,7 +27,8 @@ from collector import snapshot  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 STEP_LOG = "last-weekly-steps.log"  # 예약 작업 콘솔 로그(last-weekly.log)와 달라야 한다 — 위 머리말
-STEPS = ["collect", "freeze", "tiers", "gate", "feed", "publish"]
+STEPS = ["collect", "freeze", "tiers", "gate", "feed", "revisit", "publish"]
+PUBLISHED = {"detect": "feed.json", "revisit": "index.json"}  # 게시하는 폴더 → 다 만들어졌다는 표시 파일
 DEFAULT_GATE = "gpt-6.1-sol"
 
 
@@ -61,32 +63,40 @@ def _git(repo, *args):
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8")
 
 
-def committed(repo, week):
-    p = _git(repo, "ls-tree", "-r", "--name-only", "HEAD", "--", f"detect/{week}")
+def committed(repo, week, kind="detect"):
+    p = _git(repo, "ls-tree", "-r", "--name-only", "HEAD", "--", f"{kind}/{week}")
     return p.returncode == 0 and bool(p.stdout.strip())
 
 
+def unpublished(repo, week):
+    """다 만들어졌는데 아직 커밋 안 된 게시 폴더 — ["detect", "revisit"] 중."""
+    return [k for k, mark in PUBLISHED.items() if (Path(repo) / k / week / mark).exists() and not committed(repo, week, k)]
+
+
 def publish(repo, week, no_push):
-    """detect/<주>/만 커밋·push한다. (ok, detail)"""
-    prefix = f"detect/{week}/"
-    if not (Path(repo) / "detect" / week / "feed.json").exists():
-        return False, f"{prefix}feed.json 이 없다"
+    """detect/<주>/ · revisit/<주>/만 커밋·push한다. (ok, detail)"""
+    if not committed(repo, week) and not (Path(repo) / "detect" / week / "feed.json").exists():
+        return False, f"detect/{week}/feed.json 이 없다"
+    kinds = unpublished(repo, week)
+    prefixes = tuple(f"{k}/{week}/" for k in kinds)
     if not no_push:
         p = _git(repo, "pull", "--ff-only", "-q")
         if p.returncode != 0:
             return False, f"git pull --ff-only 실패: {p.stderr.strip()}"
-    p = _git(repo, "add", "--", f"detect/{week}")
-    if p.returncode != 0:
+    p = _git(repo, "add", "--", *(x.rstrip("/") for x in prefixes)) if prefixes else None
+    if p is not None and p.returncode != 0:
         return False, f"git add 실패: {p.stderr.strip()}"
     staged = [x for x in _git(repo, "diff", "--cached", "--name-only").stdout.splitlines() if x]
-    stray = [x for x in staged if not x.startswith(prefix)]
+    stray = [x for x in staged if not x.startswith(prefixes)] if prefixes else staged
     if stray:
         _git(repo, "reset", "-q")
-        return False, f"{prefix} 밖의 경로가 스테이징돼 있어 거부했다: {stray[:5]}"
+        return False, f"{' · '.join(prefixes) or '게시 폴더'} 밖의 경로가 스테이징돼 있어 거부했다: {stray[:5]}"
     if not staged:
         return True, "바뀐 것 없음"
-    msg = f"detect 입력 {week} (corpus@{week} → 관문 → detect_feed)"
-    p = _git(repo, "commit", "-q", "-m", msg)
+    msg = (f"detect 입력 {week} (corpus@{week} → 관문 → detect_feed)" if "detect" in kinds
+           else f"revisit 출처 {week} (ADR source_hint → revisit_feed)")
+    body = f"revisit/{week}/ — 재검토 출처 (HYO-159)" if "detect" in kinds and "revisit" in kinds else None
+    p = _git(repo, "commit", "-q", "-m", msg, *(["-m", body] if body else []))
     if p.returncode != 0:
         return False, f"git commit 실패: {p.stderr.strip() or p.stdout.strip()}"
     if no_push:
@@ -145,6 +155,7 @@ def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None
             week = summary["week"]
             run_out = Path(pipeline_out or Path(root) / "pipeline" / "out") / week
             feed_out = p["snapshots"] / "detect" / week
+            revisit_out = p["snapshots"] / "revisit" / week
             if name == "gate":
                 if not a.no_push:  # 다른 기기가 이미 게시했는지는 받아 봐야 안다 — 모르고 돌리면 유료 관문을 또 부르고 게시에서 엇갈린다
                     pr = _git(p["snapshots"], "pull", "--ff-only", "-q")
@@ -173,9 +184,17 @@ def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None
                 record(name, ok, str(feed_out) if ok else f"종료 코드 {rc}" + ("" if rc else " — feed.json 이 없다"), t0=t0)
                 if not ok:
                     stop("feed 실패 — 게시를 하지 않는다")
+            elif name == "revisit":
+                if committed(p["snapshots"], week, "revisit"):
+                    record(name, True, f"이미 만듦: revisit/{week}/", skipped=True)
+                    continue
+                rc = runner("pipeline.revisit_feed", ["--adr-dir", str(p["adr_dir"]), "--snapshots", str(p["snapshots"]), "--week", week,
+                                                      "--out", str(revisit_out)], log)
+                ok = rc == 0 and (revisit_out / "index.json").exists()
+                record(name, ok, str(revisit_out) if ok else f"종료 코드 {rc} — 계속 (detect 입력은 게시한다, 데스크톱 revisit은 지난 주 출처를 본다)", t0=t0)
             else:
-                if state["done"] or committed(p["snapshots"], week):
-                    record(name, True, f"이미 만듦: detect/{week}/", skipped=True)
+                if committed(p["snapshots"], week) and not unpublished(p["snapshots"], week):
+                    record(name, True, f"이미 만듦: detect/{week}/" + (f" · revisit/{week}/" if committed(p["snapshots"], week, "revisit") else ""), skipped=True)
                     continue
                 ok, detail = publish(p["snapshots"], week, a.no_push)
                 record(name, ok, detail, t0=t0)
@@ -198,7 +217,8 @@ def dry_run(a, env=None, root=REPO):
         "tiers": f"{py} -m pipeline.importance weekly-tiers --report {Path(root) / 'collector' / 'out' / 'last-tiers.json'} --tiers {p['tiers']} --targets {p['targets']}",
         "gate": f"{py} -m pipeline.profile_filter " + " ".join(gate_args(p["snapshots"] / wk, gate, p, run_out)),
         "feed": f"{py} -m pipeline.detect_feed --run {run_out} --out {p['snapshots'] / 'detect' / wk}",
-        "publish": f"git -C {p['snapshots']} pull --ff-only; add detect/{wk}; commit; " + ("(push 없음)" if a.no_push else "push"),
+        "revisit": f"{py} -m pipeline.revisit_feed --adr-dir {p['adr_dir']} --snapshots {p['snapshots']} --week {wk} --out {p['snapshots'] / 'revisit' / wk}",
+        "publish": f"git -C {p['snapshots']} pull --ff-only; add detect/{wk} revisit/{wk}; commit; " + ("(push 없음)" if a.no_push else "push"),
     }
     for name in STEPS[STEPS.index(a.start):]:
         print(f"{name}: {cmds[name]}")
