@@ -1,5 +1,6 @@
 """git 내보내기 — 승인 = ADR repo main에 바로 커밋·push (설계 docs/design/hitl-state.md 결정 8, §5-2, HYO-44).
 예외 하나: revisit의 기록용 칸(`revisit_last_checked`)은 승인 없이 커밋한다 (`publish_record`, 사용자 10/26 — 데스크톱 실사용 모드).
+검토 PR (HYO-158, 사용자 11/2): detect 초안은 main이 아닌 검토 브랜치로도 낸다(`push_branch` — 새 ADR만, 작업 사본 무변경). PR은 `GhPr`.
 
 이 모듈은 git 기계장치만 안다 (ADR repo의 어느 항목이 무엇인지는 hitl.py의 몫). 안전장치 넷:
 
@@ -14,6 +15,7 @@
 check가 차이를 돌려주면 커밋하지 않고 그 결과를 그대로 돌려준다 — 호출자가 다시 interrupt한다 (§4).
 """
 
+import json
 import os
 import re
 import subprocess
@@ -73,6 +75,41 @@ class LocalExporter(Exporter):
         return {"state": "exported", "commit": None, "local": True, "attempts": 1, "paths": paths}
 
 
+class GhPr:
+    """검토 PR — `gh` CLI (로그인은 사람이 해 둔다). repo는 `owner/name`. 테스트는 같은 메서드를 가진 가짜를 넘긴다."""
+
+    def __init__(self, repo, gh="gh"):
+        self.repo, self.gh = repo, gh
+
+    @classmethod
+    def for_root(cls, root, remote="origin", gh="gh"):
+        """작업 사본의 원격 url에서 github repo를 읽는다. github가 아니면 None."""
+        p = subprocess.run(["git", "remote", "get-url", remote], cwd=root, capture_output=True, text=True)
+        m = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$", p.stdout.strip())
+        return cls(m.group(1), gh) if p.returncode == 0 and m else None
+
+    def _run(self, *args):
+        p = subprocess.run([self.gh, *args, "--repo", self.repo], capture_output=True, text=True, encoding="utf-8",
+                           env={**os.environ, "GH_PROMPT_DISABLED": "1", "NO_COLOR": "1"})
+        if p.returncode:
+            raise ExportRefused(f"gh {args[0]} {args[1]} exit {p.returncode}: {(p.stderr or p.stdout).strip()[:300]}")
+        return p.stdout.strip()
+
+    def create(self, branch, base, title, body):
+        url = self._run("pr", "create", "--head", branch, "--base", base, "--title", title, "--body", body).splitlines()[-1]
+        return {"number": int(url.rstrip("/").rsplit("/", 1)[-1]), "url": url, "branch": branch}
+
+    def view(self, number):
+        """{state: OPEN|MERGED|CLOSED, mergedAt, closedAt, mergeCommit: {oid}, url}"""
+        return json.loads(self._run("pr", "view", str(number), "--json", "state,mergedAt,closedAt,mergeCommit,url"))
+
+    def merge(self, number):
+        self._run("pr", "merge", str(number), "--merge", "--delete-branch")
+
+    def close(self, number, comment):
+        self._run("pr", "close", str(number), "--comment", comment, "--delete-branch")
+
+
 class GitExporter(Exporter):
     """ADR repo 작업 사본(root)에서 main으로 내보낸다. 경로는 root 기준 상대 경로(/)다."""
     active = True
@@ -82,7 +119,7 @@ class GitExporter(Exporter):
         self.max_attempts, self.identity, self.hook, self.git = max_attempts, identity or {}, hook, git
 
     # ── git 호출 한 곳 ───────────────────────────────────────────────
-    def _git(self, *args, ok=(0,)):
+    def _git(self, *args, ok=(0,), env=None):
         if self.dry_run:  # MUT:dry_run_git — eval·dry-run에서는 git을 부르지 않는다
             raise ExportRefused(f"dry-run·eval에서는 git을 부르지 않는다: git {' '.join(args[:2])}")
         for a in args:  # MUT:force_guard
@@ -94,7 +131,7 @@ class GitExporter(Exporter):
         if self.identity.get("email"):
             cfg += ["-c", f"user.email={self.identity['email']}"]
         p = subprocess.run([self.git, "-c", "core.quotepath=off", *cfg, *args], cwd=self.root, capture_output=True, text=True,
-                           encoding="utf-8", env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"})
+                           encoding="utf-8", env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", **(env or {})})
         if ok is not None and p.returncode not in ok:
             raise ExportRefused(f"git {' '.join(args[:2])} exit {p.returncode}: {(p.stderr or p.stdout).strip()[:300]}")
         return p
@@ -214,6 +251,46 @@ class GitExporter(Exporter):
         if not any(m in err for m in RACE_MARKERS):  # 경합이 아니라 다른 실패(인증·네트워크) — 다시 돌지 않는다
             return {"state": "blocked", "reason": "push_failed", "detail": err[:300]}
         return None
+
+    # ── 검토 브랜치 (HYO-158, 사용자 11/2) ───────────────────────────
+    def push_branch(self, paths, branch, message):
+        """새 ADR 파일들을 origin/main 위의 커밋 1개로 만들어 `branch`에 push한다 — 검토 PR용. 작업 사본·HEAD·스테이징은 건드리지 않는다
+        (임시 index로 트리를 만든다). main으로는 내지 않고, 이미 원격에 있는 브랜치는 덮지 않는다. {"state": "pushed", "commit", "branch"} 또는 blocked."""
+        if self.dry_run:  # MUT:dry_run_branch
+            return {"state": "skipped", "reason": "dry_run"}
+        paths = list(paths)
+        try:
+            if not branch or branch in (self.branch, "HEAD") or branch.startswith(("-", "refs/")):  # MUT:branch_not_main
+                raise ExportRefused(f"검토 브랜치 이름이 아니다: {branch!r}")
+            f = self._git("fetch", self.remote, ok=None)
+            if f.returncode:
+                return {"state": "blocked", "reason": "fetch_failed", "detail": f.stderr.strip()[:200]}
+            base = self._out("rev-parse", f"{self.remote}/{self.branch}")
+            for rel in paths:
+                if not ALLOW_ADR.match(rel):  # MUT:branch_allowlist
+                    raise ExportRefused(f"검토 브랜치에는 새 ADR 파일만: {rel}")
+                if self._git("cat-file", "-e", f"{base}:{rel}", ok=None).returncode == 0:  # MUT:branch_new_only
+                    raise ExportRefused(f"원격 main에 이미 있는 ADR 파일이다: {rel}")
+            if self._git("ls-remote", "--exit-code", "--heads", self.remote, branch, ok=None).returncode == 0:
+                return {"state": "blocked", "reason": "branch_exists", "branch": branch}
+            idx = os.path.join(self._out("rev-parse", "--absolute-git-dir"), f"radar-branch-{os.getpid()}.index")
+            env = {"GIT_INDEX_FILE": idx}
+            try:
+                self._git("read-tree", base, env=env)
+                for rel in paths:
+                    blob = self._out("hash-object", "-w", "--", rel)
+                    self._git("update-index", "--add", "--cacheinfo", f"100644,{blob},{rel}", env=env)
+                tree = self._git("write-tree", env=env).stdout.strip()
+            finally:
+                if os.path.exists(idx):
+                    os.remove(idx)
+            sha = self._out("commit-tree", tree, "-p", base, "-m", message)
+            p = self._git("push", self.remote, f"{sha}:refs/heads/{branch}", ok=None)
+            if p.returncode:
+                return {"state": "blocked", "reason": "push_failed", "detail": (p.stderr or p.stdout).strip()[:300]}
+            return {"state": "pushed", "commit": sha, "branch": branch, "base": base, "paths": paths}
+        except ExportRefused as e:
+            return {"state": "blocked", "reason": "refused", "detail": str(e)}
 
     # ── 기록 커밋 (사용자 10/26) ─────────────────────────────────────
     def publish_record(self, paths, message, *, only_record):

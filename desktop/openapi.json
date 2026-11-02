@@ -4561,6 +4561,16 @@
             "title": "Shadow",
             "description": "API 그림자 — 주 엔진이 claude-cli면 같은 입력을 API로도 돌려 <data>/shadow.jsonl에 기록만 (화면에 안 띄운다, RADAR_SHADOW=off로 끔)",
             "default": false
+          },
+          "review": {
+            "type": "string",
+            "enum": [
+              "pr",
+              "app"
+            ],
+            "title": "Review",
+            "description": "detect 초안 검토 자리 (HYO-158) — pr: ADR repo PR(merge = 채택 · close = 기각, 앱 버튼도 PR을 merge·close) · app: 앱 Inbox에서만 (RADAR_REVIEW=app)",
+            "default": "app"
           }
         },
         "type": "object",

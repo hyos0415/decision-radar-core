@@ -15,6 +15,7 @@ HYO-99: 엔진 상태(가짜 claude — 설치·버전·구독 로그인 · 키 
 import glob
 import hashlib
 import dataclasses
+import datetime as dt
 import json
 import os
 import shutil
@@ -187,6 +188,7 @@ def main():
         scenario_hyo142(tmp)
         scenario_engine(tmp)
         scenario_real(tmp)
+        scenario_hyo158(tmp)
     finally:
         os.environ.pop("RADAR_EXPORT", None)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -366,9 +368,9 @@ def scenario_real(tmp):
             os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
 
-def _scenario_real(tmp, stub_scripts, StubChat):
-    root = os.path.join(tmp, "real")
-    os.makedirs(root)
+def _real_repos(root):
+    """실사용 시나리오의 repo들 — ADR repo(픽스처 main → bare remote → 앱 작업 사본) · radar-snapshots(수집 PC가 W44 detect 입력을 push).
+    → (adr_remote, adr, base, snaps)"""
     # ADR repo: 픽스처를 main으로 커밋해 bare remote에 올리고 앱의 작업 사본·「사람」의 clone을 둔다
     seedsrc = os.path.join(root, "seed")
     shutil.copytree(os.path.join(devdata.FIX, "adr-fixture"), seedsrc)
@@ -401,6 +403,14 @@ def _scenario_real(tmp, stub_scripts, StubChat):
     _git(win, "add", "-A")
     _git(win, "commit", "-q", "-m", "detect 2026-W44")
     _git(win, "push", "-q", snap_remote, "main")
+
+    return adr_remote, adr, base, snaps
+
+
+def _scenario_real(tmp, stub_scripts, StubChat):
+    root = os.path.join(tmp, "real")
+    os.makedirs(root)
+    adr_remote, adr, base, snaps = _real_repos(root)
 
     def fake(flow):
         if flow == "detect":
@@ -1573,6 +1583,116 @@ def scenario_hyo152(tmp):
     sc = TestClient(server.create_app(ssvc, jobs=jobs_mod.Jobs(ssvc, start=False)))
     srows = sc.get("/topics").json()["items"]
     check("개발 예시 화제: parent_suggestion · parent_manual 칸이 있다", srows and all("parent_suggestion" in x and "parent_manual" in x for x in srows))
+
+
+
+class _FakeGh:
+    """gh 대역 — PR을 bare remote의 브랜치로 흉내 낸다. merge = 「사람」 clone에서 브랜치를 main에 merge·push (edit이면 고친 뒤)."""
+
+    def __init__(self, remote, human):
+        self.remote, self.human, self.prs = remote, human, {}
+
+    def create(self, branch, base, title, body):
+        n = len(self.prs) + 1
+        self.prs[n] = {"state": "OPEN", "branch": branch, "title": title, "body": body}
+        return {"number": n, "url": f"https://github.invalid/pr/{n}", "branch": branch}
+
+    def view(self, number):
+        p = self.prs[number]
+        return {"state": p["state"], "mergedAt": p.get("mergedAt"), "closedAt": p.get("closedAt"), "mergeCommit": p.get("mergeCommit"), "url": ""}
+
+    def merge(self, number, edit=None):
+        p = self.prs[number]
+        _git(self.human, "fetch", "-q", "origin")
+        _git(self.human, "checkout", "-q", "main")
+        _git(self.human, "merge", "-q", "--ff-only", "origin/main")
+        _git(self.human, "merge", "-q", "--no-ff", "-m", f"Merge PR #{number}", f"origin/{p['branch']}")
+        if edit:
+            path, extra = edit
+            open(os.path.join(self.human, path), "a", encoding="utf-8").write(extra)
+            _git(self.human, "commit", "-q", "-am", "PR에서 고침")
+        _git(self.human, "push", "-q", "origin", "main")
+        p.update(state="MERGED", mergedAt="2026-11-02T03:10:00Z", mergeCommit={"oid": _git(self.human, "rev-parse", "HEAD")})
+
+    def close(self, number, comment):
+        self.prs[number].update(state="CLOSED", closedAt="2026-11-02T03:20:00Z")
+
+
+def scenario_hyo158(tmp):
+    """HYO-158 검토 PR — detect 초안을 브랜치 + PR로(작업 사본·main 무변경), merge = 채택(PR에서 고친 것도) · close = 기각 · 앱 버튼 = PR merge·close."""
+    print("\n— HYO-158: 검토 PR (merge = 채택 · close = 기각) —")
+    from radar import script as stub_scripts
+    from radar.stub_model import StubChat
+    with _Env(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", RADAR_REVIEW=None):
+        root = os.path.join(tmp, "hyo158")
+        os.makedirs(root)
+        adr_remote, adr, base, snaps = _real_repos(root)
+        human = os.path.join(root, "human")
+        _clone(adr_remote, human)
+
+        def fake(flow):
+            if flow == "detect":
+                return StubChat(script=stub_scripts.detect_script(), flow=flow)
+            return StubChat(script=stub_scripts.revisit_script(stub_scripts.SCRIPT["cases"]["JHS-001"]), flow=flow)
+
+        svc = RadarService(os.path.join(root, "data"), app_mode="real", real_adr=adr, snapshot_repo=snaps, engine="api", chat_factory=fake)
+        gh = svc._gh_client = _FakeGh(adr_remote, human)
+        c = TestClient(server.create_app(svc))
+        check("검토 PR: 실사용 기본 켜짐", svc.review_pr and c.get("/health").json()["real"]["review"] == "pr")
+        r = c.post("/runs/detect", json={}).json()
+        prs = [x for x in r["summary"] if "→ PR #" in x]
+        check("검토 PR: detect 초안마다 PR 1개 · 요약 줄", r["ok"] and len(prs) == len(r["drafts"]) >= 3, r["summary"])
+        branches = _git(adr_remote, "branch", "--format=%(refname:short)").split()
+        check("검토 PR: 브랜치는 radar/<항목> · main은 그대로", _git(adr_remote, "rev-parse", "main") == base
+              and sorted(b for b in branches if b != "main") == sorted(p["branch"] for p in gh.prs.values()), branches)
+        b1 = gh.prs[1]["branch"]
+        files = _git(adr_remote, "diff-tree", "--no-commit-id", "--name-status", "-r", b1)
+        check("검토 PR: 브랜치 커밋 = main 위에 새 ADR 하나(A)", _git(adr_remote, "rev-parse", f"{b1}~1") == base
+              and len(files.splitlines()) == 1 and files.startswith("A\tdocs/adr/"), files)
+        check("검토 PR: 작업 사본 HEAD·스테이징 무변경", _git(adr, "rev-parse", "HEAD") == base and not _git(adr, "diff", "--cached", "--name-only"))
+        rows = {i["id"]: i for i in c.get("/inbox").json()["items"] if i["kind"] == "detect"}
+        check("검토 PR: Inbox — 승인·거부만 · PR 안내", all(i["actions"] == ["approve", "reject"] and "PR #" in (i["message"] or "") for i in rows.values()), rows)
+        check("검토 PR: 다시 돌려도 PR을 또 안 만든다", svc.sync_prs() == [] and len(gh.prs) == len(prs))
+        ids = {hitl.read_item(svc.ctx(), i)["export"]["pr"]["number"]: i for i in rows}
+
+        # PR #1 — GitHub에서 고친 뒤 merge → 다음 확인에 수정 채택(edit)
+        p1 = hitl.read_item(svc.ctx(), ids[1])["write_intent"]["path"]
+        gh.merge(1, edit=(p1, "\n고친 줄\n"))
+        out = svc.sync_prs()
+        it = hitl.read_item(svc.ctx(), ids[1])
+        ev = [e for e in events(svc) if e["item"] == ids[1] and e["event"] in ("approve", "edit", "reject")]
+        check("검토 PR에서 고쳐 merge → 항목 DONE · 행동 로그 edit(via pr, 시각 = mergedAt) · 해시는 main의 것", it["lifecycle"] == "DONE"
+              and it["export"]["via"] == "pr" and it["export"]["edited"] and len(ev) == 1 and ev[0]["event"] == "edit" and ev[0]["detail"]["pr"] == 1
+              and dt.datetime.fromisoformat(ev[0]["at"]) == dt.datetime(2026, 11, 2, 3, 10, tzinfo=dt.timezone.utc)
+              and it["write_intent"]["content_hash"] == hitl._file_hash(os.path.join(adr, p1)), (out, it["export"], ev))
+        check("검토 PR merge → 작업 사본이 main을 따라잡음 · 항목 기록 커밋 push", _git(adr, "status", "--porcelain", "--", p1) == ""
+              and ".radar/items/" in _git(adr_remote, "diff-tree", "--no-commit-id", "--name-only", "-r", "main"), _git(adr, "status", "--porcelain"))
+
+        # PR #2 — 앱에서 고치기는 거부, 앱 승인 버튼 = PR merge
+        try:
+            svc.answer(ids[2], "edit", draft={})
+            check("PR 항목은 앱에서 고치기 거부(409) — PR 브랜치에서", False)
+        except ServiceError as e:
+            check("PR 항목은 앱에서 고치기 거부(409) — PR 브랜치에서", e.status == 409 and "PR #2" in e.message, e.message)
+        ap = c.post(f"/inbox/{ids[2]}/approve", json={}).json()
+        it = hitl.read_item(svc.ctx(), ids[2])
+        check("앱 승인 → PR merge → 채택(approve, 고침 없음)", gh.prs[2]["state"] == "MERGED" and ap["outcome"] == "written" and not it["export"]["edited"]
+              and any(e["event"] == "approve" and e["item"] == ids[2] for e in events(svc)), ap)
+
+        # PR #3 — 앱 거부 버튼 = PR close
+        rj = c.post(f"/inbox/{ids[3]}/reject", json={}).json()
+        it = hitl.read_item(svc.ctx(), ids[3])
+        check("앱 거부 → PR close · 초안 지움 · 항목 CLOSED(reject)", gh.prs[3]["state"] == "CLOSED" and rj["outcome"] == "rejected"
+              and it["export"] == {"state": "closed", "reason": "reject"} and not os.path.exists(os.path.join(adr, it["write_intent"]["path"]))
+              and any(e["event"] == "reject" and e["item"] == ids[3] and e["detail"]["via"] == "pr" for e in events(svc)), (rj, it["export"]))
+        check("거부한 PR 소식은 다음 detect에 안 올라온다 (HYO-142)", ids[3] in hitl.rejected_sources(svc.ctx()).values())
+        check("main에는 채택한 ADR 둘만 · 작업 사본 깨끗", len([f for f in _git(adr_remote, "ls-tree", "--name-only", "main", "docs/adr/").split() if f.endswith(".md")])
+              == len([f for f in _git(adr_remote, "ls-tree", "--name-only", base, "docs/adr/").split() if f.endswith(".md")]) + 2
+              and not [l for l in _git(adr, "status", "--porcelain").splitlines() if "docs/adr/" in l], _git(adr, "status", "--porcelain"))
+        check("검토 PR: 끝나면 Inbox detect 0", not [i for i in c.get("/inbox").json()["items"] if i["kind"] == "detect"])
+    with _Env(RADAR_REVIEW="app"):
+        off = RadarService(os.path.join(root, "data-off"), app_mode="real", real_adr=adr, snapshot_repo=snaps, engine="api", chat_factory=fake)
+        check("RADAR_REVIEW=app → 검토 PR 꺼짐", not off.review_pr and off.sync_prs() == [])
 
 
 if __name__ == "__main__":

@@ -598,6 +598,64 @@ def e_detect_review(h, X, w):
     return ok1 and ok2 and ok3 and ok4, (r1.get("export"), ra, rr)
 
 
+class _Gh:
+    """gh 대역 — merge는 「사람」 clone에서 검토 브랜치를 main에 merge·push한다."""
+
+    def __init__(self, w):
+        self.w, self.prs = w, {}
+
+    def create(self, branch, base, title, body):
+        n = len(self.prs) + 1
+        self.prs[n] = {"state": "OPEN", "branch": branch}
+        return {"number": n, "url": f"https://github.invalid/pr/{n}", "branch": branch}
+
+    def view(self, n):
+        return dict(self.prs[n])
+
+    def merge(self, n):
+        git(self.w.human, "pull", "-q", "--ff-only")
+        git(self.w.human, "fetch", "-q", "origin")
+        git(self.w.human, "merge", "-q", "--no-ff", "-m", f"Merge PR #{n}", f"origin/{self.prs[n]['branch']}")
+        git(self.w.human, "push", "-q", "origin", "main")
+        self.prs[n].update(state="MERGED", mergedAt="2026-11-02T03:10:00Z", mergeCommit={"oid": git(self.w.human, "rev-parse", "HEAD")})
+
+
+@scen
+def e_review_branch(h, X, w):
+    """검토 PR (HYO-158) — 초안은 origin/main 위 커밋으로 radar/<항목> 브랜치에만(작업 사본·main 무변경). main·기존 ADR·허용 목록 밖은 거부.
+    merge → 로컬 초안을 비우고 ff → 항목 DONE + 기록 커밋. close → 거부와 같다"""
+    ex = w.ex(X)
+    approve(w, h, ex, item="d-1", hold=True, kind="detect")
+    approve(w, h, ex, draft=draft2(), item="d-2", hold=True, kind="detect")
+    ctx, gh = w.ctx(), _Gh(w)
+    r1 = h.open_review_pr(ctx, "d-1", w.ex(X), gh)
+    rel = w.item("d-1")["write_intent"]["path"]
+    br = w.item("d-1")["export"]["pr"]["branch"]
+    files = w.commit_files(git(w.remote, "rev-parse", br))
+    ok1 = (r1["state"] == "opened" and w.count() == 0 and w.lhead() == w.base and w.staged() == "" and files == {rel: "A"}
+           and git(w.remote, "rev-parse", f"{br}~1") == w.base and h.open_review_pr(ctx, "d-1", w.ex(X), gh)["state"] == "already_open")
+    bad = [w.ex(X).push_branch([rel], "main", "m"),                                     # main으로는 안 낸다
+           w.ex(X).push_branch([rel], "HEAD", "m"),                                     # 이름 장난 — 원격 브랜치에 없는 이름이라 「이미 있음」으로는 못 막는다
+           w.ex(X).push_branch([".radar/items/d-1.yaml"], "radar/x", "m"),              # 허용 목록 밖
+           w.ex(X).push_branch([os.path.relpath(adr_path(w, "0001"), w.root).replace(os.sep, "/")], "radar/y", "m"),  # 이미 main에 있는 ADR
+           X.GitExporter(w.root, identity=IDENT, dry_run=True).push_branch([rel], "radar/z", "m")]
+    heads = git(w.remote, "branch", "--format=%(refname:short)").split()
+    ok2 = ([b["state"] for b in bad] == ["blocked", "blocked", "blocked", "blocked", "skipped"] and w.rhead() == w.base
+           and sorted(heads) == sorted(["main", br]))
+    gh.merge(r1["number"])
+    s1 = h.settle_review_pr(w.ctx(), "d-1", w.ex(X), gh)
+    i1 = w.item("d-1")
+    ok3 = (s1["state"] == "merged" and not s1["edited"] and i1["lifecycle"] == "DONE" and i1["export"]["state"] == "done" and i1["export"]["via"] == "pr"
+           and git(w.root, "status", "--porcelain", "--", rel) == "" and w.commit_files(w.rhead()) == {".radar/items/d-1.yaml": "A"}
+           and w.remote_show(rel) != "" and h.pending_names(w.ctx()) == {os.path.basename(w.item("d-2")["write_intent"]["path"])})
+    r2 = h.open_review_pr(w.ctx(), "d-2", w.ex(X), gh)
+    gh.prs[r2["number"]]["state"] = "CLOSED"
+    s2 = h.settle_review_pr(w.ctx(), "d-2", w.ex(X), gh)
+    i2 = w.item("d-2")
+    ok4 = s2["state"] == "closed" and i2["export"] == {"state": "closed", "reason": "reject"} and not os.path.exists(os.path.join(w.root, i2["write_intent"]["path"]))
+    return ok1 and ok2 and ok3 and ok4, (ok1, ok2, ok3, ok4, r1, [b.get("reason") for b in bad], s1, s2)
+
+
 @scen
 def e_detect_review_needs_exporter(h, X, w):
     """내보내기가 꺼져 있으면 검토 답을 반영하지 않는다 (조용히 삭제·커밋하지 않는다)"""
@@ -1071,6 +1129,11 @@ MUTANTS = [
     ("기록 커밋에 다른 스테이징이 섞임", "export", [("if self._staged():  # MUT:record_prestaged", "if False:  # MUT:record_prestaged"), ("if bad:  # MUT:record_staged", "if False:  # MUT:record_staged")],
      ["e_record_refuses_other_fields"]),
     ("기록 커밋이 dry-run에서 git을 부름", "export", [("if self.dry_run:  # MUT:dry_run_record", "if False:  # MUT:dry_run_record")], ["e_record_dry_run"]),
+    ("검토 브랜치가 main으로 나감", "export", [("if not branch or branch in (self.branch, \"HEAD\") or branch.startswith((\"-\", \"refs/\")):  # MUT:branch_not_main",
+                                         "if False:  # MUT:branch_not_main")], ["e_review_branch"]),
+    ("검토 브랜치에 허용 목록 밖 경로", "export", [("if not ALLOW_ADR.match(rel):  # MUT:branch_allowlist", "if False:  # MUT:branch_allowlist")], ["e_review_branch"]),
+    ("검토 브랜치가 기존 ADR을 고침", "export", [("== 0:  # MUT:branch_new_only", "== 99:  # MUT:branch_new_only")], ["e_review_branch"]),
+    ("검토 브랜치가 dry-run에서 git을 부름", "export", [("if self.dry_run:  # MUT:dry_run_branch", "if False:  # MUT:dry_run_branch")], ["e_review_branch"]),
 ]
 
 

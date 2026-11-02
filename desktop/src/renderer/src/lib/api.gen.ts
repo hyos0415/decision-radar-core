@@ -1380,6 +1380,13 @@ export interface components {
        * @default false
        */
       shadow: boolean
+      /**
+       * Review
+       * @description detect 초안 검토 자리 (HYO-158) — pr: ADR repo PR(merge = 채택 · close = 기각, 앱 버튼도 PR을 merge·close) · app: 앱 Inbox에서만 (RADAR_REVIEW=app)
+       * @default app
+       * @enum {string}
+       */
+      review: 'pr' | 'app'
     }
     /**
      * RevisitCondition

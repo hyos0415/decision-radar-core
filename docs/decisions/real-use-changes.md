@@ -5,3 +5,4 @@
 
 | 날짜 | 무엇 | 왜 | 커밋 · PR |
 |---|---|---|---|
+| 2026-11-02 | detect 초안 검토 자리: 앱 Inbox만 → **ADR repo PR** (merge = 채택 · close = 기각, 앱 버튼도 PR을 merge·close, `RADAR_REVIEW=app`으로 되돌림). 행동 로그 시각 = GitHub mergedAt·closedAt | 스킬 기간처럼 어디서든 검토 — 장소 차이를 도구 차이로 재지 않게 (비교 프로토콜 §7 변경 11/2). 첫 detect(11/2 09:02, ADR 0017)는 바꾸기 전 실행 | HYO-158 |

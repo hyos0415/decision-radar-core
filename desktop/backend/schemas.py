@@ -54,6 +54,7 @@ class RealInfo(BaseModel):
     api_key: bool = Field(description=".env에 ANTHROPIC_API_KEY가 있나 — capture는 API로 돈다. 값은 보이지 않는다")
     funnel: Optional[str] = Field(description="건수 한 줄: 수집 → 레인 A → 관문 남김 → detect 입력")
     shadow: bool = Field(default=False, description="API 그림자 — 주 엔진이 claude-cli면 같은 입력을 API로도 돌려 <data>/shadow.jsonl에 기록만 (화면에 안 띄운다, RADAR_SHADOW=off로 끔)")
+    review: Literal["pr", "app"] = Field(default="app", description="detect 초안 검토 자리 (HYO-158) — pr: ADR repo PR(merge = 채택 · close = 기각, 앱 버튼도 PR을 merge·close) · app: 앱 Inbox에서만 (RADAR_REVIEW=app)")
 
 
 class Health(BaseModel):
