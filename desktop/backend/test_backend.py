@@ -189,6 +189,7 @@ def main():
         scenario_engine(tmp)
         scenario_real(tmp)
         scenario_hyo158(tmp)
+        scenario_hyo158_blocked(tmp)
     finally:
         os.environ.pop("RADAR_EXPORT", None)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -1601,7 +1602,7 @@ class _FakeGh:
         p = self.prs[number]
         return {"state": p["state"], "mergedAt": p.get("mergedAt"), "closedAt": p.get("closedAt"), "mergeCommit": p.get("mergeCommit"), "url": ""}
 
-    def merge(self, number, edit=None):
+    def merge(self, number, edit=None, rename=None):
         p = self.prs[number]
         _git(self.human, "fetch", "-q", "origin")
         _git(self.human, "checkout", "-q", "main")
@@ -1611,6 +1612,9 @@ class _FakeGh:
             path, extra = edit
             open(os.path.join(self.human, path), "a", encoding="utf-8").write(extra)
             _git(self.human, "commit", "-q", "-am", "PR에서 고침")
+        if rename:
+            _git(self.human, "mv", *rename)
+            _git(self.human, "commit", "-q", "-m", "PR에서 이름 바꿈")
         _git(self.human, "push", "-q", "origin", "main")
         p.update(state="MERGED", mergedAt="2026-11-02T03:10:00Z", mergeCommit={"oid": _git(self.human, "rev-parse", "HEAD")})
 
@@ -1693,6 +1697,49 @@ def scenario_hyo158(tmp):
     with _Env(RADAR_REVIEW="app"):
         off = RadarService(os.path.join(root, "data-off"), app_mode="real", real_adr=adr, snapshot_repo=snaps, engine="api", chat_factory=fake)
         check("RADAR_REVIEW=app → 검토 PR 꺼짐", not off.review_pr and off.sync_prs() == [])
+
+
+def scenario_hyo158_blocked(tmp):
+    """HYO-158 — PR 반영이 막혀도 PR 연결이 남고(Inbox가 죽지 않는다), 막힌 항목은 5분 확인이 다시 건드리지 않는다."""
+    print("\n— HYO-158: 막힌 검토 PR (이름 바뀜 · 로컬 초안 고침) —")
+    from radar import script as stub_scripts
+    from radar.stub_model import StubChat
+    with _Env(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", RADAR_REVIEW=None):
+        root = os.path.join(tmp, "hyo158b")
+        os.makedirs(root)
+        adr_remote, adr, base, snaps = _real_repos(root)
+        human = os.path.join(root, "human")
+        _clone(adr_remote, human)
+        svc = RadarService(os.path.join(root, "data"), app_mode="real", real_adr=adr, snapshot_repo=snaps, engine="api",
+                           chat_factory=lambda flow: StubChat(script=stub_scripts.detect_script(), flow=flow))
+        gh = svc._gh_client = _FakeGh(adr_remote, human)
+        c = TestClient(server.create_app(svc))
+        c.post("/runs/detect", json={})
+        ids = {hitl.read_item(svc.ctx(), q["item"])["export"]["pr"]["number"]: q["item"] for q in hitl.review_queue(svc.ctx())}
+
+        # PR #1 — PR에서 파일 이름을 바꿔 merge → merged_path_missing
+        p1 = hitl.read_item(svc.ctx(), ids[1])["write_intent"]["path"]
+        gh.merge(1, rename=(p1, p1.replace(".md", "-renamed.md")))
+        svc.sync_prs()
+        # PR #2 — 앱 작업 사본의 초안을 고친 채 merge → hash_differs
+        p2 = hitl.read_item(svc.ctx(), ids[2])["write_intent"]["path"]
+        open(os.path.join(adr, p2), "a", encoding="utf-8").write("\n로컬에서 고침\n")
+        gh.merge(2)
+        svc.sync_prs()
+        it1, it2 = hitl.read_item(svc.ctx(), ids[1]), hitl.read_item(svc.ctx(), ids[2])
+        check("막힘(이름 바뀜·로컬 고침) → blocked · PR 연결(번호·url) 남음",
+              it1["export"]["state"] == "blocked" and it1["attention"]["reason"] == "merged_path_missing" and it1["export"]["pr"]["number"] == 1
+              and it2["export"]["state"] == "blocked" and it2["attention"]["reason"] == "hash_differs" and it2["export"]["pr"]["number"] == 2,
+              (it1["export"], it2["export"]))
+        r = c.get("/inbox")
+        rows = {i["id"]: i for i in r.json()["items"]} if r.status_code == 200 else {}
+        check("막힌 PR 항목이 있어도 Inbox 200 · 어느 PR이 막혔는지 보인다", r.status_code == 200
+              and all("PR #" in (rows[ids[n]].get("message") or "") and "막혔" in rows[ids[n]]["message"] for n in (1, 2)), r.text[:300])
+        n_hist = {n: len(hitl.read_item(svc.ctx(), ids[n])["history"]) for n in (1, 2)}
+        out = svc.sync_prs()
+        check("막힌 항목은 5분 확인이 다시 안 건드린다 (기록 안 쌓임 · 오류 없음)",
+              all(len(hitl.read_item(svc.ctx(), ids[n])["history"]) == n_hist[n] for n in (1, 2)) and not any(str(ids[1]) in x or str(ids[2]) in x for x in out), out)
+        check("PR #3은 그대로 열려 있고 Inbox에서 PR로 답한다", gh.prs[3]["state"] == "OPEN" and rows[ids[3]]["actions"] == ["approve", "reject"])
 
 
 if __name__ == "__main__":

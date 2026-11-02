@@ -518,9 +518,12 @@ class RadarService:
                "technology": scope.get("technology"), "affected": scope.get("affected") or [], "since": since,
                "waiting_days": _days(since), "state": q["export"].get("state"),
                "actions": ["approve", "edit", "reject"] if hitl.exporter_for(ctx).active else [], "why": self._why(text), "action": self._card_action(text)}
-        pr = (item.get("export") or {}).get("pr")
+        pr = _review_pr(item.get("export"))
         if pr:  # 검토 PR (HYO-158) — 승인·거부는 PR merge·close로 간다. 고치기는 PR 브랜치에서
             row.update(actions=["approve", "reject"], message=f"PR #{pr['number']}에서 검토 — merge = 채택 · close = 기각 ({pr['url']})")
+        elif (item.get("export") or {}).get("pr"):  # PR 반영이 막혔다 — 어느 PR인지와 이유를 보인다
+            ex = item["export"]
+            row["message"] = f"PR #{ex['pr']['number']} 반영이 막혔어요 ({(item.get('attention') or {}).get('reason')}) — {ex['pr']['url']}"
         return row, text
 
     def _why(self, text):
@@ -686,7 +689,7 @@ class RadarService:
                     if any(r["id"] == item_id for r in self.inbox()):
                         raise ServiceError(409, f"{item_id}: 접수·재검토 알림은 「확인함」(ack)으로 답한다")
                     raise ServiceError(404, f"{item_id}: 대기 항목이 아니다")
-                pr = (q.get("export") or {}).get("pr")
+                pr = _review_pr(q.get("export"))
                 if pr:
                     return self._pr_answer(item_id, pr, decision)
                 return self._done(item_id, decision, stale_answer, self._review_answer(ctx, q, decision, stale_answer, draft))
@@ -1195,7 +1198,7 @@ class RadarService:
             out += self._open_prs()
             ctx = self.ctx()
             for q in hitl.review_queue(ctx):
-                if (q["export"] or {}).get("pr"):
+                if _review_pr(q["export"]):
                     r = self._settle_pr(ctx, q["item"])
                     out += [r["line"]] if r.get("line") else []
         return out
@@ -1427,6 +1430,12 @@ class RadarService:
 
 _SECTION = re.compile(r"^## (.+)$", re.M)
 _WEEK_DIR = re.compile(r"^\d{4}-W\d{2}$")
+
+
+def _review_pr(export):
+    """검토 대기(review)인 항목의 PR — 막힌(blocked) 항목은 PR이 적혀 있어도 None: 앱이 PR로 답하거나 다시 반영하지 않고 사람이 푼다 (HYO-158)."""
+    export = export or {}
+    return export.get("pr") if export.get("state") == "review" else None
 
 
 def _local_iso(ts):

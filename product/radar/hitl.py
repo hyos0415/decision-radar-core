@@ -898,7 +898,8 @@ def _hold(ctx, item, state, kind, reason, **detail):
     """내보내기가 멈췄다 — 별도 파일에 상태와 이유를 남겨 사람에게 보인다 (ADR 파일은 건드리지 않는다). 처음 멈춘 시각(since)은 유지한다."""
     prev = item.get("export") or {}
     since = prev.get("since") if prev.get("state") == state else None
-    item["export"] = {"state": state, "since": since or _now(ctx), **detail}
+    keep = {"pr": prev["pr"]} if prev.get("pr") else {}  # 검토 PR 연결은 막혀도 남긴다 (HYO-158) — 사람이 어느 PR인지 보고 푼다
+    item["export"] = {"state": state, "since": since or _now(ctx), **keep, **detail}
     item["attention"] = {"kind": kind, "reason": reason, "since": item["export"]["since"], **detail}
     item["history"].append(_event(ctx, event=f"export_{state}", reason=reason, by="graph"))
     save_item(ctx, item)
@@ -1126,8 +1127,8 @@ def settle_review_pr(ctx, item_id, ex, gh):
     closed — 거부와 같다 (`_discard_draft`: 초안을 지우고 닫힌 기록을 커밋 — HYO-142 거부 소식에 든다)"""
     item = read_item(ctx, item_id)
     pr = ((item or {}).get("export") or {}).get("pr")
-    if not pr or item["export"].get("state") not in PENDING_EXPORT:
-        raise HitlError(f"{item_id}: 열린 검토 PR이 있는 항목이 아니다")
+    if not pr or item["export"].get("state") != "review":  # 막힌 항목(blocked)은 사람이 푼다 — 5분마다 다시 막으며 기록을 쌓지 않는다
+        raise HitlError(f"{item_id}: 열린 검토 PR이 있는 검토 대기 항목이 아니다")
     try:
         v = gh.view(pr["number"])
     except ExportRefused as e:
@@ -1150,7 +1151,7 @@ def settle_review_pr(ctx, item_id, ex, gh):
     if s["state"] != "ok":
         return {**s, "state": "blocked", "item": item_id}
     if not os.path.exists(path):  # PR에서 파일 이름을 바꿨다 — 무엇이 채택됐는지 사람이 본다
-        _hold(ctx, item, "blocked", "export_blocked", "merged_path_missing", path=wi["path"], pr=pr["number"])
+        _hold(ctx, item, "blocked", "export_blocked", "merged_path_missing", path=wi["path"], pr_number=pr["number"])
         return {"state": "blocked", "reason": "merged_path_missing", "item": item_id}
     merged_hash = _file_hash(path)
     edited = merged_hash != wi["content_hash"]
