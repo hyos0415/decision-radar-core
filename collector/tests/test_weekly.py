@@ -32,7 +32,7 @@ def git(cwd, *args):
 class World:
     """임시 부모 폴더: radar-snapshots(복제본 + bare 원격) · 레포 자리 · 가짜 러너."""
 
-    def __init__(self, fail=(), feed_json=True):
+    def __init__(self, fail=(), feed_json=True, revisit_index=True):
         self.tmp = Path(tempfile.mkdtemp())
         self.remote = self.tmp / "remote.git"
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.remote)], check=True)
@@ -54,6 +54,7 @@ class World:
         self.pout = self.tmp / "pout"
         self.fail = set(fail)
         self.feed_json = feed_json
+        self.revisit_index = revisit_index
         self.calls = []
         self.env = {"RADAR_SNAPSHOT_REPO": str(self.snaps), "RADAR_PROFILE": str(self.tmp / "p.yaml"), "RADAR_TARGETS": str(self.tmp / "t.json"),
                     "RADAR_ADR_DIR": str(self.tmp / "adr"), "RADAR_TIERS": str(self.snaps / "tiers.json")}
@@ -71,6 +72,10 @@ class World:
             out = Path(args[args.index("--out") + 1])
             out.mkdir(parents=True, exist_ok=True)
             (out / "feed.json").write_text("[]", encoding="utf-8")
+            (out / "index.json").write_text("{}", encoding="utf-8")
+        if module == "pipeline.revisit_feed" and self.revisit_index:
+            out = Path(args[args.index("--out") + 1])
+            out.mkdir(parents=True, exist_ok=True)
             (out / "index.json").write_text("{}", encoding="utf-8")
         return 0
 
@@ -98,7 +103,7 @@ def test_order_and_args():
     w = World()
     rc, _ = w.go("--no-push")
     assert rc == 0, rc
-    assert w.mods() == ["collector.run", "collector.snapshot", "pipeline.importance", "pipeline.profile_filter", "pipeline.detect_feed"], w.mods()
+    assert w.mods() == ["collector.run", "collector.snapshot", "pipeline.importance", "pipeline.profile_filter", "pipeline.detect_feed", "pipeline.revisit_feed"], w.mods()
     gate = w.calls[3]
     assert arg(gate, "--snapshot") == str(w.snaps / WEEK)
     assert arg(gate, "--gate") == "gpt-6.1-sol" and "--real-api" in gate[1]
@@ -108,6 +113,9 @@ def test_order_and_args():
     feed = w.calls[4]
     assert arg(feed, "--run") == str(w.pout / WEEK) and arg(feed, "--out") == str(w.snaps / "detect" / WEEK)
     assert w.calls[1][1][-2:] == ["freeze", "--push"]
+    rv = w.calls[5]
+    assert arg(rv, "--adr-dir") == w.env["RADAR_ADR_DIR"] and arg(rv, "--snapshots") == str(w.snaps) and arg(rv, "--week") == WEEK
+    assert arg(rv, "--out") == str(w.snaps / "revisit" / WEEK)
 
 
 def test_gate_override():
@@ -165,7 +173,7 @@ def test_publish_pushes_only_detect():
     rc, _ = w.go()
     assert rc == 0
     files = w.remote_files()
-    assert f"detect/{WEEK}/feed.json" in files and "stray.txt" not in files, files
+    assert f"detect/{WEEK}/feed.json" in files and f"revisit/{WEEK}/index.json" in files and "stray.txt" not in files, files
     assert git(w.remote, "log", "-1", "--format=%s", "main").strip() == f"detect 입력 {WEEK} (corpus@{WEEK} → 관문 → detect_feed)"
 
 
@@ -200,6 +208,8 @@ def test_other_machine_published():
     w._cfg(other)
     (other / "detect" / WEEK).mkdir(parents=True)
     (other / "detect" / WEEK / "feed.json").write_text("[]", encoding="utf-8")
+    (other / "revisit" / WEEK).mkdir(parents=True)
+    (other / "revisit" / WEEK / "index.json").write_text("{}", encoding="utf-8")
     git(other, "add", "-A")
     git(other, "commit", "-q", "-m", "other machine")
     git(other, "push", "-q", "origin", "HEAD:main")
@@ -207,6 +217,29 @@ def test_other_machine_published():
     rc, out = w.go("--from", "gate", "--week", WEEK)
     assert rc == 0 and w.mods() == [], (w.mods(), out)
     assert "이미 만듦" in out and git(w.remote, "rev-parse", "main") == before
+
+
+def test_revisit_fail_still_publishes_detect():
+    """revisit 출처(네트워크)가 실패해도 detect 입력은 게시한다 — 종료 코드 0, revisit 단계만 실패로 남는다 (HYO-159)."""
+    for w in (World(fail={"pipeline.revisit_feed"}), World(revisit_index=False)):
+        rc, _ = w.go()
+        assert rc == 0, rc
+        files = w.remote_files()
+        assert f"detect/{WEEK}/feed.json" in files and not any(f.startswith("revisit/") for f in files), files
+        assert [s["ok"] for s in w.summary()["steps"] if s["name"] == "revisit"] == [False]
+
+
+def test_revisit_added_to_published_week():
+    """detect만 게시된 주 — 다시 돌리면 유료 관문 없이 revisit 출처만 받아 따로 커밋한다 (HYO-159 도입 주, 또는 지난번 revisit 실패)."""
+    w = World(revisit_index=False)
+    assert w.go()[0] == 0
+    w.revisit_index = True
+    w.calls.clear()
+    rc, out = w.go("--from", "gate", "--week", WEEK)
+    assert rc == 0 and w.mods() == ["pipeline.revisit_feed"], (w.mods(), out)
+    assert f"revisit/{WEEK}/index.json" in w.remote_files()
+    assert git(w.remote, "log", "-1", "--format=%s", "main").strip() == f"revisit 출처 {WEEK} (ADR source_hint → revisit_feed)"
+    assert git(w.remote, "diff-tree", "--no-commit-id", "--name-only", "-r", "main").split() == [f"revisit/{WEEK}/index.json"]
 
 
 def test_step_log_not_scheduler_log():
@@ -233,7 +266,7 @@ def test_step_log_not_scheduler_log():
 def test_from_gate_week():
     w = World()
     rc, _ = w.go("--from", "gate", "--week", WEEK, "--no-push")
-    assert rc == 0 and w.mods() == ["pipeline.profile_filter", "pipeline.detect_feed"], w.mods()
+    assert rc == 0 and w.mods() == ["pipeline.profile_filter", "pipeline.detect_feed", "pipeline.revisit_feed"], w.mods()
     s = w.summary()
     assert s["week"] == WEEK and [x["skipped"] for x in s["steps"][:3]] == [True, True, True]
 
@@ -259,7 +292,7 @@ def test_dry_run():
     w = World()
     rc, out = w.go("--dry-run")
     assert rc == 0 and w.calls == [] and not (w.out / "last-weekly.json").exists()
-    assert "collector.weekly" not in out and "profile_filter" in out and "detect_feed" in out and "--real-api" in out
+    assert "collector.weekly" not in out and "profile_filter" in out and "detect_feed" in out and "--real-api" in out and "revisit_feed" in out
 
 
 def test_real_runner_subprocess():

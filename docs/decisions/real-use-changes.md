@@ -6,3 +6,4 @@
 | 날짜 | 무엇 | 왜 | 커밋 · PR |
 |---|---|---|---|
 | 2026-11-02 | detect 초안 검토 자리: 앱 Inbox만 → **ADR repo PR** (merge = 채택 · close = 기각, 앱 버튼도 PR을 merge·close, `RADAR_REVIEW=app`으로 되돌림). 행동 로그 시각 = GitHub mergedAt·closedAt | 스킬 기간처럼 어디서든 검토 — 장소 차이를 도구 차이로 재지 않게 (비교 프로토콜 §7 변경 11/2). 첫 detect(11/2 09:02, ADR 0017)는 바꾸기 전 실행 | HYO-158 |
+| 2026-11-02 | revisit 입력: detect 입력(관문 통과 릴리스 노트만) → **`radar-snapshots/revisit/<주>/`** — 수집 PC가 화요일에 ADR 웹 `source_hint` 문서를 받아 얼리고, 같은 주 detect 입력·벤더 페이지도 넣는다. 모델은 여전히 웹에 안 나간다 | 11/2 09:02 첫 revisit이 12조건 전부 판정 불가(출처 문서 404 — ADR repo 2db52fd). 스킬은 웹을 직접 열어 판정했다 — 입력 차이를 도구 차이로 재지 않게 (사용자 결정 11/2, 선택지 1). 남는 차이: 출처가 최대 6일 묵는다(화 수집 → 월 revisit, 스킬은 그 자리에서 열었다). 첫 적용은 11/3 수집 → 11/9 revisit. 11/2 revisit은 바꾸기 전 | HYO-159 |

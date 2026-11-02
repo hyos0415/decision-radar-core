@@ -126,6 +126,7 @@ RADAR_APP_MODE=real npm run dev     # [RADAR_REAL_ADR=../adr] [RADAR_SNAPSHOT_RE
 - revisit 직후 `revisit_last_checked`만 바뀐 ADR은 승인 없이 커밋·push한다(`hitl.export_record` — 기록용 칸 밖이 바뀌었으면 거부하고 작업 사본에 남긴다)
 - 정기 실행이 기본 켜짐(`RADAR_SCHEDULE=off`로 끈다) — revisit 월 09:00 · detect 화 18:00
 - **검토 PR** (HYO-158, `RADAR_REVIEW=app`으로 끈다): detect 초안마다 ADR repo에 브랜치 `radar/<항목>`(origin/main 위 커밋 1개 — 작업 사본은 안 건드린다) + PR. **merge = 채택**(PR 브랜치에서 고친 뒤 merge = 수정 채택) · **close = 기각**. 앱이 5분마다(정기 확인) PR 상태를 읽어 Inbox 항목을 닫는다 — merge면 로컬 초안을 비우고 main을 따라잡은 뒤 항목 기록을 커밋. 앱의 승인·거부 버튼은 그 PR을 merge·close한다(고치기는 PR에서). `gh` 로그인이 필요하다
+- **revisit 입력** (HYO-159): revisit은 가장 새 `radar-snapshots/revisit/<주>/`(조건의 `source_hint` 문서 + 같은 주 detect 입력 · 벤더 페이지, 수집 PC가 화요일에 만든다)를 본다. 없으면 detect 입력으로 돌고 요약 줄에 그렇다고 적는다 — 그때 출처 문서는 판정 불가로 남는다. API 그림자도 같은 폴더를 본다
 - **API 그림자** (엔진이 claude-cli일 때, `RADAR_SHADOW=off`로 끈다): detect·revisit이 끝나면 **같은 입력**(실행 직전에 뜬 ADR 사본 + 같은 detect 입력)을 API 엔진으로 한 번 더 돌려 `<data>/shadow.jsonl`에 두 엔진 결과를 나란히 한 줄 — detect는 후보·초안·제외, revisit은 조건별 판정·알림, 각자 사용량. **Inbox·알림·실행 기록·ADR repo에는 아무것도 안 쓴다**. 잠금 밖 백그라운드라 화면을 막지 않고, 죽거나 키가 없으면 그 사실만 남는다. 4주 뒤 엔진 비교용 (사용자 10/26). API 과금이다
 
 ## Mac 검증 (10/26 — Windows로 쓰다 Mac으로 옮긴다, 두 경로 다 검증)

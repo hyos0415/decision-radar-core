@@ -9,7 +9,7 @@ python -m collector.run --sources vendor --only aws-bedrock --out <폴더>   # A
 python collector/tests/test_collector.py                                    # 오프라인 테스트
 ```
 
-**정기 실행 (2026-10-02~)**: 화 16:00 전체 · 목 16:00 AWS만. `--out` 없이 돌면 `collector/out/<UTC 시각>-<label>/`에 쌓인다. 화요일 작업은 **한 줄 `python -m collector.weekly`** — 수집 → 얼림(push) → 등급 → 관문 → detect 입력 → 게시 (HYO-99 3단계). 사슬은 OS와 무관한 이 파이썬 한 곳에 있고, OS마다 다른 것은 예약 등록뿐이다.
+**정기 실행 (2026-10-02~)**: 화 16:00 전체 · 목 16:00 AWS만. `--out` 없이 돌면 `collector/out/<UTC 시각>-<label>/`에 쌓인다. 화요일 작업은 **한 줄 `python -m collector.weekly`** — 수집 → 얼림(push) → 등급 → 관문 → detect 입력 → revisit 출처 → 게시 (HYO-99 3단계 · HYO-159). 사슬은 OS와 무관한 이 파이썬 한 곳에 있고, OS마다 다른 것은 예약 등록뿐이다.
 
 ```powershell
 # Windows (작업 스케줄러)
@@ -28,7 +28,8 @@ python collector/tests/test_weekly.py                     # 오프라인 — 가
 ```
 
 - 관문(`pipeline.profile_filter --gate gpt-6.1-sol`, `RADAR_GATE`/`--gate`로 바꿈)은 **수집을 돌리는 기기의 `.env`에 `OPENAI_API_KEY`가 있어야** 한다. 없으면 관문에서 멈추고 feed·게시는 없다 (단계 로그 `collector/out/last-weekly-steps.log` · 예약 작업 콘솔 `last-weekly.log` · 요약 `last-weekly.json`).
-- 게시는 `radar-snapshots`의 `detect/<주>/`만 커밋·push한다 (그 밖의 경로가 스테이징돼 있으면 거부). 이미 커밋돼 있으면 「이미 만듦」으로 건너뛰고 유료 관문도 다시 돌리지 않는다.
+- 게시는 `radar-snapshots`의 `detect/<주>/` · `revisit/<주>/`만 커밋·push한다 (그 밖의 경로가 스테이징돼 있으면 거부). 이미 커밋돼 있으면 「이미 만듦」으로 건너뛰고 유료 관문도 다시 돌리지 않는다. detect만 커밋된 주를 다시 돌리면(`--from gate --week <주>`) revisit 출처만 받아 따로 커밋한다.
+- **revisit 출처** (`pipeline.revisit_feed`, HYO-159): ADR들의 `revisit_when` 중 웹 `source_hint` URL을 그 자리에서 받아 `revisit/<주>/`(index.json · pages · hints.json)로 얼린다. 같은 주 detect 입력 항목과 주간 수집본 벤더 페이지도 같은 폴더에 복사한다. 데스크톱 실사용 revisit이 이 폴더를 본다 — 모델은 웹에 안 나간다. 실패(네트워크)해도 detect 입력은 게시하고, 앱은 지난 주 출처를 본다. 출처를 하나도 못 받으면 단계 실패로 남는다. 본문이 짧은 페이지(스크립트로 그리는 문서)는 `hints.json`의 `thin`.
 - 프로필·대상·ADR 경로는 env `RADAR_PROFILE` · `RADAR_TARGETS` · `RADAR_ADR_DIR`, 없으면 `<레포 부모>/adr/...`.
 - **한 기기에서만** 돌린다 (아래 주간 스냅숏 참고) — Windows에서 Mac으로 옮길 때는 한쪽을 먼저 `-Remove`/`--remove`한다.
 
