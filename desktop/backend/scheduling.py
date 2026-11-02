@@ -66,6 +66,13 @@ class Scheduler:
         """할 차례인 흐름을 돌린다 → 돌린 흐름 목록."""
         now = now or dt.datetime.now().astimezone()
         done = []
+        sync_prs = getattr(self.svc, "sync_prs", None)
+        if sync_prs:  # 검토 PR의 merge·close를 Inbox에 (HYO-158) — 실행보다 먼저: 사람이 답한 초안이 다음 detect의 겹침 검사에 보이게
+            try:
+                for line in sync_prs():
+                    print(f"[review-pr] {line}", flush=True)
+            except Exception as e:  # PR 확인이 죽어도 정기 실행은 돈다
+                print(f"[review-pr] {type(e).__name__}: {e}", flush=True)
         for flow in SLOTS:
             if flow in getattr(self.svc, "flows", SLOTS) and due(flow, now, self.svc.runs()):
                 self.svc.run(flow, trigger="schedule")

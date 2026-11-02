@@ -50,6 +50,7 @@ import devprofiles  # noqa: E402
 import engine_status  # noqa: E402
 from radar import hitl  # noqa: E402  — radar/__init__이 spike/common을 경로에 올린다
 from radar.adr_copy import copy_adr  # noqa: E402
+from radar.export import ExportRefused, GhPr  # noqa: E402
 from radar import script as stub_scripts  # noqa: E402
 from radar.capture import capture_agent, capture_turn1, capture_turn2, thread_config  # noqa: E402
 from radar.detect import detect  # noqa: E402
@@ -171,6 +172,8 @@ class RadarService:
         self.chat_factory = chat_factory  # 테스트가 실제 모델 자리에 대역을 꽂는다 (API 호출 없이 데모·실사용 모드 배관 검사)
         self.demo_info = self.real_info = None
         self.shadow = False  # 실사용 + claude-cli면 켜진다 (_setup_real)
+        self.review_pr = False  # 실사용이면 켜진다 (_setup_real, HYO-158)
+        self._gh_client = None
         self.shadow_factory = None  # 테스트가 그림자 모델 자리에 대역을 꽂는다
         self.shadow_async = True  # 테스트는 False — 실행 끝에 바로 돈다
         self.shadow_threads = []
@@ -239,7 +242,10 @@ class RadarService:
         self.snapshot_dir = _latest_feed(snapshot_repo) or os.path.join(snapshot_repo, DETECT_FEEDS)
         # API 그림자 (사용자 10/26): 주 엔진이 구독 CLI면 같은 입력을 API로도 돌려 기록만 — 4주 뒤 엔진 비교. RADAR_SHADOW=off로 끈다
         self.shadow = engine == "claude-cli" and os.environ.get("RADAR_SHADOW", "on") != "off"
-        self.real_info = {"adr_repo": adr_root, "snapshot_repo": snapshot_repo, "claude_bin": claude_bin, "shadow": self.shadow}
+        # 검토 PR (HYO-158, 사용자 11/2): detect 초안을 ADR repo PR로 — merge = 채택 · close = 기각. RADAR_REVIEW=app이면 앱 Inbox에서만
+        self.review_pr = os.environ.get("RADAR_REVIEW", "pr") != "app"
+        self.real_info = {"adr_repo": adr_root, "snapshot_repo": snapshot_repo, "claude_bin": claude_bin, "shadow": self.shadow,
+                          "review": "pr" if self.review_pr else "app"}
 
     def _api_key(self):
         return bool(load_dotenv().get("ANTHROPIC_API_KEY"))
@@ -381,8 +387,8 @@ class RadarService:
 
     # ── 행동 로그 ────────────────────────────────────────────────
 
-    def log(self, event, item=None, source="backend", **detail):
-        rec = {"at": now_iso(), "event": event, "item": item, "source": source, "mode": self.mode}
+    def log(self, event, item=None, source="backend", at=None, **detail):
+        rec = {"at": at or now_iso(), "event": event, "item": item, "source": source, "mode": self.mode}
         if detail:
             rec["detail"] = detail
         with self.lock, open(self.events_path, "a", encoding="utf-8") as f:
@@ -512,6 +518,12 @@ class RadarService:
                "technology": scope.get("technology"), "affected": scope.get("affected") or [], "since": since,
                "waiting_days": _days(since), "state": q["export"].get("state"),
                "actions": ["approve", "edit", "reject"] if hitl.exporter_for(ctx).active else [], "why": self._why(text), "action": self._card_action(text)}
+        pr = _review_pr(item.get("export"))
+        if pr:  # 검토 PR (HYO-158) — 승인·거부는 PR merge·close로 간다. 고치기는 PR 브랜치에서
+            row.update(actions=["approve", "reject"], message=f"PR #{pr['number']}에서 검토 — merge = 채택 · close = 기각 ({pr['url']})")
+        elif (item.get("export") or {}).get("pr"):  # PR 반영이 막혔다 — 어느 PR인지와 이유를 보인다
+            ex = item["export"]
+            row["message"] = f"PR #{ex['pr']['number']} 반영이 막혔어요 ({(item.get('attention') or {}).get('reason')}) — {ex['pr']['url']}"
         return row, text
 
     def _why(self, text):
@@ -677,6 +689,9 @@ class RadarService:
                     if any(r["id"] == item_id for r in self.inbox()):
                         raise ServiceError(409, f"{item_id}: 접수·재검토 알림은 「확인함」(ack)으로 답한다")
                     raise ServiceError(404, f"{item_id}: 대기 항목이 아니다")
+                pr = _review_pr(q.get("export"))
+                if pr:
+                    return self._pr_answer(item_id, pr, decision)
                 return self._done(item_id, decision, stale_answer, self._review_answer(ctx, q, decision, stale_answer, draft))
             try:
                 rep, _ = capture_turn2(ctx, self.model(item_id), self.state_path, decision, ctx.now, self.model_name,
@@ -1151,6 +1166,73 @@ class RadarService:
             notes.append(f"ADR repo를 원격에 못 맞췄다 ({b.get('reason')}) — 로컬 상태로 돈다")
         return notes
 
+    # ── 검토 PR (HYO-158, 사용자 11/2) — detect 초안을 ADR repo PR로. merge = 채택 · close = 기각 ─────
+
+    def _gh(self):
+        if self._gh_client is None:
+            self._gh_client = GhPr.for_root(os.path.dirname(os.path.dirname(self.adr_dir)))
+        return self._gh_client
+
+    def _open_prs(self):
+        """검토 대기 detect 초안 중 PR이 없는 것을 PR로 올린다 → 요약 줄. 실패한 것은 다음 확인(`sync_prs`)에 다시 올린다."""
+        ctx, gh, lines = self.ctx(), self._gh(), []
+        if gh is None:
+            return ["검토 PR을 못 올렸다 — ADR repo 원격이 github가 아니다"]
+        for q in hitl.review_queue(ctx):
+            if q["kind"] != "detect" or q["export"].get("state") != "review" or q["export"].get("pr"):
+                continue
+            r = hitl.open_review_pr(ctx, q["item"], hitl.exporter_for(ctx), gh)
+            if r["state"] == "opened":
+                self.log("pr_opened", q["item"], adr=q["adr"], pr=r["number"], url=r["url"])
+                lines.append(f"ADR {q['adr']} 초안 → PR #{r['number']}")
+            elif r["state"] != "already_open":
+                lines.append(f"ADR {q['adr']} 초안 PR 못 올림 ({r.get('reason')}: {str(r.get('detail') or '')[:120]})")
+        return lines
+
+    def sync_prs(self):
+        """정기 확인(5분)마다 — 올리지 못한 초안을 PR로 올리고, 열린 PR의 merge·close를 항목에 반영한다. 행동 로그의 답은 PR의 시각으로 남긴다."""
+        if not self.review_pr:
+            return []
+        out = []
+        with self.lock:
+            out += self._open_prs()
+            ctx = self.ctx()
+            for q in hitl.review_queue(ctx):
+                if _review_pr(q["export"]):
+                    r = self._settle_pr(ctx, q["item"])
+                    out += [r["line"]] if r.get("line") else []
+        return out
+
+    def _settle_pr(self, ctx, item_id):
+        """PR 상태 → 항목. 결과 dict에 요약 한 줄(line)을 붙인다 — 아직 열려 있으면 line 없음."""
+        r = hitl.settle_review_pr(ctx, item_id, hitl.exporter_for(ctx), self._gh())
+        at = _local_iso(r.get("at"))
+        if r["state"] == "merged":
+            self.log("edit" if r["edited"] else "approve", item_id, at=at, outcome="written", adr=r["adr"], via="pr", pr=r["pr"])
+            r["line"] = f"PR #{r['pr']} merge → ADR {r['adr']} 채택" + (" (PR에서 고침)" if r["edited"] else "")
+        elif r["state"] == "closed":
+            self.log("reject", item_id, at=at, outcome="rejected", adr=r.get("adr"), via="pr", pr=r["pr"])
+            r["line"] = f"PR #{r['pr']} close → ADR {r.get('adr')} 기각"
+        elif r["state"] == "blocked":
+            r["line"] = f"{item_id}: PR 반영 막힘 ({r.get('reason')})"
+        return r
+
+    def _pr_answer(self, item_id, pr, decision):
+        """앱 Inbox의 답을 PR로 — 승인 = merge, 거부 = close. 그 뒤 바로 항목에 반영한다 (`_settle_pr`가 행동 로그를 남긴다)."""
+        if decision == "edit":
+            raise ServiceError(409, f"PR #{pr['number']} 브랜치에서 고친 뒤 merge해 주세요 — 앱에서 고치면 PR과 갈라진다 ({pr['url']})")
+        gh = self._gh()
+        try:
+            if decision == "approve":
+                gh.merge(pr["number"])
+            else:
+                gh.close(pr["number"], "앱 Inbox에서 기각")
+        except ExportRefused as e:
+            return {"outcome": "blocked", "message": f"PR #{pr['number']}을 {'merge' if decision == 'approve' else 'close'}하지 못했어요: {e}"}
+        r = self._settle_pr(self.ctx(), item_id)
+        oc = {"merged": "written", "closed": "rejected"}.get(r["state"], "blocked")  # open = merge가 아직 안 보인다 — 다음 확인(5분)에 반영
+        return {"outcome": oc, "message": r.get("line") or f"PR #{pr['number']} 반영을 기다려요", "adr": r.get("adr")}
+
     def _export_record(self, rep):
         """revisit 직후 — 기록용 칸만 바뀐 ADR을 커밋 1개로 main에 (사용자 10/26). 요약 한 줄 (쓴 파일이 없으면 None)."""
         files = rep.get("files_written") or []
@@ -1203,6 +1285,8 @@ class RadarService:
                         if q["item"] not in queued and q["kind"] == "detect":
                             self.log("item_created", q["item"], kind="detect", adr=q["adr"], run=res["id"])
                 res.update(self._summarize_detect(rep) if flow == "detect" else self._summarize_revisit(rep))
+                if flow == "detect" and self.review_pr:
+                    res["summary"] += self._open_prs()
                 main_view = self._compare_view(flow, rep, res)
                 res["summary"] = notes + res["summary"]
                 if flow == "revisit":
@@ -1346,6 +1430,19 @@ class RadarService:
 
 _SECTION = re.compile(r"^## (.+)$", re.M)
 _WEEK_DIR = re.compile(r"^\d{4}-W\d{2}$")
+
+
+def _review_pr(export):
+    """검토 대기(review)인 항목의 PR — 막힌(blocked) 항목은 PR이 적혀 있어도 None: 앱이 PR로 답하거나 다시 반영하지 않고 사람이 푼다 (HYO-158)."""
+    export = export or {}
+    return export.get("pr") if export.get("state") == "review" else None
+
+
+def _local_iso(ts):
+    """GitHub 시각(UTC `…Z`) → 이 기기 시간대 ISO — 행동 로그의 다른 줄과 같은 모양. 없으면 None (지금 시각이 들어간다)."""
+    if not ts:
+        return None
+    return dt.datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone().isoformat(timespec="seconds")
 
 
 def _git(cwd, *args):

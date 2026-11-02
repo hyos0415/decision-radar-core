@@ -35,7 +35,7 @@ from common import ops
 from common.core import radar
 from common.schemas import AdrDraft
 
-from .export import Exporter, GitExporter, LocalExporter
+from .export import Exporter, ExportRefused, GitExporter, LocalExporter
 
 ITEM_KINDS = ("capture", "detect", "experiment")
 ITEM_ID = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
@@ -898,7 +898,8 @@ def _hold(ctx, item, state, kind, reason, **detail):
     """내보내기가 멈췄다 — 별도 파일에 상태와 이유를 남겨 사람에게 보인다 (ADR 파일은 건드리지 않는다). 처음 멈춘 시각(since)은 유지한다."""
     prev = item.get("export") or {}
     since = prev.get("since") if prev.get("state") == state else None
-    item["export"] = {"state": state, "since": since or _now(ctx), **detail}
+    keep = {"pr": prev["pr"]} if prev.get("pr") else {}  # 검토 PR 연결은 막혀도 남긴다 (HYO-158) — 사람이 어느 PR인지 보고 푼다
+    item["export"] = {"state": state, "since": since or _now(ctx), **keep, **detail}
     item["attention"] = {"kind": kind, "reason": reason, "since": item["export"]["since"], **detail}
     item["history"].append(_event(ctx, event=f"export_{state}", reason=reason, by="graph"))
     save_item(ctx, item)
@@ -1075,6 +1076,94 @@ def _discard_draft(ctx, item, ex, reason):
     save_item(ctx, item)
     res = ex.publish([_rel(ctx, item_path(ctx, item["id"]))], f"{item['id']}: 검토 {reason} — ADR {wi.get('adr')} 초안 폐기\n\nitem: {item['id']}\n")
     return {**res, "outcome": reason, "item": item["id"], "adr": wi.get("adr")}
+
+
+# ── 검토 PR (HYO-158, 사용자 11/2) ──────────────────────────────────
+# 실사용 모드의 detect 초안은 검토 대기(export.state=review)인 채로 ADR repo에 PR로도 올린다 — 스킬 기간처럼 어디서든 검토하게.
+# PR merge = 승인(PR에서 고쳤으면 수정 승인) · close = 거부. 항목은 앱이 PR 상태를 읽어 닫는다(`settle_review_pr`).
+# 재개 검사(지문)는 PR에서는 돌지 않는다 — 그 사이 main이 바뀐 것은 GitHub의 merge가 다룬다 (스킬 PR과 같은 조건).
+
+def review_branch(item_id):
+    return f"radar/{item_id}"
+
+
+def open_review_pr(ctx, item_id, ex, gh):
+    """검토 대기 detect 초안 하나를 브랜치 + PR로 올리고 별도 파일의 export.pr에 적는다. 이미 올렸으면 그대로. 결과 dict."""
+    item = read_item(ctx, item_id)
+    ex_state = (item or {}).get("export") or {}
+    if not item or item.get("kind") != "detect" or ex_state.get("state") != "review":
+        raise HitlError(f"{item_id}: 검토 대기 detect 초안이 아니다")
+    if ex_state.get("pr"):
+        return {"state": "already_open", "item": item_id, **ex_state["pr"]}
+    wi = item["write_intent"]
+    path = _abs(ctx, wi["path"])
+    if not os.path.exists(path) or _file_hash(path) != wi["content_hash"]:  # 결정 1 — 사람이 고친 파일을 PR로 내지 않는다
+        return {"state": "blocked", "reason": "hash_differs" if os.path.exists(path) else "adr_missing", "item": item_id}
+    text = open(path, encoding="utf-8").read()
+    m = re.search(r"^#\s+(.+)$", text, re.M)
+    title = f"radar detect {item['created'][:10]}: ADR {wi['adr']} — {m.group(1).strip() if m else item_id}"
+    branch = review_branch(item_id)
+    r = ex.push_branch([wi["path"]], branch, f"{title}\n\nitem: {item_id}\nkind: detect\nadr: {wi['adr']}\n")
+    if r["state"] not in ("pushed",) and r.get("reason") != "branch_exists":
+        return {**r, "item": item_id}
+    body = (f"Decision Radar 앱(실사용 모드)의 detect 초안 — 앱 Inbox 항목 `{item_id}`.\n\n"
+            f"- **merge = 채택**(이 브랜치에서 고친 뒤 merge하면 수정 채택) · **close = 기각**\n"
+            f"- 앱이 몇 분 안에 PR 상태를 읽어 Inbox 항목을 닫는다. 앱 Inbox의 승인·거부 버튼도 이 PR을 merge·close한다\n"
+            f"- status는 사람이 바꾼다 (R8) — 초안은 proposed\n\n출처: {', '.join(item.get('sources') or []) or '-'}\n")
+    try:
+        pr = gh.create(branch, ex.branch, title, body)
+    except ExportRefused as e:
+        return {"state": "blocked", "reason": "pr_failed", "detail": str(e), "item": item_id}
+    item["export"]["pr"] = {"number": pr["number"], "url": pr["url"], "branch": branch, "commit": r.get("commit")}
+    item["history"].append(_event(ctx, event="pr_opened", pr=pr["number"], by="graph"))
+    save_item(ctx, item)
+    return {"state": "opened", "item": item_id, **item["export"]["pr"]}
+
+
+def settle_review_pr(ctx, item_id, ex, gh):
+    """PR 상태를 읽어 항목을 닫는다. 돌려주는 state: open(아직) · merged · closed · blocked.
+    merged — 로컬 초안을 지우고(내용이 쓴 그대로일 때만) main을 따라잡은 뒤 항목 DONE, 별도 파일을 커밋 1개로 main에.
+             main의 파일이 초안과 다르면 PR에서 고친 것이다(edited) — 지문용 해시를 main의 것으로 바꾼다
+    closed — 거부와 같다 (`_discard_draft`: 초안을 지우고 닫힌 기록을 커밋 — HYO-142 거부 소식에 든다)"""
+    item = read_item(ctx, item_id)
+    pr = ((item or {}).get("export") or {}).get("pr")
+    if not pr or item["export"].get("state") != "review":  # 막힌 항목(blocked)은 사람이 푼다 — 5분마다 다시 막으며 기록을 쌓지 않는다
+        raise HitlError(f"{item_id}: 열린 검토 PR이 있는 검토 대기 항목이 아니다")
+    try:
+        v = gh.view(pr["number"])
+    except ExportRefused as e:
+        return {"state": "blocked", "reason": "pr_view_failed", "detail": str(e), "item": item_id}
+    if v.get("state") == "OPEN":
+        return {"state": "open", "item": item_id, "pr": pr["number"]}
+    wi = item["write_intent"]
+    path = _abs(ctx, wi["path"])
+    if v.get("state") == "CLOSED":
+        res = _discard_draft(ctx, item, ex, "reject")
+        return {**res, "state": "closed", "at": v.get("closedAt"), "pr": pr["number"]}
+    if v.get("state") != "MERGED":
+        return {"state": "blocked", "reason": f"모르는 PR 상태 {v.get('state')!r}", "item": item_id}
+    if os.path.exists(path) and not ex.is_tracked(wi["path"]):  # 아직 내 작업 사본의 초안이다 — ff가 같은 경로를 가져오도록 비운다
+        if _file_hash(path) != wi["content_hash"]:
+            _hold(ctx, item, "blocked", "export_blocked", "hash_differs", path=wi["path"], expected_hash=wi["content_hash"], found_hash=_file_hash(path))
+            return {"state": "blocked", "reason": "hash_differs", "item": item_id}
+        os.remove(path)
+    s = ex.sync()
+    if s["state"] != "ok":
+        return {**s, "state": "blocked", "item": item_id}
+    if not os.path.exists(path):  # PR에서 파일 이름을 바꿨다 — 무엇이 채택됐는지 사람이 본다
+        _hold(ctx, item, "blocked", "export_blocked", "merged_path_missing", path=wi["path"], pr_number=pr["number"])
+        return {"state": "blocked", "reason": "merged_path_missing", "item": item_id}
+    merged_hash = _file_hash(path)
+    edited = merged_hash != wi["content_hash"]
+    wi["content_hash"] = merged_hash  # 같은 실행의 다른 항목이 이 ADR을 「제품이 낸 것」으로 알아보게 (`_own_exports`)
+    item["lifecycle"] = "DONE"
+    item["export"] = {"state": "done", "via": "pr", "pr": pr, "merge_commit": (v.get("mergeCommit") or {}).get("oid"), "edited": edited}
+    item.pop("attention", None)
+    item["history"].append(_event(ctx, event="exported", adr=wi["adr"], via="pr", pr=pr["number"], edited=edited, merged_at=v.get("mergedAt"), by="human"))
+    save_item(ctx, item)
+    r = ex.publish([_rel(ctx, item_path(ctx, item_id))], f"{item_id}: PR #{pr['number']} merge — ADR {wi['adr']} 채택 기록\n\nitem: {item_id}\n")
+    return {"state": "merged", "item": item_id, "adr": wi["adr"], "pr": pr["number"], "edited": edited, "at": v.get("mergedAt"),
+            "record": {k: r.get(k) for k in ("state", "commit", "reason")}}
 
 
 def sync_exporter(ctx, exporter=None):
