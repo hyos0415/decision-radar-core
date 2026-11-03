@@ -523,9 +523,23 @@ def _scenario_real(tmp, stub_scripts, StubChat):
     check("실사용 정기 detect: 이미 돌린 입력이면 건너뜀 · 실행 기록 안 남김(다음 확인에 다시 봄)",
           sk.get("skipped") == "same_input" and len(svc.runs(limit=500)) == n_runs and "2026-W44" in sk["summary"][-1], sk)
     check("새 주 입력은 아직 안 돌린 것으로 본다", svc._ran_input("2026-W44") and not svc._ran_input("2026-W45"))
+    # HYO-162 — 정기 실행은 만든 지 오래된 입력이면 건너뛴다(11/2: 안 돌린 6일 묵은 W44) · 손 실행은 막지 않는다
+    age = svc._input_age_hours()
+    check("입력 나이 = radar-snapshots에 커밋된 시각부터 (관문 기준이 없는 예전 입력)", age is not None and 0 <= age < 1, age)
+    ran, cap = svc._ran_input, service.FEED_MAX_AGE_H
+    try:
+        svc._ran_input, service.FEED_MAX_AGE_H = (lambda week: False), -1
+        st = svc.run("detect", trigger="schedule")
+    finally:
+        svc._ran_input, service.FEED_MAX_AGE_H = ran, cap
+    check("실사용 정기 detect: 오래된 입력이면 건너뜀 · 실행 기록 안 남김", st.get("skipped") == "stale_input" and len(svc.runs(limit=500)) == n_runs
+          and "정기 실행은 건너뛴다" in st["summary"][-1], st)
     again = c.post("/runs/detect", json={}).json()
     check("실사용 손 detect: 거부한 소식은 다시 안 올림 (실사용은 늘 켜짐)", again["ok"] and rows[1]["technology"] not in {d["technology"] for d in again["drafts"]}
           and any("이전에 거부한 소식" in e["reason"] for e in again["excluded"]), again)
+    check("실사용 detect: 실행 직전에 지금 기준을 만든다 · 입력에 관문 기준이 없으면 대조하지 않는다고 말한다 (HYO-162)",
+          svc.basis_now and os.path.exists(svc.basis_now) and svc.env().get("RADAR_BASIS_NOW") == svc.basis_now
+          and any(x.startswith("판정 기준:") and "대조하지 않는다" in x for x in again["summary"]), again["summary"])
     head = _git(adr_remote, "rev-parse", "main")
 
     # revisit — 기록용 칸만 승인 없이 커밋, 충족 알림은 Inbox로

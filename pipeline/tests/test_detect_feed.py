@@ -149,6 +149,18 @@ def test_refuses_run_without_gate():
         raise AssertionError("관문 없는 run을 받아들였다")
 
 
+def test_basis_moves_with_feed():
+    """관문의 판정 기준(HYO-162)은 run 폴더 → detect 입력 폴더로 그대로 옮긴다. 없으면 만들지 않는다 (예전 run)."""
+    tmp = tempfile.mkdtemp(prefix="detect-feed-")
+    run = make_run(tmp)
+    b = {"made_at": "2026-10-27T16:30:00+09:00", "repos": [{"repo": "app", "source": "remote", "commit": "abc", "versions": {"acme-sdk": ["1.0"]}}]}
+    (run / "basis.json").write_text(json.dumps(b), encoding="utf-8")
+    detect_feed.build(run, Path(tmp) / "out")
+    assert json.loads((Path(tmp) / "out" / "basis.json").read_text(encoding="utf-8")) == b
+    out, _ = built()
+    assert not (out / "basis.json").exists()
+
+
 TESTS = [(n, f) for n, f in globals().items() if n.startswith("test_")]
 
 

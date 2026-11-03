@@ -58,6 +58,7 @@ from radar.revisit import revisit  # noqa: E402
 from radar.stub_model import StubChat  # noqa: E402
 from common import ops  # noqa: E402
 from pipeline.detect_feed import funnel_line, url_key  # noqa: E402
+from pipeline import basis  # noqa: E402
 from pipeline import topic_hier  # noqa: E402
 from pipeline.importance.card_action import card_action  # noqa: E402
 from common.core import SKILL_RADAR, Ctx, RadarError, radar  # noqa: E402
@@ -91,6 +92,7 @@ ENGINES = ("claude-cli", "api")
 SNAPSHOT_REPO_DEFAULT = os.path.join(os.path.dirname(REPO), "radar-snapshots")
 DETECT_FEEDS = "detect"  # radar-snapshots/detect/<주차>/ — 수집 PC가 관문 → detect 입력까지 만들어 push한다
 REVISIT_FEEDS = "revisit"  # radar-snapshots/revisit/<주차>/ — 같은 주 ADR source_hint 문서 + detect 입력 (HYO-159)
+FEED_MAX_AGE_H = 72  # 정기 detect가 따라 돌 입력의 나이 상한 — 화 16:00 판정 → 금 오후까지. 넘으면 다음 주 입력을 기다린다 (HYO-162)
 
 
 class ServiceError(Exception):
@@ -332,6 +334,8 @@ class RadarService:
             "LANGSMITH_TRACING": "false", "LANGCHAIN_TRACING_V2": "false",
             "PYTHONIOENCODING": "utf-8", "TEMP": self.tmp, "TMP": self.tmp, "TMPDIR": self.tmp,
         })
+        if getattr(self, "basis_now", None):  # detect 직전에 만든 지금 기준 (HYO-162) — product detect가 입력의 관문 기준과 대조한다
+            env["RADAR_BASIS_NOW"] = self.basis_now
         # 거부한 소식을 detect가 다시 올리나 (HYO-142) — 실사용은 늘 안 올린다. 스텁·데모는 같은 초안을 다시 띄워 알림을 시험하려고 올린다(바꿀 수 있다)
         if self.mode == "real":
             env["RADAR_DETECT_RESURFACE"] = "0"
@@ -1284,6 +1288,15 @@ class RadarService:
                             # 정기 실행이 다음 확인(5분)에 다시 본다 — 새 입력이 push되면 그때 돈다. 손 실행은 막지 않는다
                             return {**res, "skipped": "same_input",
                                     "summary": notes + [f"입력 {res['input']}은 이미 돌렸다 — 새 주 입력을 기다린다"]}
+                        age = self._input_age_hours()
+                        if trigger == "schedule" and age is not None and age > FEED_MAX_AGE_H:
+                            # 놓친 칸을 늦게 따라 돌 때 — 관문이 판정한 지 오래된 입력이다 (11/2: 6일 묵은 W44, HYO-162). 위와 같이 기록 없이
+                            # 다음 확인에 다시 본다 — 새 주 입력이 오면 그때 돈다. 손 실행은 막지 않는다
+                            return {**res, "skipped": "stale_input",
+                                    "summary": notes + [f"입력 {res['input']}은 만든 지 {age:.0f}시간 — {FEED_MAX_AGE_H}시간이 넘어 정기 실행은 건너뛴다. 새 주 입력을 기다린다"]}
+                        notes += self._basis_now()
+                        if self.basis_now:  # ctx는 실행 앞머리에 떴다 — 방금 만든 지금 기준을 넣는다
+                            ctx.env["RADAR_BASIS_NOW"] = self.basis_now
                     if self.shadow:  # 주 실행이 ADR을 바꾸기 전에 떠 둔다 — 그림자도 같은 입력을 본다
                         shadow = self._shadow_prepare(res["id"], ctx.env["RADAR_SNAPSHOT_DIR"])
                 queued = {q["item"] for q in hitl.review_queue(ctx)} if flow == "detect" else None
@@ -1381,6 +1394,30 @@ class RadarService:
         with self._shadow_lock, open(os.path.join(self.data_dir, SHADOW_FILE), "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         return rec
+
+    def _input_age_hours(self):
+        """detect 입력을 만든 지 몇 시간 — 관문 판정 기준(basis.json)의 made_at, 없으면(예전 입력) radar-snapshots에 커밋된 시각. 모르면 None."""
+        made = (basis.load(os.path.join(self.snapshot_dir, basis.BASIS)) or {}).get("made_at")
+        if not made:
+            made = _git(self.snapshot_repo, "log", "-1", "--format=%cI", "--", os.path.join(self.snapshot_dir, "feed.json"))
+        try:
+            return (dt.datetime.now().astimezone() - dt.datetime.fromisoformat(made)).total_seconds() / 3600
+        except (TypeError, ValueError):
+            return None
+
+    def _basis_now(self):
+        """detect 직전 — 대상 레포를 원격 HEAD로 맞춰 지금 기준을 만든다 (HYO-162). product detect가 입력의 관문 기준과 대조한다 → 요약 줄."""
+        self.basis_now = None
+        try:
+            _derived, b = basis.materialize(self.targets, os.path.join(self.data_dir, "targets"))
+        except Exception as e:  # 기준을 못 만들어도 detect는 돈다 — 대조만 빠진다
+            return [f"지금 기준을 못 만들었다 ({type(e).__name__}: {str(e)[:120]}) — 이미 반영된 릴리스를 거르지 않는다"]
+        path = os.path.join(self.data_dir, "targets", "basis-now.json")
+        basis.write(b, path)
+        self.basis_now = path
+        if not os.path.exists(os.path.join(self.snapshot_dir, basis.BASIS)):
+            return [basis.summary_line(b) + " · 입력에 관문 기준이 없어(예전 입력) 대조하지 않는다"]
+        return [basis.summary_line(b)]
 
     def _ran_input(self, week):
         """이 detect 입력(주차)으로 끝까지 돈 detect가 있나 — 예전 기록은 요약 첫 줄의 「입력 <주차>」로 본다."""

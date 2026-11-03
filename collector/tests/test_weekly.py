@@ -118,6 +118,36 @@ def test_order_and_args():
     assert arg(rv, "--out") == str(w.snaps / "revisit" / WEEK)
 
 
+def test_targets_remote_head_and_basis():
+    """HYO-162 — 등급·관문은 원격 HEAD 사본을 가리키는 대상 목록을 받고, 관문 뒤 run 폴더에 판정 기준이 남는다."""
+    w = World()
+    bare, app = w.tmp / "app.git", w.tmp / "app"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True)
+    subprocess.run(["git", "clone", "-q", str(bare), str(app)], check=True, capture_output=True)
+    World._cfg(app)
+    (app / "package.json").write_text(json.dumps({"dependencies": {"electron": "^45.0.0"}}), encoding="utf-8")
+    git(app, "add", "-A")
+    git(app, "commit", "-q", "-m", "app")
+    git(app, "push", "-q", "origin", "HEAD:main")
+    Path(w.env["RADAR_TARGETS"]).write_text(json.dumps([{"repo": "app", "path": "app"}]), encoding="utf-8")
+    rc, _ = w.go("--no-push")
+    assert rc == 0, rc
+    derived = str(w.out / "targets" / "radar-targets.json")
+    assert arg(w.calls[2], "--targets") == derived and arg(w.calls[3], "--targets") == derived, w.calls[2:4]
+    b = json.loads((w.pout / WEEK / "basis.json").read_text(encoding="utf-8"))
+    assert b["repos"][0]["source"] == "remote" and b["repos"][0]["commit"] == git(bare, "rev-parse", "main").strip(), b
+    assert b["repos"][0]["versions"] == {"electron": ["45.0.0"]}
+    assert w.summary()["targets"].startswith("판정 기준: 원격 HEAD 1개"), w.summary()
+
+
+def test_targets_unreadable_keeps_original():
+    w = World()  # RADAR_TARGETS 파일이 없다 — 예전처럼 원래 경로로 돌고 그렇다고 남긴다
+    rc, out = w.go("--no-push")
+    assert rc == 0 and arg(w.calls[3], "--targets") == w.env["RADAR_TARGETS"]
+    assert "대상 목록을 못 읽었다" in w.summary()["targets"] and "[targets]" in out
+    assert not (w.pout / WEEK / "basis.json").exists()
+
+
 def test_gate_override():
     w = World()
     w.go("--no-push", "--gate", "stub")
@@ -283,7 +313,7 @@ def test_summary_shape():
     w = World()
     w.go("--no-push")
     s = w.summary()
-    assert set(s) == {"week", "started", "finished", "steps"} and s["week"] == WEEK
+    assert set(s) == {"week", "started", "finished", "steps", "targets"} and s["week"] == WEEK
     assert [x["name"] for x in s["steps"]] == weekly.STEPS
     assert all(set(x) == {"name", "ok", "skipped", "seconds", "detail"} for x in s["steps"])
 

@@ -117,5 +117,21 @@ with tempfile.TemporaryDirectory() as td:
           and skipped == [{"technology": "vLLM", "adr": "0012"}], (kept, skipped))
     check("R14 대응형: 이전 대응 ADR이 related로 초안에 간다", [r["id"] for r in kept[0]["related"]] == ["0012"] if kept else False)
 
+# HYO-162: 관문 판정 뒤 이미 반영된 릴리스는 모델에 넘기기 전에 코드가 뺀다 — 입력 폴더의 basis.json(관문 기준) × RADAR_BASIS_NOW(지금 기준)
+sys.path.append(os.path.dirname(os.path.dirname(HERE)))  # 레포 루트 — drop_applied가 pipeline.basis를 늦게 부른다
+from types import SimpleNamespace  # noqa: E402
+with tempfile.TemporaryDirectory() as td:
+    feed = [{"url": "u45", "package": "electron", "version": "v45.0.0"}, {"url": "u46", "package": "electron", "version": "v46.0.0"}]
+    gate_basis = {"repos": [{"repo": "decision-radar", "commit": "a" * 40, "versions": {"electron": ["39.2.6"]}}]}
+    now_basis = {"repos": [{"repo": "decision-radar", "commit": "b" * 40, "versions": {"electron": ["45.0.0"]}}]}
+    json.dump(gate_basis, open(os.path.join(td, "basis.json"), "w", encoding="utf-8"))
+    json.dump(now_basis, open(os.path.join(td, "now.json"), "w", encoding="utf-8"))
+    keep, out = detect_ops.drop_applied(SimpleNamespace(env={"RADAR_SNAPSHOT_DIR": td, "RADAR_BASIS_NOW": os.path.join(td, "now.json")}), feed)
+    check("HYO-162: 관문 기준 39 → 지금 45 · v45.0.0은 「이미 반영됨」, v46은 남는다",
+          [e["url"] for e in keep] == ["u46"] and [e["url"] for e in out] == ["u45"] and out[0]["reason"].startswith("이미 반영됨"), (keep, out))
+    no_now = detect_ops.drop_applied(SimpleNamespace(env={"RADAR_SNAPSHOT_DIR": td}), feed)
+    no_gate = detect_ops.drop_applied(SimpleNamespace(env={"RADAR_SNAPSHOT_DIR": os.path.join(td, "x"), "RADAR_BASIS_NOW": os.path.join(td, "now.json")}), feed)
+    check("HYO-162: 기준이 하나라도 없으면 아무것도 안 뺀다 (예전 입력 · eval 픽스처)", no_now == (feed, []) and no_gate == (feed, []), (no_now, no_gate))
+
 print(f"\n{'FAILED ' + str(len(fails)) if fails else 'all passed'}")
 sys.exit(1 if fails else 0)

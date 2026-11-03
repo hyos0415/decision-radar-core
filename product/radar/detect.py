@@ -3,7 +3,7 @@
   load ─▶ triage ─▶ screen ─Send로 후보마다─▶ draft ─▶ write ─▶ (validate 실패가 있으면) repair ─▶ report
   (코드)  (모델)    (코드)                    (모델)   (코드)                              (모델+코드)
 
-  load    대상 repo의 CLAUDE.md·manifest 읽기 + 소식 수집(radar.py snapshot feed)
+  load    대상 repo의 CLAUDE.md·manifest 읽기 + 소식 수집(radar.py snapshot feed). 거부한 소식(HYO-142)·이미 반영된 릴리스(HYO-162)는 코드가 뺀다
   triage  모델이 소식을 거른다 — 후보(technology·affected·dependency)와 버린 것(이유). 의존성 릴리스는 breaking·security·major만 (A5b)
   screen  R10(affected 하나 이상·실재 repo)과 R14(기존 ADR과 겹침 → skipped_existing)를 **코드가** 집행한다. 겹침 판정은 radar.py match
   draft   모델이 후보마다 초안 서술(title·use·context·decision·evidence·revisit_when)을 쓴다. 병렬
@@ -38,7 +38,7 @@ class DetectState(TypedDict, total=False):
     now: str
     stack: str
     feed: list
-    rejected: list  # 사람이 전에 거부한 소식 — 모델에 넘기지 않고 excluded 앞에 붙인다 (HYO-142)
+    rejected: list  # 모델에 넘기지 않고 excluded 앞에 붙이는 소식 — 사람이 전에 거부한 것(HYO-142) · 관문 판정 뒤 이미 반영된 것(HYO-162)
     excluded: list
     kept: list
     skipped: list
@@ -65,7 +65,8 @@ def detect_graph(ctx, model):
         ctx.now, ctx.calls = state["now"], 0
         run["id"] = f"detect-{state['now']}-{uuid.uuid4().hex[:8]}"  # 이 실행의 초안들이 같이 갖는 기록 — 같은 실행의 내보내기를 지문에서 넘기는 근거 (hitl._own_exports)
         feed, rejected = detect_ops.drop_rejected(ctx, detect_ops.snapshot_feed(ctx))
-        return {"stack": detect_ops.read_stack(ctx), "feed": feed, "rejected": rejected}
+        feed, applied = detect_ops.drop_applied(ctx, feed)
+        return {"stack": detect_ops.read_stack(ctx), "feed": feed, "rejected": rejected + applied}
 
     async def triage_node(state):
         feed, rejected = state["feed"], state.get("rejected") or []

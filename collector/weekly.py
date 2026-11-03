@@ -8,6 +8,8 @@
           · 게시: radar-snapshots에 detect/<주>/가 이미 커밋돼 있으면 「이미 만듦」 — 덮어쓰지 않는다 (얼린 주를 고치지 않는 것과 같다).
             관문(유료 API)도 그 경우엔 돌리지 않는다. revisit/<주>/도 같다 — 이미 커밋돼 있으면 다시 받지 않고, detect만 커밋된 주에는 revisit만 더한다.
 게시 경로 radar-snapshots/detect/<YYYY-Www>/feed.json 은 데스크톱 앱(desktop/backend/service.py _latest_feed)과의 고정 계약이다.
+대상 레포 (HYO-162): 등급·관문은 작업 사본 대신 각 레포의 원격 기본 브랜치 HEAD를 읽는다(pipeline.basis — collector/out/targets/에 얕은 clone).
+          관문의 판정 기준(레포별 커밋·우리 버전)은 run 폴더의 basis.json → detect/<주>/basis.json으로 같이 게시된다. 원격을 못 읽은 레포는 작업 사본으로 읽고 요약에 남긴다.
 출력: collector/out/last-weekly-steps.log (단계 출력, 이어 쓰기) · last-weekly.json (요약). 종료 코드 0 = 멈춘 실패 없음.
 예약 작업의 콘솔 출력(last-weekly.log)과 파일을 나눈다 — Windows는 PowerShell이 `*>`로 잡고 있는 파일에 자식이 쓰면 PermissionError다.
 """
@@ -24,6 +26,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from collector import snapshot  # noqa: E402
+from pipeline import basis  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 STEP_LOG = "last-weekly-steps.log"  # 예약 작업 콘솔 로그(last-weekly.log)와 달라야 한다 — 위 머리말
@@ -107,15 +110,28 @@ def publish(repo, week, no_push):
     return True, msg
 
 
-def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None):
+def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None, materialize=basis.materialize):
     p = paths(env, root)
     out_dir = Path(out_dir or Path(root) / "collector" / "out")
     out_dir.mkdir(parents=True, exist_ok=True)
     log = out_dir / STEP_LOG
     gate = a.gate or (os.environ if env is None else env).get("RADAR_GATE") or DEFAULT_GATE
     start = STEPS.index(a.start)
-    summary = {"week": a.week, "started": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "finished": None, "steps": []}
+    summary = {"week": a.week, "started": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "finished": None, "steps": [],
+               "targets": None}  # 판정 기준 한 줄 — 등급·관문을 안 돌렸으면 None
     state = {"stopped": False, "done": False}
+
+    def targets():
+        """등급·관문이 읽을 대상 목록 — 처음 부를 때 한 번 원격 HEAD로 맞춘다. 못 맞추면 원래 targets (요약 targets에 이유)."""
+        if "targets" not in state:
+            try:
+                derived, b = materialize(p["targets"], out_dir / "targets")
+            except Exception as e:  # 판정 기준을 못 만들어도 사슬은 돈다 — 예전처럼 작업 사본으로
+                derived, b = None, {"repos": [], "error": f"{type(e).__name__}: {str(e)[:200]}"}
+            state["targets"], state["basis"] = derived, b
+            summary["targets"] = basis.summary_line(b)
+            print(f"[targets] {summary['targets']}")
+        return state["targets"] or p["targets"]
 
     def record(name, ok, detail="", skipped=False, t0=None):
         summary["steps"].append({"name": name, "ok": ok, "skipped": skipped, "seconds": round(time.time() - t0, 1) if t0 else 0, "detail": detail})
@@ -142,7 +158,7 @@ def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None
                 stop("얼림 실패 — 이후 단계를 하지 않는다")
         elif name == "tiers":
             rc = runner("pipeline.importance", ["weekly-tiers", "--report", str(out_dir / "last-tiers.json"),
-                                                "--tiers", str(p["tiers"]), "--targets", str(p["targets"])], log)
+                                                "--tiers", str(p["tiers"]), "--targets", str(targets())], log)
             record(name, rc == 0, f"종료 코드 {rc}" + (" — 계속" if rc else ""), t0=t0)
         else:
             if not summary["week"]:
@@ -171,10 +187,12 @@ def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None
                     record(name, False, f"얼린 주 폴더가 없다: {p['snapshots'] / week}", t0=t0)
                     stop("관문 입력이 없다")
                     continue
-                rc = runner("pipeline.profile_filter", gate_args(p["snapshots"] / week, gate, p, run_out), log)
+                rc = runner("pipeline.profile_filter", gate_args(p["snapshots"] / week, gate, {**p, "targets": targets()}, run_out), log)
                 record(name, rc == 0, f"백엔드 {gate}" if rc == 0 else f"관문({gate}) 실패, 종료 코드 {rc} — OPENAI_API_KEY(.env) · 모델 이름 · {log} 를 본다", t0=t0)
                 if rc != 0:
                     stop("관문 실패 — feed·게시를 하지 않는다")
+                elif state["targets"]:  # 관문이 읽은 기준 — detect_feed가 detect/<주>/로 옮긴다
+                    basis.write(state["basis"], run_out / basis.BASIS)
             elif name == "feed":
                 if state["done"]:
                     record(name, True, "이미 만듦", skipped=True)
