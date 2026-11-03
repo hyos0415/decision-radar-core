@@ -82,6 +82,8 @@ python collector/tests/test_snapshot.py                # 오프라인 테스트
 
 **manifest는 git이 추적하는 파일만 읽는다** (HYO-122, `stack.py`) — 수집기(package.json)와 관문(`pipeline/importance`, requirements·package.json·Dockerfile·compose)이 같은 리더를 쓴다. 미추적·ignored 사본(`.dev-data-*` 등)과 `.claude`·`node_modules` 같은 폴더는 안 읽는다. 다른 사람의 사본이 레포 안에 추적돼 있으면 대상 항목에 `"exclude": ["desktop/backend/profiles"]`(root 기준 경로·폴더·glob)를 적는다 (`radar-targets.json` · `targets-collect-only.json` 둘 다). git이 아닌 폴더는 걸어서 읽고 `run.json`의 `github.dependencies.manifests`에 모드(`git`|`walk`)와 뺀 파일을 남긴다.
 
+**등급·관문은 내 스택을 원격 기본 브랜치 HEAD로 읽는다** (HYO-162, `pipeline/basis.py`) — 주간 사슬이 대상마다 `origin`을 `collector/out/targets/repos/<repo>`에 얕게 clone해 두고 맞춘 뒤, 그 사본을 가리키는 대상 목록을 `weekly-tiers`·`profile_filter`에 넘긴다. 작업 사본(다른 브랜치·커밋 안 한 변경·묵은 clone)이 판정에 섞이지 않는다. 원격을 못 읽은 레포는 작업 사본으로 읽고 `last-weekly.json`의 `targets` 줄에 이유를 남긴다. 관문이 읽은 기준(레포별 커밋 · 우리 버전)은 `detect/<주>/basis.json`으로 같이 게시되고, 데스크톱 detect가 실행 직전의 원격 HEAD와 대조해 그 사이 이미 반영된 릴리스를 「이미 반영됨」으로 뺀다. 수집 단계(`collector.run`)는 예전처럼 작업 사본을 읽는다.
+
 ## 첫 실행에서 고친 것 (2026-10-02)
 
 - PyPI `project_urls`의 첫 GitHub 링크가 **후원 페이지**(`github.com/sponsors/…`)인 패키지가 있었다(pydantic·uvicorn) → 키 우선순위(Source·Repository 먼저) + 소유자 `sponsors` 제외

@@ -4,6 +4,7 @@
 """
 
 import json
+import os
 
 from common import ops
 from common.core import radar
@@ -31,6 +32,20 @@ def drop_rejected(c, feed):
         else:
             keep.append(it)
     return keep, out
+
+
+def drop_applied(c, feed):
+    """관문 판정 뒤 대상 레포에 이미 반영된 의존성 릴리스를 모델에 넘기기 전에 뺀다 (HYO-162) → (남은 소식, excluded 줄). 코드가 집행한다 (규율 1).
+    관문 기준 = 입력 폴더의 basis.json(수집 PC가 판정한 커밋·버전), 지금 기준 = env RADAR_BASIS_NOW(앱이 실행 직전에 원격 HEAD로 만든 것).
+    둘 중 하나라도 없으면 아무것도 빼지 않는다 — 예전 입력·eval 픽스처는 그대로 돈다."""
+    snap, now_path = c.env.get("RADAR_SNAPSHOT_DIR"), c.env.get("RADAR_BASIS_NOW")
+    if not snap or not now_path or not os.path.exists(os.path.join(snap, "basis.json")):
+        return feed, []
+    from pipeline import basis  # 늦게 — 판정 기준이 있을 때만 수집 파이프라인을 부른다
+    old, new = basis.load(os.path.join(snap, basis.BASIS)), basis.load(now_path)
+    if not old or not new:
+        return feed, []
+    return basis.applied(feed, old, new)
 
 
 MANIFESTS = ("requirements.txt", "package.json")

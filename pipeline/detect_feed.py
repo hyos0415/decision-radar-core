@@ -11,6 +11,8 @@
   search.json  빈 목록 (snapshot search는 질의를 무시한다 — 알려진 병목)
   funnel.json  건수 (수집 → 레인 A → 관문 남김 → 표시). 실행 요약 한 줄의 재료
   gate.json    url → 왜 남았나(관문 kept_by). detect 입력에는 넣지 않는다 — 모델 판단을 흔들지 않게 화면(HYO-85)만 읽는다
+  basis.json   관문의 판정 기준 — 대상 레포별 커밋·우리 버전 (pipeline.basis, HYO-162). run 폴더에 있으면 그대로 옮긴다.
+               detect가 지금 기준과 대조해 이미 반영된 릴리스를 뺀다 (모델에는 안 보인다)
 
 무엇을 넣나: 관문이 남기고(keep) 주당 상한(5/N) 안에 든 것(shown)만. `--all-kept`면 상한에 잘린 것까지.
 버린 이유(결정표의 행)는 여기 옮기지 않는다 — `lane_a.json`·`gate-calls.jsonl`에 이미 있다 (깔때기 화면은 만들지 않는다, 10/8).
@@ -21,6 +23,7 @@ import re
 import sys
 from pathlib import Path
 
+from .basis import BASIS
 from .importance import policy
 from .profile_filter import read_items, write_json
 
@@ -133,6 +136,8 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
     write_json(out / "search.json", [])
     write_json(out / "funnel.json", f)
     write_json(out / "gate.json", why)
+    if (run_dir / BASIS).exists():
+        (out / BASIS).write_bytes((run_dir / BASIS).read_bytes())
     return f
 
 
