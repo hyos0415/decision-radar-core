@@ -47,6 +47,11 @@ SEVERITY_REST = 4
 WEEKLY_LIMIT = 5
 # 상한의 첫 바퀴에서 기술 하나가 차지할 수 있는 칸 (§4 변경 2026-10-27, HYO-147 — W44에 Electron 한 보안 수정 묶음이 5칸을 다 가져갔다)
 PER_TECH = 1
+# 질의별 top-k (§4 변경 2026-11-04, 사용자 — HYO-168, query-topk.md). "weekly5"면 위의 5칸 상한(2026-11-04 전 동작)
+CAP_MODE = "topk"
+TOPK = 3
+# 「항상」 칸 — 이 종류로 남긴 것은 몇 건이든 보이고 detect로 간다 (순위·몫 밖, 사용자 11/4 「아묻따 항상」)
+ALWAYS_CHANGES = ("security", "eol", "model_retirement")
 
 # 관문이 판정 못 한 비율 경고 (HYO-122 ⑤ — 592건이 요약에 안 보이고 조용히 빠졌다). (모르는 기술 + 분류 불가) / (레인 A − 팀원 스택)이 넘으면 경고.
 # 잠정 (2026-10-15, 사용자 — 아직 재 보지 않은 첫 제안. 고치기 전 W42 ≈ 81%). HYO-122 PR 4 뒤 W42(+W41)를 다시 돌려 정상 비율을 보고
@@ -165,6 +170,35 @@ def apply_cap(entries, limit=WEEKLY_LIMIT, per_tech=None):
     shown = [e for i, e in enumerate(ordered) if i in picked]
     cut = [e for i, e in enumerate(ordered) if i not in picked]
     return shown, cut, f"{len(shown)}/{len(ordered)}"
+
+
+def is_always(entry):
+    return any(r["change"] in ALWAYS_CHANGES for r in entry["kept_by"])
+
+
+def apply_topk(entries, k=None):
+    """남긴 후보 → 질의별 top-k (§4 변경 2026-11-04). entries는 {"id", "kept_by", ...}.
+    「항상」(보안 · 우리 버전 EOL · 모델 은퇴)은 몫 밖에서 전부 목록 · detect. 나머지는 기술(cap_technology)마다 정렬 순서로
+    k개까지 목록, 1위만 detect. → {"always", "listed"(항상 포함, 정렬 순서), "detect", "cut", "rank": {id: 기술 안 순위}, "query": {id: 기술}}"""
+    k = TOPK if k is None else k
+    ordered = sorted(entries, key=rank_key)
+    always = [e for e in ordered if is_always(e)]
+    used, rank, query, listed_ids, detect_ids = {}, {}, {}, {e["id"] for e in always}, {e["id"] for e in always}
+    for e in ordered:
+        t = cap_technology(e)
+        query[e["id"]] = t if isinstance(t, str) else None
+        if e["id"] in listed_ids:
+            continue
+        n = used.get(t, 0) + 1
+        used[t] = n
+        rank[e["id"]] = n
+        if n <= k:
+            listed_ids.add(e["id"])
+        if n == 1:
+            detect_ids.add(e["id"])
+    return {"always": always, "listed": [e for e in ordered if e["id"] in listed_ids],
+            "detect": [e for e in ordered if e["id"] in detect_ids], "cut": [e for e in ordered if e["id"] not in listed_ids],
+            "rank": rank, "query": query}
 
 
 def gate_counts(entries, warn_ratio=None):

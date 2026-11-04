@@ -180,6 +180,27 @@ def test_cap_one_slot_per_technology_then_fill():
     assert policy.cap_technology(_cand("y", "L4", "security")) != policy.cap_technology(_cand("z", "L4", "security"))   # 기술 없는 옛 기록은 따로
 
 
+def test_topk_always_then_per_technology():
+    # §4 변경 2026-11-04 (HYO-168): 「항상」(보안 · 우리 버전 EOL · 모델 은퇴)은 몇 건이든 · 기술마다 top-3 목록 · 1위만 detect
+    w44 = [_tcand(f"electron@v{v}", "L1", "security", "electron") for v in ("42.11.16", "43.8.1", "44.9.1", "45.0.0-beta.6")]
+    w44 += [_tcand("electron@v45.0.0", "L1", "breaking", "electron"), _tcand("electron@v45.0.0-beta.7", "L1", "deprecation", "electron"),
+            _tcand("electron@v45.1.0", "L1", "major", "electron"), _tcand("electron@v45.2.0", "L1", "major", "electron"),
+            _tcand("openai:deprecations", "L2", "model_retirement", "gpt-6-luna"), _tcand("bedrock:pricing", "L2", "pricing", "Amazon Bedrock"),
+            _tcand("anthropic:a", "L5", "breaking", "anthropic"), _tcand("anthropic:b", "L5", "deprecation", "anthropic"),
+            _tcand("anthropic:c", "L5", "major", "anthropic"), _tcand("anthropic:d", "L5", "major", "anthropic")]
+    r = policy.apply_topk(w44)
+    always = [e["id"] for e in r["always"]]
+    assert always == ["electron@v42.11.16", "electron@v43.8.1", "electron@v44.9.1", "electron@v45.0.0-beta.6", "openai:deprecations"], always
+    # electron: 보안 4건은 「항상」이라 몫을 안 쓴다 → 나머지 4건 중 top-3 목록, 1위(breaking)만 detect
+    assert [r["rank"][i] for i in ("electron@v45.0.0", "electron@v45.0.0-beta.7", "electron@v45.1.0", "electron@v45.2.0")] == [1, 2, 3, 4]
+    listed = {e["id"] for e in r["listed"]}
+    assert "electron@v45.1.0" in listed and "electron@v45.2.0" not in listed and "anthropic:d" not in listed
+    assert {e["id"] for e in r["detect"]} == set(always) | {"electron@v45.0.0", "bedrock:pricing", "anthropic:a"}, [e["id"] for e in r["detect"]]
+    assert {e["id"] for e in r["cut"]} == {"electron@v45.2.0", "anthropic:d"}
+    assert len(r["listed"]) == 5 + 3 + 1 + 3 and r["query"]["anthropic:b"] == "anthropic"
+    assert policy.apply_topk(w44, k=1)["listed"] == policy.apply_topk(w44, k=1)["detect"]          # k=1이면 목록 = detect
+
+
 # ---------------------------------------------------------------- 등급: 신호 · 검증 · 저장
 
 def _write(p, text):
@@ -838,14 +859,23 @@ def test_lane_a_gate_wiring_and_cap():
     assert all(e["gate_status"] == "ok" and e["gate"] is not None for e in a.values())
     assert a["m"]["gate"]["keep"] is False and a["m"]["shown"] is None
     summ = res["gate_summary"]
-    assert summ["total_kept"] == 9 and summ["label"] == "5/9" and len(summ["truncated"]) == 4
-    assert summ["shown"][0]["id"] == "s"                                                     # security가 같은 L3·L4 중 가장 먼저 (L3 행이 더 높은 등급)
-    # 기술당 1칸 먼저 (§4 변경 2026-10-27): pydantic 7건이 칸을 다 채우지 않고 fastapi가 들어온다 — 남은 칸은 pydantic으로
-    assert [(x["id"], x["technology"]) for x in summ["shown"]] == [("s", "langfuse"), ("d0", "pydantic"), ("d1", "pydantic"), ("d2", "pydantic"),
-                                                                   ("f", "fastapi")], summ["shown"]
-    assert summ["per_tech"] == 1
+    # 질의별 top-3 (§4 변경 2026-11-04, HYO-168): security는 「항상」, 기술마다 top-3 목록 · 1위만 detect
+    assert summ["mode"] == "topk" and summ["total_kept"] == 9 and summ["label"] == "3/9 · 목록 5", summ["label"]
+    assert [x["id"] for x in summ["always"]] == ["s"]
+    assert [(x["id"], x["rank"]) for x in summ["listed"]] == [("s", None), ("d0", 1), ("d1", 2), ("d2", 3), ("f", 1)], summ["listed"]
+    assert [x["id"] for x in summ["shown"]] == ["s", "d0", "f"], summ["shown"]
+    assert {c["id"] for c in summ["truncated"]} == {"d3", "d4", "d5", "d6"}
+    assert a["s"]["always"] is True and a["d1"]["listed"] is True and a["d1"]["shown"] is False and a["d3"]["listed"] is False
+    assert a["d0"]["query"] == "pydantic" and a["f"]["rank"] == 1
+    # 예전 동작(weekly5): 5/N · 기술당 1칸 먼저 (§4 변경 2026-10-27) — pydantic 7건이 칸을 다 채우지 않고 fastapi가 들어온다
+    summ5 = gate_mod.cap_lane_a(res["lane_a"], 5, mode="weekly5")
+    assert summ5["total_kept"] == 9 and summ5["label"] == "5/9" and len(summ5["truncated"]) == 4
+    assert summ5["shown"][0]["id"] == "s"                                                    # security가 같은 L3·L4 중 가장 먼저 (L3 행이 더 높은 등급)
+    assert [(x["id"], x["technology"]) for x in summ5["shown"]] == [("s", "langfuse"), ("d0", "pydantic"), ("d1", "pydantic"), ("d2", "pydantic"),
+                                                                    ("f", "fastapi")], summ5["shown"]
+    assert summ5["per_tech"] == 1
     assert sum(1 for e in a.values() if e["shown"] is True) == 5 and sum(1 for e in a.values() if e["shown"] is False) == 4
-    assert {c["id"] for c in summ["truncated"]} <= {e["id"] for e in a.values() if e["shown"] is False}
+    assert {c["id"] for c in summ5["truncated"]} <= {e["id"] for e in a.values() if e["shown"] is False}
     assert [(k["tier"]) for k in a["s"]["gate"]["kept_by"]] == ["L3", "L5"]                  # 두 등급 모두 기록
     # 관문 없이는 예전 그대로
     res0 = profile_filter.run_filter(items, _profile(), ["kw"])
@@ -2061,6 +2091,10 @@ def mutations():
         ("상한: 기술 대신 항목마다 따로 셈", [(policy, "cap_technology", lambda e: e["id"])], test_cap_one_slot_per_technology_then_fill),
         ("상한: 남은 칸을 안 채움", [(policy, "apply_cap", _cap_no_fill)], test_cap_one_slot_per_technology_then_fill),
         ("상한: 기술당 칸 제한 없음 (관문 배선)", [(policy, "PER_TECH", 0)], test_lane_a_gate_wiring_and_cap),
+        ("top-k: 「항상」 칸 없음 (보안도 몫 경쟁)", [(policy, "ALWAYS_CHANGES", ())], test_topk_always_then_per_technology),
+        ("top-k: k를 무시 (전부 목록)", [(policy, "TOPK", 99)], test_topk_always_then_per_technology),
+        ("top-k: 기술 대신 항목마다 따로 셈", [(policy, "cap_technology", lambda e: e["id"])], test_topk_always_then_per_technology),
+        ("top-k: 관문 배선이 예전 5칸으로", [(policy, "CAP_MODE", "weekly5")], test_lane_a_gate_wiring_and_cap),
         ("채점이 오류·분류 불가 상태를 무시", [(evaluate, "score_run", _score_status_ignored)], test_score_run_by_hand),
         ("허용 호스트를 넓힘", [(agents_backend, "ALLOWED_HOSTS", {"api.openai.com", "telemetry.example.invalid"})], test_netguard_blocks_outside_api_openai_and_stops_without_retry),
         ("개발 경로가 최우선이 아님 (떠 있는 태그·민감이 되살림)", [(policy, "cell", _dev_not_first)], test_dev_path_is_top_priority),
