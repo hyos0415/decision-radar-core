@@ -41,6 +41,18 @@ def test_version_of():
     assert sl.version_of("새 모델") is None
 
 
+def test_write_deny_rules():
+    # 리뷰 11/4 F1: 대상 레포는 읽기만 — Claude Code 권한 규칙의 절대 경로는 `//`로 시작
+    if sys.platform == "win32":
+        assert sl.write_deny(["C:\\Users\\me\\repo\\"]) == ["Edit(//c/Users/me/repo/**)", "Write(//c/Users/me/repo/**)"]
+    else:
+        assert sl.write_deny(["/Users/me/repo/"]) == ["Edit(//Users/me/repo/**)", "Write(//Users/me/repo/**)"]
+    argv = sl.command("claude", "p", ["/a", "/b"], read_only=["/b"])
+    deny = argv[argv.index("--disallowedTools") + 1:]
+    assert "Bash(git push:*)" in deny and len(deny) == len(sl.DENY) + 2 and all(r.startswith(("Edit(", "Write(")) for r in deny[len(sl.DENY):])
+    assert sl.command("claude", "p", ["/a"])[-len(sl.DENY):] == list(sl.DENY)          # 대상 레포가 없으면 예전 그대로
+
+
 def test_remote_attempts():
     uses = [{"name": "Bash", "input": {"command": c}} for c in (
         "git -C ../adr push origin HEAD", "gh pr create --title x", "cd x && gh issue create", "git status", "echo 'ghost'",

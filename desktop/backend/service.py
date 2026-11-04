@@ -1463,6 +1463,7 @@ class RadarService:
             return None
         d = os.path.join(self.data_dir, SKILL_SHADOW_DIR, week)
         if os.path.exists(d):
+            self._skill_shadow_note_unfinished(week, d)
             return None
         try:
             os.makedirs(d)
@@ -1470,6 +1471,28 @@ class RadarService:
         except (OSError, ValueError) as e:
             return {"week": week, "dir": d, "error": f"ADR 사본을 못 떴다: {type(e).__name__}: {e}"}
         return {"week": week, "dir": d, "adr_dir": adr_dir, "targets": targets}
+
+    def _skill_shadow_index(self):
+        p = os.path.join(self.data_dir, SKILL_SHADOW_DIR, SKILL_SHADOW_INDEX)
+        try:
+            return [json.loads(x) for x in open(p, encoding="utf-8") if x.strip()]
+        except (OSError, ValueError):
+            return []
+
+    def _skill_shadow_note_unfinished(self, week, d):
+        """주 폴더는 있는데 끝 기록(meta.json · index 줄)이 없다 = 지난 실행이 도중에 끊겼다(앱 종료 — 데몬 스레드). k=1이라 다시 돌리지 않고,
+        그 주 짝이 조용히 사라지지 않게 실패로 한 번 남긴다 (리뷰 11/4)."""
+        if any(t.is_alive() for t in self.skill_shadow_threads) or os.path.exists(os.path.join(d, "meta.json")):
+            return
+        if any(r.get("week") == week for r in self._skill_shadow_index()):
+            return
+        rec = {"week": week, "run": None, "main_ok": None, "at": now_iso(), "ok": False,
+               "error": "지난 그림자 실행이 끝나지 못했다 (앱 종료 등) — 이 주는 다시 돌리지 않는다 (k=1)"}
+        try:
+            with self._shadow_lock, open(os.path.join(self.data_dir, SKILL_SHADOW_DIR, SKILL_SHADOW_INDEX), "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
 
     def _skill_shadow_run(self, sh, main):
         rec = {"week": sh["week"], "run": main["id"], "main_ok": main["ok"], "at": now_iso()}

@@ -8,6 +8,7 @@
   ADR       부르는 쪽이 준 사본(radar.adr_copy — git이 아니라 push할 원격이 없다). 대상 레포는 사본의 radar-targets.json이 절대 경로로 가리킨다
   원격 차단  RADAR_DRY_RUN=1(스킬 규칙) + `--disallowedTools` git push · gh + PATH 맨 앞의 가짜 gh + 가짜 GH_TOKEN
             + git push 주소 바꿔치기(GIT_CONFIG_*의 pushInsteadOf — 대상 레포에서 push해도 닿지 않는다)
+  대상 레포  읽기만 — 경로마다 Edit · Write 금지 규칙(write_deny). 맥에서는 실제 작업 사본이라서 (Bash로 쓰는 길은 스킬 규칙이 radar.py뿐)
   과금      API 키를 지운 env — 구독 `claude -p`로만 (product/radar/engines.STRIP_ENV와 같은 칸)
   출력      <work>/transcript.jsonl · stderr.txt · report.json(run_report) · candidates.json · meta.json(성공 · 실패 · 시간 — 내용 없음)
 
@@ -95,12 +96,25 @@ def child_env(work, adr_dir, targets, base=None):
     return env
 
 
-def command(bin_, prompt, add_dirs, model=MODEL, effort=EFFORT):
+def write_deny(paths):
+    """대상 레포는 읽기만 — 경로마다 Edit · Write 금지 규칙 (리뷰 11/4: 맥의 실제 작업 사본을 --add-dir로 연다).
+    Claude Code 권한 규칙의 절대 경로는 `//`로 시작한다 (`Edit(//Users/me/repo/**)`). Windows 드라이브는 `/c/…` 꼴로 적는다."""
+    out = []
+    for p in paths:
+        a = os.path.abspath(p).replace("\\", "/").rstrip("/")
+        if re.match(r"^[A-Za-z]:/", a):
+            a = "/" + a[0].lower() + a[2:]
+        out += [f"Edit(/{a}/**)", f"Write(/{a}/**)"]
+    return out
+
+
+def command(bin_, prompt, add_dirs, model=MODEL, effort=EFFORT, read_only=()):
+    """read_only: --add-dir로 열되 쓰지 못하게 할 경로 (대상 레포)."""
     b = [sys.executable, bin_] if bin_.endswith(".py") else [bin_]  # .py = 테스트용 가짜 CLI
     return [*b, "-p", prompt, "--output-format", "stream-json", "--verbose", "--model", model, "--effort", effort,
             "--setting-sources", "project", "--no-session-persistence", "--permission-mode", "dontAsk",
             *[x for d in add_dirs for x in ("--add-dir", d)],
-            "--allowedTools", *TOOLS, "--disallowedTools", *DENY]
+            "--allowedTools", *TOOLS, "--disallowedTools", *DENY, *write_deny(read_only)]
 
 
 def _kill_tree(proc):  # product/radar/engines._kill_tree와 같다 — 이 모듈은 수집 PC 사슬에서도 돌아 product를 끌어오지 않는다
@@ -136,12 +150,13 @@ def run_detect(work, *, adr_dir, targets, now, claude_bin, ref=SKILL_REF, model=
         runroot = prepare_runroot(work, src=src)
         shutil.rmtree(src, ignore_errors=True)
         before = _adr_files(adr_dir)
-        dirs = [os.path.dirname(os.path.dirname(adr_dir))]
+        repos = []
         try:
-            dirs += [t["path"] for t in json.load(open(targets, encoding="utf-8")) if os.path.isdir(t.get("path") or "")]
+            repos = [t["path"] for t in json.load(open(targets, encoding="utf-8")) if os.path.isdir(t.get("path") or "")]
         except (OSError, ValueError, TypeError, KeyError):
             pass
-        proc = subprocess.Popen(command(claude_bin, PROMPT.format(now=now), dirs, model, effort), cwd=runroot,
+        dirs = [os.path.dirname(os.path.dirname(adr_dir))] + repos   # ADR 사본(초안을 여기 쓴다) + 대상 레포(읽기만)
+        proc = subprocess.Popen(command(claude_bin, PROMPT.format(now=now), dirs, model, effort, read_only=repos), cwd=runroot,
                                 env=child_env(work, adr_dir, targets, base_env), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, **({} if sys.platform == "win32" else {"start_new_session": True}))
         try:

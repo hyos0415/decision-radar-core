@@ -811,7 +811,19 @@ def _scenario_hyo166(tmp):
               call["skill_md"].strip() == _git(service.REPO, "show", "HEAD:.claude/skills/jhs-decisions/SKILL.md").strip())
         check("원격 차단: gh는 PATH 맨 앞의 가짜 → 실패", call["gh"] and os.path.abspath(call["gh"]).startswith(os.path.abspath(wk)) and call["gh_rc"] not in (0, None), call)
         check("원격 차단: git push가 원격에 닿지 않는다", call["push_rc"] not in (0, None) and _git(tgt_remote, "rev-parse", "main") == tgt_head, call["push_rc"])
-        check("스킬 그림자: 주마다 한 번 (k=1)", svc._skill_shadow_prepare("2026-W44") is None)
+        check("스킬 그림자: 주마다 한 번 (k=1)", svc._skill_shadow_prepare("2026-W44") is None and len(index(svc)) == 1)
+        # 리뷰 11/4 F1: 대상 레포는 --add-dir로 열되 Edit · Write 금지
+        repos = [t["path"] for t in json.load(open(os.path.join(wk, "adr", "radar-targets.json"), encoding="utf-8"))]
+        deny = argv[argv.index("--disallowedTools") + 1:]
+        check("대상 레포: 읽기만 — 경로마다 Edit · Write 금지 규칙", repos and all(r in argv for r in repos)
+              and all(rule in deny for rule in service.skill_line.write_deny(repos)), (repos, deny))
+        # 리뷰 11/4 F2: 도중에 끊긴 주(폴더만 있고 끝 기록 없음)는 실패로 한 번 남기고 다시 돌리지 않는다
+        os.makedirs(os.path.join(svc.data_dir, "shadow-skill", "2026-W45"))
+        check("끊긴 그림자: 다시 돌리지 않는다", svc._skill_shadow_prepare("2026-W45") is None)
+        cut = [x for x in index(svc) if x["week"] == "2026-W45"]
+        svc._skill_shadow_prepare("2026-W45")
+        check("끊긴 그림자: index에 실패 한 줄 (두 번 불러도 한 줄)", len(cut) == 1 and cut[0]["ok"] is False and "끝나지 못했다" in cut[0]["error"]
+              and len([x for x in index(svc) if x["week"] == "2026-W45"]) == 1, cut)
 
         # 그림자 실패 — 이유만 남기고 제품 실행은 그대로
         with _Env(FAKE_SKILL_MODE="fail"):
