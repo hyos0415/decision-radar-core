@@ -211,6 +211,16 @@ def test_detect_feed_writes_same_trace():
         shutil.copy(d / "now" / "slots-raw.json", run / "slots-raw.json")
         detect_feed.build(run, out)
         written = {r["id"]: r for r in trace.read(out / trace.TRACE, items)}
+        # 리뷰 11/4: 추적이 죽어도 detect 입력은 그대로 나온다 (보조 기록이 주간 사슬을 멈추지 않게)
+        orig, out2 = trace.build, Path(tmp) / "out2"
+        trace.build = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("trace boom"))
+        try:
+            f2 = detect_feed.build(run, out2)
+        finally:
+            trace.build = orig
+        assert (out2 / "feed.json").read_text(encoding="utf-8") == (out / "feed.json").read_text(encoding="utf-8")
+        assert "trace boom" in f2["trace_error"] and not (out2 / trace.TRACE).exists()
+        assert "trace boom" in json.loads((out2 / "funnel.json").read_text(encoding="utf-8"))["trace_error"]
     assert len(written) == len(items)                              # 항목마다 한 줄
     want = now("2026-W44")
     for i in (TERRA_BLOCK, HTTP2SHELL, BROCCOLI, LITELLM_HN):

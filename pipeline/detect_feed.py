@@ -261,10 +261,15 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
     write_json(out / "gate.json", why)
     wl = week_list(lane_a, slots, {e["id"] for e in chosen}, alarm_info)
     write_json(out / LIST, wl)
-    lane_b = {p.name[len("lane_b."):-len(".json")]: json.loads(p.read_text(encoding="utf-8")) for p in sorted(run_dir.glob("lane_b.*.json"))}
-    slots_raw = json.loads((run_dir / "slots-raw.json").read_text(encoding="utf-8")) if (run_dir / "slots-raw.json").exists() else None
-    trace.write(out / trace.TRACE, trace.build(list(by_id.values()), lane_a=lane_a, lane_b=lane_b, manifest=manifest, alarm_info=alarm_info,
-                                               slots=slots, slots_raw=slots_raw, feed=feed, week_list=wl))   # 탈락 추적 (HYO-171)
+    try:   # 탈락 추적 (HYO-171) — 보조 기록이다. 실패해도 detect 입력 · 게시는 그대로 (리뷰 11/4: 사슬을 멈추지 않게)
+        lane_b = {p.name[len("lane_b."):-len(".json")]: json.loads(p.read_text(encoding="utf-8")) for p in sorted(run_dir.glob("lane_b.*.json"))}
+        slots_raw = json.loads((run_dir / "slots-raw.json").read_text(encoding="utf-8")) if (run_dir / "slots-raw.json").exists() else None
+        trace.write(out / trace.TRACE, trace.build(list(by_id.values()), lane_a=lane_a, lane_b=lane_b, manifest=manifest, alarm_info=alarm_info,
+                                                   slots=slots, slots_raw=slots_raw, feed=feed, week_list=wl))
+    except Exception as e:  # noqa: BLE001
+        f["trace_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        write_json(out / "funnel.json", f)
+        print(f"  주의: 탈락 추적 파일을 못 썼다 — detect 입력은 그대로 ({f['trace_error']})", file=sys.stderr)
     if (run_dir / BASIS).exists():
         (out / BASIS).write_bytes((run_dir / BASIS).read_bytes())
     return f
