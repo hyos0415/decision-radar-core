@@ -77,6 +77,7 @@ def run_filter(items, profile, strategies, stack_terms=(), only_new=False, gate=
              "known_example": bool(keyword_match.known_examples(it, profile)), "matched_by": by}
         if alarm_terms:
             e["alarm"] = alarm_terms
+            e["signals"] = it.get("signals") or {}       # 같은 기술 경보 글 중 대표를 인기 순으로 (alarm.popularity)
         return e
 
     for it, reasons in lane_a:

@@ -25,6 +25,7 @@ import re
 import sys
 from pathlib import Path
 
+from . import alarm
 from .basis import BASIS
 from .importance import policy
 from .profile_filter import read_items, write_json
@@ -116,14 +117,37 @@ def alarm_entry(item):
 
 def alarm_unknown(lane_a):
     """경보 그물에 걸렸는데 관문이 판정 못 한 것(등급 파일에 없는 런타임 — Claude Code · Node.js …) → 버리지 않고 목록 · detect로.
-    같은 이름 묶음은 처음 글 하나만 detect (나머지는 folded_into). → [(항목, 대표 id)]"""
-    out, reps = [], {}
+    같은 이름 묶음은 가장 인기 있는 글(alarm.popularity) 하나만 detect (나머지는 folded_into). → [(항목, 대표 id)] (레인 순서)"""
+    hits = [e for e in lane_a if e.get("alarm") and (e.get("gate") or {}).get("status") == "unclassified"]
+    key = lambda e: tuple(sorted(t.lower() for t in e["alarm"]))  # noqa: E731
+    reps = {}
+    for e in hits:
+        if key(e) not in reps or alarm.popularity(e) < alarm.popularity(reps[key(e)]):
+            reps[key(e)] = e
+    return [(e, reps[key(e)]["id"]) for e in hits]
+
+
+def alarm_kin(lane_a):
+    """경보 대표 id → 접힌 같은 기술 경보 id들 (관문이 남긴 「항상」 접기 folded_into + 관문이 모르는 기술 묶음)."""
+    kin = {}
     for e in lane_a:
-        if e.get("alarm") and (e.get("gate") or {}).get("status") == "unclassified":
-            key = tuple(sorted(t.lower() for t in e["alarm"]))
-            reps.setdefault(key, e["id"])
-            out.append((e, reps[key]))
-    return out
+        if e.get("alarm") and e.get("folded_into"):
+            kin.setdefault(e["folded_into"], []).append(e["id"])
+    for e, rep in alarm_unknown(lane_a):
+        if rep != e["id"]:
+            kin.setdefault(rep, []).append(e["id"])
+    return kin
+
+
+def kin_note(items):
+    """접힌 경보 글들을 대표의 detect 입력에 붙이는 문단 (2026-11-04) — 대표 하나만 detect로 가도 같은 기술의 다른 사고 · 출처를 보게."""
+    if not items:
+        return ""
+    lines = []
+    for it in items:
+        links = [u for u in (it.get("links") or []) if u != it.get("url")][:3]
+        lines.append(f"- {it.get('title', '')} — {it.get('url', '')}" + (" (링크: " + ", ".join(links) + ")" if links else ""))
+    return "## 같은 기술의 다른 경보 (이 글로 접혔다 — 다른 사고면 따로 다룬다)\n\n" + "\n".join(lines) + "\n"
 
 
 def week_list(lane_a, slots, detect_ids, alarm_info=None):
@@ -228,11 +252,17 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
     snap_dir = snap if snap.is_dir() else snap.parent
     (out / "items").mkdir(parents=True, exist_ok=True)
     feed, index, why = [], {}, {}
+    kin = alarm_kin(lane_a)
     for i, e in enumerate(chosen, 1):
         item = by_id[e["id"]]
         entry = slot_entry(item) if e.get("slot") else alarm_entry(item) if e.get("alarm") else feed_entry(item)
+        body = body_of(item, snap_dir)
+        note = kin_note([by_id[k] for k in kin.get(e["id"], []) if k in by_id]) if e.get("alarm") else ""
+        if note:
+            entry["summary"] = (entry["summary"] + "\n\n" + note).strip()
+            body += "\n" + note
         name = f"items/F{i:02d}.md"
-        (out / name).write_text(body_of(item, snap_dir), encoding="utf-8", newline="\n")
+        (out / name).write_text(body, encoding="utf-8", newline="\n")
         feed.append(entry)
         index[url_key(item["url"])] = {"source_type": entry["source_type"], "file": name}
         if e.get("slot"):

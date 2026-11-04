@@ -11,6 +11,7 @@ unclassified 중 technologies가 비었으면 「모르는 기술」, 있으면 
 """
 import re
 
+from .. import alarm
 from . import policy, scope, successor
 from .backends import BoundaryError, NewsQuery
 from .signals import norm
@@ -149,7 +150,8 @@ def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT, mode=None):
     - weekly5 (그 전): 5/N 상한 · 기술당 1칸 먼저"""
     mode = mode or policy.CAP_MODE
     kept = [{"id": e["id"], "kept_by": e["gate"]["kept_by"], "title": e.get("title"), "release_line": _release_line(e),
-             "alarm": e.get("alarm"), "technologies": e["gate"].get("technologies")}
+             "alarm": e.get("alarm"), "technologies": e["gate"].get("technologies"),
+             "popularity": alarm.popularity(e) if e.get("alarm") else None}
             for e in entries if (e.get("gate") or {}).get("keep")]
 
     def brief(x):
