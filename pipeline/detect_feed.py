@@ -102,7 +102,8 @@ def slot_entry(item):
     """자리 질의로 온 항목의 feed 칸 — kind는 model_release. HN · Reddit은 community(근거가 아니다 — detect가 1차 출처를 찾는다, R2)."""
     e = feed_entry(item)
     e["kind"] = "model_release"
-    e["source_type"] = SLOT_SOURCE_TYPE.get(item.get("source"), "community")
+    # 합집합 스킬 항목(HYO-167)은 원문을 받은 근거의 유형 그대로 — 1차 출처만 받는다 (pipeline.union.primary_evidence)
+    e["source_type"] = SLOT_SOURCE_TYPE.get(item.get("source")) or (item.get("meta") or {}).get("source_type") or "community"
     return e
 
 
@@ -197,6 +198,9 @@ def funnel_line(f):
     if f.get("alarm"):
         a = f["alarm"]
         line += f" · 경보 그물 {a['net']} (관문 남김 {a['kept']} · 관문이 모르는 기술 {a['unknown']}) · 우리 스택 아님 {a['not_ours']}"
+    if f.get("union"):
+        u = f["union"]
+        line += f" · 스킬 줄 {u['found']} (겹침 {u['both']} · 스킬만 {u['skill_only']} → 관문 남김 {u['kept']} · detect {u['to_detect']})"
     if gc and gc.get("warn"):
         line += (f" — 경고: 관문이 판정 못 한 소식 {gc['ratio']:.0%} (모르는 기술+분류 불가 / 팀원 스택 뺀 레인 A — 기준 {gc['warn_ratio']:.0%}, 잠정)")
     return line
@@ -210,7 +214,8 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
     lane_a = json.loads((run_dir / "lane_a.json").read_text(encoding="utf-8"))
     slots = json.loads((run_dir / SLOTS).read_text(encoding="utf-8")) if (run_dir / SLOTS).exists() else None
     snap = Path(snapshot or manifest["snapshot"])
-    by_id = {it["id"]: it for it in read_items(snap)}
+    from . import union  # 합집합(HYO-167 D6) — 관문 · 자리 질의가 읽은 스킬만 항목. 꺼져 있으면 빈 목록
+    by_id = {it["id"]: it for it in read_items(snap) + union.extra_items(run_dir)}
     chosen = select(lane_a, all_kept)
     taken = {e["id"] for e in chosen}
     for sid, (slot, x) in slot_picks(slots).items():   # 자리 질의 top-k (HYO-168) — 관문이 이미 넣은 항목이면 한 번만
@@ -246,6 +251,9 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
             g = e["gate"]
             why[item["url"]] = {"id": e["id"], "reason": g.get("reason"), "kept_by": g.get("kept_by") or [], "shown": e.get("shown")}
     f = funnel(manifest, lane_a, chosen, slots, alarm_info)
+    u = union.funnel_info(run_dir, lane_a, [e["id"] for e in chosen])
+    if u:
+        f["union"] = u
     write_json(out / "feed.json", feed)
     write_json(out / "index.json", index)
     write_json(out / "search.json", [])

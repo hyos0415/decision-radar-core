@@ -110,6 +110,8 @@ def why_candidate(it):
         if r is not None and r <= REDDIT_TOP_RANK and RELEASE.search(title):
             return f"reddit:top-week:{r}"
         return None
+    if src == "skill" and not meta.get("dependency"):  # 합집합 스킬 줄(HYO-167) — 스택에 닿는다고 본 새 모델 · 서비스 (의존성 릴리스는 관문으로)
+        return "skill-line"
     if src == "huggingface" and str(it.get("id", "")).startswith("hf-model:"):
         r = _rank(it, "rank:trending")
         if r is not None and r <= HF_TOP_RANK:
@@ -271,7 +273,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    res = run(read_items(a.snapshot), load_slots(a.slots), engine=a.engine, out=out, reuse=a.reuse)
+    from . import union  # 합집합(HYO-167 D6) — 스킬만 잡은 항목도 자리 질의 후보로. 꺼져 있으면 빈 목록
+    res = run(read_items(a.snapshot) + union.extra_items(out), load_slots(a.slots), engine=a.engine, out=out, reuse=a.reuse)
     write_json(out / "slots.json", res)
     print(summary_line(res))
     for s, v in res["per_slot"].items():

@@ -1,10 +1,12 @@
 """주간 사슬 한 줄 — 수집 → 얼림 → 등급 → 관문 → detect 입력 → revisit 출처 → 게시 (HYO-99 3단계 · HYO-159). Windows·macOS 같은 코드다.
 
-  python -m collector.weekly [--from {collect,freeze,tiers,gate,slots,feed,revisit,publish}] [--week YYYY-Www] [--gate 백엔드] [--no-push] [--dry-run]
+  python -m collector.weekly [--from {collect,freeze,tiers,skill,gate,slots,feed,revisit,publish}] [--week YYYY-Www] [--gate 백엔드] [--no-push] [--dry-run]
 
 실패 규칙: 수집 실패 → 그래도 얼린다(죽은 출처도 manifest에 남는다) · 얼림 실패 → 멈춤 · 등급 실패 → 계속 (키 없음은 weekly-tiers가 이미 건너뜀)
           · 관문 실패(예: OPENAI_API_KEY 없음) → 멈춤, feed·게시 없음 · feed 실패 → 멈춤
           · 자리 질의 실패(구독 claude -p · HYO-168) → 계속 — detect 입력은 관문 몫만. 자리 프로필(ADR repo radar-slots.yaml)이 없으면 건너뜀
+          · 스킬 줄(합집합 HYO-167 — 기본 꺼짐, RADAR_UNION=on) → 관문 앞에서 skill@v1 라이브 detect → 원문 받기 → 합치기.
+            실패하면 계속 — 관문 · 자리 질의 · detect 입력은 수집 항목만 (union-pipeline.md D6)
           · revisit 출처 실패(네트워크) → 계속 — detect 입력은 게시한다. 데스크톱 revisit은 가장 새 revisit/<주>/를 본다
           · 게시: radar-snapshots에 detect/<주>/가 이미 커밋돼 있으면 「이미 만듦」 — 덮어쓰지 않는다 (얼린 주를 고치지 않는 것과 같다).
             관문(유료 API)도 그 경우엔 돌리지 않는다. revisit/<주>/도 같다 — 이미 커밋돼 있으면 다시 받지 않고, detect만 커밋된 주에는 revisit만 더한다.
@@ -27,11 +29,11 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from collector import snapshot  # noqa: E402
-from pipeline import basis  # noqa: E402
+from pipeline import basis, union  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 STEP_LOG = "last-weekly-steps.log"  # 예약 작업 콘솔 로그(last-weekly.log)와 달라야 한다 — 위 머리말
-STEPS = ["collect", "freeze", "tiers", "gate", "slots", "feed", "revisit", "publish"]
+STEPS = ["collect", "freeze", "tiers", "skill", "gate", "slots", "feed", "revisit", "publish"]
 PUBLISHED = {"detect": "feed.json", "revisit": "index.json"}  # 게시하는 폴더 → 다 만들어졌다는 표시 파일
 DEFAULT_GATE = "gpt-6.1-sol"
 
@@ -174,7 +176,20 @@ def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None
             run_out = Path(pipeline_out or Path(root) / "pipeline" / "out") / week
             feed_out = p["snapshots"] / "detect" / week
             revisit_out = p["snapshots"] / "revisit" / week
-            if name == "gate":
+            if name == "skill":
+                if not union.enabled(os.environ if env is None else env):
+                    record(name, True, f"꺼짐 ({union.FLAG}=on으로 켠다 — 실사용 기간에는 안 켠다)", skipped=True)
+                    continue
+                if not a.no_push:
+                    _git(p["snapshots"], "pull", "--ff-only", "-q")
+                if committed(p["snapshots"], week):  # 관문이 「이미 만듦」으로 건너뛸 주 — 구독 세션을 쓰지 않는다
+                    record(name, True, f"이미 만듦: detect/{week}/", skipped=True)
+                    continue
+                rc = runner("pipeline.union", ["run", "--week", week, "--snapshots", str(p["snapshots"]), "--adr", str(p["adr_dir"].parent.parent),
+                                               "--out", str(run_out / union.RUN_DIR)], log)
+                record(name, rc == 0, "스킬 줄 (구독 claude -p) → 원문 받기 → 합치기" if rc == 0
+                       else f"종료 코드 {rc} — 계속 (관문 · detect 입력은 수집 항목만, {log})", t0=t0)
+            elif name == "gate":
                 if not a.no_push:  # 다른 기기가 이미 게시했는지는 받아 봐야 안다 — 모르고 돌리면 유료 관문을 또 부르고 게시에서 엇갈린다
                     pr = _git(p["snapshots"], "pull", "--ff-only", "-q")
                     if pr.returncode != 0:
@@ -244,6 +259,8 @@ def dry_run(a, env=None, root=REPO):
         "collect": f"{py} -m collector.run --label weekly",
         "freeze": f"{py} -m collector.snapshot --repo {p['snapshots']} freeze --push",
         "tiers": f"{py} -m pipeline.importance weekly-tiers --report {Path(root) / 'collector' / 'out' / 'last-tiers.json'} --tiers {p['tiers']} --targets {p['targets']}",
+        "skill": (f"{py} -m pipeline.union run --week {wk} --snapshots {p['snapshots']} --adr {p['adr_dir'].parent.parent} --out {run_out / union.RUN_DIR}"
+                  if union.enabled(os.environ if env is None else env) else f"(꺼짐 — {union.FLAG}=on)"),
         "gate": f"{py} -m pipeline.profile_filter " + " ".join(gate_args(p["snapshots"] / wk, gate, p, run_out)),
         "slots": f"{py} -m pipeline.slots run --snapshot {p['snapshots'] / wk} --slots {p['slots']} --out {run_out}",
         "feed": f"{py} -m pipeline.detect_feed --run {run_out} --out {p['snapshots'] / 'detect' / wk}",

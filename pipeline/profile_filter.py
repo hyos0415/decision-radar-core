@@ -133,7 +133,8 @@ def cmd_run(a):
             stack = load_stack(a.targets, a.adr_dir)
         except Exception as e:  # noqa: BLE001 — 스택을 못 읽어도 레인 분리·순위는 돈다 (표시만 빠진다)
             stack = {"terms": [], "sources": {"error": f"{type(e).__name__}: {e}"}}
-    items = read_items(a.snapshot)
+    from . import union  # 합집합(HYO-167 D6) — 스킬만 잡은 항목도 같은 관문으로. 꺼져 있으면 빈 목록
+    items = read_items(a.snapshot) + union.extra_items(a.out)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     gate = backend = None
