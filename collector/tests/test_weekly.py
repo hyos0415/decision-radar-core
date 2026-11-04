@@ -118,6 +118,25 @@ def test_order_and_args():
     assert arg(rv, "--out") == str(w.snaps / "revisit" / WEEK)
 
 
+def test_slots_step_runs_when_profile_exists_and_failure_continues():
+    """HYO-168 — 자리 프로필(ADR repo radar-slots.yaml)이 있으면 관문 다음에 자리 질의를 같은 run 폴더로 돌린다.
+    실패해도(구독 claude -p) detect 입력은 관문 몫으로 게시한다. 프로필이 없으면 건너뛴다 (위 test_order_and_args)."""
+    w = World()
+    (w.tmp / "adr").mkdir()
+    (w.tmp / "adr" / "radar-slots.yaml").write_text("version: 1\nslots: []\n", encoding="utf-8")
+    rc, _ = w.go("--no-push")
+    assert rc == 0 and w.mods()[3:6] == ["pipeline.profile_filter", "pipeline.slots", "pipeline.detect_feed"], w.mods()
+    sl = w.calls[4]
+    assert sl[1][0] == "run" and arg(sl, "--snapshot") == str(w.snaps / WEEK) and arg(sl, "--out") == str(w.pout / WEEK)
+    assert arg(sl, "--slots") == str(w.tmp / "adr" / "radar-slots.yaml")
+    w2 = World(fail={"pipeline.slots"})
+    (w2.tmp / "adr").mkdir()
+    (w2.tmp / "adr" / "radar-slots.yaml").write_text("version: 1\nslots: []\n", encoding="utf-8")
+    rc, _ = w2.go()
+    assert rc == 0 and f"detect/{WEEK}/feed.json" in w2.remote_files()
+    assert [s["ok"] for s in w2.summary()["steps"] if s["name"] == "slots"] == [False]
+
+
 def test_targets_remote_head_and_basis():
     """HYO-162 — 등급·관문은 원격 HEAD 사본을 가리키는 대상 목록을 받고, 관문 뒤 run 폴더에 판정 기준이 남는다."""
     w = World()

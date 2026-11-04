@@ -1,9 +1,10 @@
 """주간 사슬 한 줄 — 수집 → 얼림 → 등급 → 관문 → detect 입력 → revisit 출처 → 게시 (HYO-99 3단계 · HYO-159). Windows·macOS 같은 코드다.
 
-  python -m collector.weekly [--from {collect,freeze,tiers,gate,feed,revisit,publish}] [--week YYYY-Www] [--gate 백엔드] [--no-push] [--dry-run]
+  python -m collector.weekly [--from {collect,freeze,tiers,gate,slots,feed,revisit,publish}] [--week YYYY-Www] [--gate 백엔드] [--no-push] [--dry-run]
 
 실패 규칙: 수집 실패 → 그래도 얼린다(죽은 출처도 manifest에 남는다) · 얼림 실패 → 멈춤 · 등급 실패 → 계속 (키 없음은 weekly-tiers가 이미 건너뜀)
           · 관문 실패(예: OPENAI_API_KEY 없음) → 멈춤, feed·게시 없음 · feed 실패 → 멈춤
+          · 자리 질의 실패(구독 claude -p · HYO-168) → 계속 — detect 입력은 관문 몫만. 자리 프로필(ADR repo radar-slots.yaml)이 없으면 건너뜀
           · revisit 출처 실패(네트워크) → 계속 — detect 입력은 게시한다. 데스크톱 revisit은 가장 새 revisit/<주>/를 본다
           · 게시: radar-snapshots에 detect/<주>/가 이미 커밋돼 있으면 「이미 만듦」 — 덮어쓰지 않는다 (얼린 주를 고치지 않는 것과 같다).
             관문(유료 API)도 그 경우엔 돌리지 않는다. revisit/<주>/도 같다 — 이미 커밋돼 있으면 다시 받지 않고, detect만 커밋된 주에는 revisit만 더한다.
@@ -30,7 +31,7 @@ from pipeline import basis  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 STEP_LOG = "last-weekly-steps.log"  # 예약 작업 콘솔 로그(last-weekly.log)와 달라야 한다 — 위 머리말
-STEPS = ["collect", "freeze", "tiers", "gate", "feed", "revisit", "publish"]
+STEPS = ["collect", "freeze", "tiers", "gate", "slots", "feed", "revisit", "publish"]
 PUBLISHED = {"detect": "feed.json", "revisit": "index.json"}  # 게시하는 폴더 → 다 만들어졌다는 표시 파일
 DEFAULT_GATE = "gpt-6.1-sol"
 
@@ -54,6 +55,7 @@ def paths(env=None, root=REPO):
         "targets": Path(env.get("RADAR_TARGETS") or parent / "adr" / "radar-targets.json"),
         "adr_dir": Path(env.get("RADAR_ADR_DIR") or parent / "adr" / "docs" / "adr"),
         "tiers": Path(env.get("RADAR_TIERS") or parent / "radar-snapshots" / "tiers.json"),
+        "slots": Path(env.get("RADAR_SLOTS") or parent / "adr" / "radar-slots.yaml"),
     }
 
 
@@ -193,6 +195,15 @@ def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None
                     stop("관문 실패 — feed·게시를 하지 않는다")
                 elif state["targets"]:  # 관문이 읽은 기준 — detect_feed가 detect/<주>/로 옮긴다
                     basis.write(state["basis"], run_out / basis.BASIS)
+            elif name == "slots":
+                if state["done"]:
+                    record(name, True, "이미 만듦", skipped=True)
+                    continue
+                if not p["slots"].exists():
+                    record(name, True, f"자리 프로필이 없다: {p['slots']} — 자리 질의 없이 간다", skipped=True)
+                    continue
+                rc = runner("pipeline.slots", ["run", "--snapshot", str(p["snapshots"] / week), "--slots", str(p["slots"]), "--out", str(run_out)], log)
+                record(name, rc == 0, "자리 질의 (구독 claude -p)" if rc == 0 else f"종료 코드 {rc} — 계속 (detect 입력은 관문 몫만, {log})", t0=t0)
             elif name == "feed":
                 if state["done"]:
                     record(name, True, "이미 만듦", skipped=True)
@@ -234,6 +245,7 @@ def dry_run(a, env=None, root=REPO):
         "freeze": f"{py} -m collector.snapshot --repo {p['snapshots']} freeze --push",
         "tiers": f"{py} -m pipeline.importance weekly-tiers --report {Path(root) / 'collector' / 'out' / 'last-tiers.json'} --tiers {p['tiers']} --targets {p['targets']}",
         "gate": f"{py} -m pipeline.profile_filter " + " ".join(gate_args(p["snapshots"] / wk, gate, p, run_out)),
+        "slots": f"{py} -m pipeline.slots run --snapshot {p['snapshots'] / wk} --slots {p['slots']} --out {run_out}",
         "feed": f"{py} -m pipeline.detect_feed --run {run_out} --out {p['snapshots'] / 'detect' / wk}",
         "revisit": f"{py} -m pipeline.revisit_feed --adr-dir {p['adr_dir']} --snapshots {p['snapshots']} --week {wk} --out {p['snapshots'] / 'revisit' / wk}",
         "publish": f"git -C {p['snapshots']} pull --ff-only; add detect/{wk} revisit/{wk}; commit; " + ("(push 없음)" if a.no_push else "push"),

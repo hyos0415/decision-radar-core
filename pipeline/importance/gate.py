@@ -133,19 +133,52 @@ class Gate:
                 "scope": scoped, "reason": why}
 
 
-def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT):
-    """레인 A 항목들(각각 `gate` 칸을 가짐)에 5/N 상한을 건다. 항목에 `shown`을 쓰고 요약을 돌려준다. 잘린 것은 summary["truncated"] — 로그용."""
-    kept = [{"id": e["id"], "kept_by": e["gate"]["kept_by"]} for e in entries if (e.get("gate") or {}).get("keep")]
-    shown, cut, label = policy.apply_cap(kept, limit)
-    shown_ids, cut_ids = {s["id"] for s in shown}, {c["id"] for c in cut}
-    for e in entries:
-        e["shown"] = True if e["id"] in shown_ids else (False if e["id"] in cut_ids else None)
+def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT, mode=None):
+    """레인 A 항목들(각각 `gate` 칸을 가짐)에서 detect로 갈 것을 고른다. 항목에 `shown`(= detect로 간다)을 쓰고 요약을 돌려준다.
+    잘린 것은 summary["truncated"] — 로그용.
+    - topk (기본, 2026-11-04 HYO-168): 「항상」 + 기술마다 top-k 목록(`listed` · `rank` · `always` · `query`), detect는 「항상」을 (패키지 × 줄)마다
+      최신 1건으로 접은 것(`folded_into` = 대표 id) + 기술마다 top-k
+    - weekly5 (그 전): 5/N 상한 · 기술당 1칸 먼저"""
+    mode = mode or policy.CAP_MODE
+    kept = [{"id": e["id"], "kept_by": e["gate"]["kept_by"], "title": e.get("title"), "release_line": _release_line(e)}
+            for e in entries if (e.get("gate") or {}).get("keep")]
+
     def brief(x):
         best = min(x["kept_by"], key=lambda r: (policy.tier_rank(r["tier"]), policy.severity(r["change"])))
         t = policy.cap_technology(x)
         return {"id": x["id"], "tier": best["tier"], "change": best["change"], "technology": t if isinstance(t, str) else None}
-    return {"label": label, "limit": limit, "per_tech": policy.PER_TECH, "total_kept": len(kept), "shown": [brief(s) for s in shown], "truncated": [brief(c) for c in cut],
-            "status_counts": policy.gate_counts(entries), "newer_line_eol": newer_line_eol(entries)}
+
+    base = {"total_kept": len(kept), "status_counts": policy.gate_counts(entries), "newer_line_eol": newer_line_eol(entries)}
+    if mode == "weekly5":
+        shown, cut, label = policy.apply_cap(kept, limit)
+        shown_ids, cut_ids = {s["id"] for s in shown}, {c["id"] for c in cut}
+        for e in entries:
+            e["shown"] = True if e["id"] in shown_ids else (False if e["id"] in cut_ids else None)
+        return {"mode": mode, "label": label, "limit": limit, "per_tech": policy.PER_TECH, **base,
+                "shown": [brief(s) for s in shown], "truncated": [brief(c) for c in cut]}
+    r = policy.apply_topk(kept)
+    listed_ids, detect_ids, always_ids = {x["id"] for x in r["listed"]}, {x["id"] for x in r["detect"]}, {x["id"] for x in r["always"]}
+    kept_ids = {x["id"] for x in kept}
+    for e in entries:
+        if e["id"] not in kept_ids:
+            e["shown"] = None
+            continue
+        e["shown"] = e["id"] in detect_ids
+        e["listed"], e["always"] = e["id"] in listed_ids, e["id"] in always_ids
+        e["query"], e["rank"] = r["query"].get(e["id"]), r["rank"].get(e["id"])
+        e["folded_into"] = r["folded"].get(e["id"])
+    label = f"{len(r['detect'])}/{len(kept)} · 목록 {len(r['listed'])}"
+    return {"mode": mode, "label": label, "k": policy.TOPK, **base, "always": [brief(x) for x in r["always"]], "folded": r["folded"],
+            "listed": [dict(brief(x), rank=r["rank"].get(x["id"]), always=x["id"] in always_ids) for x in r["listed"]],
+            "shown": [brief(x) for x in r["detect"]], "truncated": [brief(x) for x in r["cut"]]}
+
+
+def _release_line(entry):
+    """관문이 기록한 우리 줄 / 다른 줄 (scope.release_line — 판정에는 안 쓰고 「항상」 접기에만 쓴다, HYO-168) | None."""
+    for s in (entry.get("gate") or {}).get("scope") or []:
+        if s.get("release_line"):
+            return s["release_line"]
+    return None
 
 
 def newer_line_eol(entries):
