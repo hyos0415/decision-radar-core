@@ -48,6 +48,7 @@ python -m pipeline.trace terra --week 2026-W45 --slots <slots.json 폴더> --rep
 ## 찾은 것 (추적을 만들며)
 
 1. **다른 사고가 기술 하나로 접힌다** — 「항상」 접기 열쇠가 경보 글은 `("alarm", 관문이 붙인 기술)`이라(`policy.fold_key`, HYO-170) http2shell과 Broccoli2Shell이 둘 다 python이어서 detect로는 한 건만 간다. 대표는 정렬 순서(같은 등급 · 심각도면 id 순)라 **점수가 높은 Broccoli2Shell(400점)이 낮은 http2shell(186점)에 접힌다**. 목록에는 둘 다 남는다. LiteLLM 백도어 HN · Reddit처럼 같은 사고를 묶으려던 규칙이다 — 고칠지(사고 묶음을 링크 · 이름으로 · 대표를 인기 순으로)는 사용자 결정. 실제 W44 재생에서는 경보 글의 모델 답이 없어 아직 일어나지 않았다 — W46 sol 판정에서 처음 드러날 수 있다
+   - 변경 (2026-11-04, 사용자 나안 — PR #266): 대표를 **인기 순**(HN 점수 → Reddit 순위)으로 고르고 접힌 글의 제목 · 링크를 대표 detect 입력에 붙인다 · 줄임 이름 `Node` → `Node.js`. 위 표 http2shell · Broccoli2Shell의 「지금 코드로는」 칸은 #266 전 기준이다 — 이제 **http2shell이 Broccoli2Shell로 접히고**(목록에만, 그물 이름 Python · Node.js) Broccoli2Shell이 detect로 간다. 둘은 같은 Aikido 발표 계열이라 접기 자체는 맞았고 대표가 틀렸다. 회귀 정답(`test_trace.py`)도 이 결과로 바꿨다
 2. 자리 질의는 그 주 run 뒤에 생겼다(11/4) — `trace`에 지금 자리 질의 결과를 예전 run에 대 보면 「자리 2위인데 그 주 detect 입력에는 없다」로 나온다. 실행이 다르다는 표시이지 버그가 아니다
 
 ## 하지 않은 것 (지금)
