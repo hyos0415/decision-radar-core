@@ -179,16 +179,22 @@ export function WeekListView({ refreshKey }: { refreshKey: number }): React.JSX.
   const [notOursOpen, setNotOursOpen] = useState(false)
   // 사용자가 고른 주차 — null이면 서버가 주는 가장 새 주차
   const week = useRef<string | null>(null)
+  // 주차를 빨리 바꾸면 늦게 온 앞 요청이 화면을 덮지 않게 — 마지막 요청만 반영한다
+  const seq = useRef(0)
 
   const load = useCallback((w?: string | null): Promise<void> => {
     if (w !== undefined) week.current = w
+    const n = ++seq.current
     return api
       .weekList(week.current ?? undefined)
       .then((d) => {
+        if (n !== seq.current) return
         setData(d)
         setError(null)
       })
-      .catch((e) => setError(errText(e)))
+      .catch((e) => {
+        if (n === seq.current) setError(errText(e))
+      })
   }, [])
 
   useEffect(() => {
