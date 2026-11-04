@@ -63,6 +63,8 @@ def feed_entry(item):
     meta = item.get("meta") or {}
     if meta.get("kind") == "page-diff":
         kind, source_type, text = "page_change", "official_doc", "더해진 줄: " + " / ".join(_lines(item.get("text")))
+    elif meta.get("kind") == "advisory":       # 공식 보안 채널 (collector/sources/security.py, HYO-170 다)
+        kind, source_type, text = "security_advisory", "official_doc", item.get("text") or ""
     elif meta.get("dependency"):
         kind, source_type, text = "dependency_release", "release_note", item.get("text") or ""
     elif meta.get("tag"):

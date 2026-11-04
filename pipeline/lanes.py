@@ -1,6 +1,6 @@
 """두 레인 분리 (doc-pipeline §2-3).
 
-레인 A = 내 스택에 일어난 일 (의존성 릴리스 · 벤더 피드 · 벤더 페이지 변경). 판정은 importance-policy 관문의 몫이다.
+레인 A = 내 스택에 일어난 일 (의존성 릴리스 · 벤더 피드 · 벤더 페이지 변경 · 공식 보안 공지 — OSV · 런타임). 판정은 importance-policy 관문의 몫이다.
 레인 B = 새로 볼 만한 것 (새 모델 · repo · 글 · 논문). 프로필 점수로 순위를 낸다.
 
 importance-policy 관문(기술 등급 × 변화 종류)은 아직 코드에 없다 — radar.py에도 collector/에도 없고,
@@ -27,9 +27,13 @@ def classify(item):
         reasons.append(f"page-diff:{meta.get('vendor', '?')}")
     if "dependency-releases" in channels:
         reasons.append(f"dependency-release:{meta.get('dependency') or meta.get('repo') or '?'}")
+    if "security-advisories" in channels:        # 공식 보안 채널 (HYO-170 다) — OSV 공지. 런타임 공지는 아래 runtime-security:
+        reasons.append(f"security-advisory:{meta.get('dependency') or '?'}")
     for ch in channels:
         if ch.startswith("vendor:") and kind != "page-diff":
             reasons.append(f"vendor-feed:{ch.split(':', 1)[1]}")
+        elif ch.startswith("runtime-security:"):
+            reasons.append(f"runtime-security:{ch.split(':', 1)[1]}")
     return ("A", reasons) if reasons else ("B", [])
 
 

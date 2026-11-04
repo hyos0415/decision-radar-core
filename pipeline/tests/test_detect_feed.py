@@ -112,6 +112,14 @@ def test_feed_fields():
     assert "x" * 3000 in radar(out, "fetch", rel["url"])["body"]   # 전문은 자르지 않는다
 
 
+def test_feed_entry_security_advisory():
+    # 공식 보안 채널 (HYO-170 다): OSV 공지는 의존성 이름을 달고 공식 문서(R2 통과)로 — 릴리스 노트가 아니다
+    e = detect_feed.feed_entry({"id": "osv:MAL-2026-2144@2026-10-29", "title": "litellm (PyPI) security advisory MAL-2026-2144: Malicious code",
+                                "url": "https://osv.dev/vulnerability/MAL-2026-2144", "text": "litellm 1.107.0 … backdoor",
+                                "meta": {"kind": "advisory", "dependency": "litellm", "ecosystem": "PyPI"}})
+    assert (e["kind"], e["source_type"], e["package"]) == ("security_advisory", "official_doc", "litellm") and "version" not in e, e
+
+
 def test_gate_why_and_funnel_line():
     out, f = built()
     why = json.loads((out / "gate.json").read_text(encoding="utf-8"))

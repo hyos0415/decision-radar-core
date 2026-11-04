@@ -570,6 +570,216 @@ def test_item_text_truncated():
     assert len(it.to_dict()["text"]) == 8000
 
 
+# ---- 공식 보안 채널 (HYO-170 다) ---------------------------------------------
+
+# W45 수집(2026-11-03 16:00 KST) 기준 — 창 8일 = 10/26 07:00Z 이후
+SEC_NOW = time.mktime((2026, 11, 3, 7, 0, 0, 0, 0, 0)) - time.timezone
+W44_NOW = time.mktime((2026, 10, 27, 7, 0, 0, 0, 0, 0)) - time.timezone     # Node.js 10/21 보안 릴리스가 든 주
+SEC_CFG = {"window_days": 8, "runtimes": [
+    {"name": "python", "label": "Python", "feed": "https://py.example/feed/", "strip_title": ["[Security-announce]"],
+     "dependency": "python", "dependency_when": "CPython"},
+    {"name": "nodejs", "label": "Node.js", "feed": "https://node.example/vulnerability.xml", "fetch_page": True, "dependency": "electron"}]}
+
+# OSV 실제 응답 모양 (2026-11-04 api.osv.dev에서 확인 — 본문은 줄였다)
+OSV_VULNS = {
+    # LiteLLM 1.107.0 백도어: 3/24 발행(1.82.7 건) 기록에 10/29 1.107.0이 덧붙었다 — 발행일만 보면 놓친다
+    "MAL-2026-2144": {"id": "MAL-2026-2144", "summary": "Malicious code in litellm (PyPI)", "aliases": ["PYSEC-2026-2"],
+                      "details": "litellm 1.107.0, uploaded to PyPI on 2026-10-21, contains a credential stealer and a remote code execution backdoor.",
+                      "published": "2026-03-24T11:15:14Z", "modified": "2026-10-29T14:30:33.719516315Z",
+                      "affected": [{"package": {"name": "litellm", "ecosystem": "PyPI"}, "versions": ["1.82.7", "1.82.8", "1.107.0"]}],
+                      "references": [{"type": "REPORT", "url": "https://github.com/BerriAI/litellm/issues/99999"}]},
+    # 창 안 발행 GHSA + 같은 취약점의 PYSEC 별칭 → 하나로
+    "GHSA-hhww-mrg2-969h": {"id": "GHSA-hhww-mrg2-969h", "summary": "LiteLLM vulnerable to reflected XSS in /sso/debug/callback",
+                            "aliases": ["CVE-2026-1"], "details": "XSS", "published": "2026-10-27T15:31:56Z", "modified": "2026-10-27T15:47:24Z",
+                            "affected": [{"package": {"name": "litellm", "ecosystem": "PyPI"},
+                                          "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "1.107.1"}]}]}]},
+    "PYSEC-2026-77": {"id": "PYSEC-2026-77", "summary": "", "aliases": ["CVE-2026-1", "GHSA-hhww-mrg2-969h"], "details": "XSS",
+                      "published": "2026-10-28T00:00:00Z", "modified": "2026-10-28T00:00:00Z", "affected": []},
+    # 옛 GHSA가 창 안에 다시 고쳐졌다 — 내용은 그대로라 뺀다
+    "GHSA-8h5w-f6q9-wg35": {"id": "GHSA-8h5w-f6q9-wg35", "summary": "Langchain SQL Injection vulnerability", "aliases": [],
+                            "published": "2023-10-21T00:00:00Z", "modified": "2026-10-27T00:00:00Z", "affected": []},
+    "GHSA-8g5g-mxqh-grgj": {"id": "GHSA-8g5g-mxqh-grgj", "summary": "Vite: `server.fs.deny` bypassed with queries", "aliases": [],
+                            "published": "2026-10-29T00:00:00Z", "modified": "2026-10-29T00:00:00Z", "affected": []},
+}
+
+
+class SecFetcher:
+    """OSV querybatch(POST) · vulns(GET) · 런타임 피드 · 글 페이지. fail에 든 URL 조각은 실패로."""
+
+    def __init__(self, fail=()):
+        self.min_interval, self.posts, self.gets, self.fail = {}, [], [], set(fail)
+
+    def post_json(self, url, payload, headers=None):
+        self.posts.append(payload)
+        if any(f in url for f in self.fail):
+            raise fetch.FetchError(url, 503, b"down")
+        index = {("litellm", "PyPI"): ["MAL-2026-2144", "GHSA-hhww-mrg2-969h", "PYSEC-2026-77", "GHSA-old-outside"],
+                 ("langchain", "PyPI"): ["GHSA-8h5w-f6q9-wg35"], ("vite", "npm"): ["GHSA-8g5g-mxqh-grgj"]}
+        res = []
+        for q in payload["queries"]:
+            ids = index.get((q["package"]["name"], q["package"]["ecosystem"]), [])
+            res.append({"vulns": [{"id": i, "modified": (OSV_VULNS.get(i) or {"modified": "2025-01-01T00:00:00Z"})["modified"]} for i in ids]})
+        return {"results": res}
+
+    def get_json(self, url, headers=None):
+        self.gets.append(url)
+        return OSV_VULNS[url.rsplit("/", 1)[1]]
+
+    def get(self, url, headers=None):
+        self.gets.append(url)
+        if any(f in url for f in self.fail):
+            return 503, b""
+        if url == "https://py.example/feed/":
+            return 200, PY_SEC_RSS
+        if url == "https://node.example/vulnerability.xml":
+            return 200, NODE_VULN_RSS
+        if url.startswith("https://nodejs.org/en/blog/vulnerability/october-2026"):
+            return 200, ("<html><body><h1>Security Releases</h1><p>Node.js Brotli decoder out-of-bounds write permits remote code "
+                         "execution (CVE-2026-111497) - (high)</p></body></html>").encode()
+        raise AssertionError(f"모르는 URL: {url}")
+
+
+PY_SEC_RSS = b"""<?xml version="1.0" encoding="utf-8"?><rss version="2.0"><channel><title>security-announce</title>
+<item><title>[Security-announce][CVE-2026-116566] socket.getaddrinfo() accepts embedded null bytes</title>
+ <link>https://mail.python.org/archives/list/security-announce@python.org/message/HCHE62VYTPYI6WO/</link>
+ <description>There is a MEDIUM severity vulnerability affecting CPython.</description>
+ <pubDate>Thu, 29 Oct 2026 17:46:30 +0000</pubDate></item>
+<item><title>[Security-announce][GHSA-6q48-6c7w-9gw2] CRITICAL security update for certifi</title>
+ <link>https://mail.python.org/archives/list/security-announce@python.org/message/LSEJ6DOJPIHHNNR/</link>
+ <description>certifi removes compromised intermediate certificates.</description>
+ <pubDate>Tue, 27 Oct 2026 14:03:26 +0000</pubDate></item>
+<item><title>[Security-announce][CVE-2026-19445] Use-after-free of a server-side SSLContext</title>
+ <link>https://mail.python.org/archives/list/security-announce@python.org/message/QMQIUQB6WGGC3MI/</link>
+ <description>affecting CPython</description><pubDate>Wed, 30 Sep 2026 16:10:08 +0000</pubDate></item>
+</channel></rss>"""
+
+NODE_VULN_RSS = b"""<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Node.js Blog: Vulnerability Reports</title>
+<item><title>Wednesday, October 21, 2026 Security Releases</title>
+ <link>https://nodejs.org/en/blog/vulnerability/october-2026-security-releases</link><description></description>
+ <pubDate>Wed, 21 Oct 2026 22:00:00 GMT</pubDate></item>
+<item><title>Wednesday, July 29, 2026 Security Releases</title>
+ <link>https://nodejs.org/en/blog/vulnerability/july-2026-security-releases</link>
+ <pubDate>Wed, 29 Jul 2026 00:00:00 GMT</pubDate></item>
+</channel></rss>"""
+
+
+def _sec_stack(t, retired=()):
+    root = Path(t) / "app"
+    root.mkdir()
+    (root / "requirements.txt").write_text("litellm>=1.80\nlangchain>=1.4\nmcp==2.2.0\n", encoding="utf-8")
+    _write_pkg(root / "desktop", {"dependencies": {"electron": "45.0.0"}, "devDependencies": {"vite": "^7.1.0"}})
+    tiers = Path(t) / "tiers.json"
+    tiers.write_text(json.dumps({"version": 1, "technologies": {}, "overrides": {
+        n: {"technology": n, "retired": "2026-11-04 기각"} for n in retired}}), encoding="utf-8")
+    return {"app": root}, tiers
+
+
+def test_security_osv_catches_litellm_backdoor_update():
+    # 회귀 정답 (HYO-170): LiteLLM 1.107.0 백도어가 OSV에서 「악성 기록 수정」으로 잡힌다 — 발행일은 3/24라 발행일만 보면 놓친다
+    import tempfile
+    from collector.sources import security
+    from pipeline import lanes
+    with tempfile.TemporaryDirectory() as t:
+        roots, tiers = _sec_stack(t)
+        f = SecFetcher()
+        items, rep = security.collect(SEC_CFG, f, SEC_NOW, roots, None, tiers)
+    osv = {i.id: i for i in items if i.source == "osv"}
+    assert set(osv) == {"osv:MAL-2026-2144@2026-10-29", "osv:GHSA-hhww-mrg2-969h", "osv:GHSA-8g5g-mxqh-grgj"}, sorted(osv)
+    mal = osv["osv:MAL-2026-2144@2026-10-29"]
+    assert mal.meta["dependency"] == "litellm" and mal.meta["ecosystem"] == "PyPI" and mal.meta["updated"] is True
+    assert "1.107.0" in mal.text and mal.text.startswith("Updated 2026-10-29") and "security advisory MAL-2026-2144" in mal.title
+    assert mal.url == "https://osv.dev/vulnerability/MAL-2026-2144" and mal.created_at.startswith("2026-10-29")
+    assert osv["osv:GHSA-hhww-mrg2-969h"].meta["fixed"] == ["1.107.1"]
+    assert osv["osv:GHSA-8g5g-mxqh-grgj"].meta["ecosystem"] == "npm"
+    c = rep["osv"]
+    assert (c["published"], c["malicious_updated"], c["old_modified_skipped"], c["alias_merged"]) == (2, 1, 1, 1), c
+    assert not any("GHSA-old-outside" in u for u in f.gets)          # 창 밖에 수정된 것은 본문을 받지 않는다
+    assert rep["packages"]["by_ecosystem"] == {"PyPI": 3, "npm": 2} and not rep["failed"], rep
+    lane, why = lanes.classify(mal.to_dict())
+    assert lane == "A" and why == ["security-advisory:litellm"], (lane, why)
+    # 관문은 그 의존성 하나로만 본다 — 제목의 「Python SDK」 같은 낱말에 python이 붙지 않게 (gate.resolve_technologies)
+    from pipeline.importance.gate import resolve_technologies
+    assert resolve_technologies(mal.to_dict(), ["python", "litellm"]) == ["litellm"]
+
+
+def test_security_retired_technology_not_queried():
+    import tempfile
+    from collector.sources import security
+    with tempfile.TemporaryDirectory() as t:
+        roots, tiers = _sec_stack(t, retired=["LiteLLM"])
+        f = SecFetcher()
+        items, rep = security.collect(SEC_CFG, f, SEC_NOW, roots, None, tiers)
+    asked = {q["package"]["name"] for p in f.posts for q in p["queries"]}
+    assert "litellm" not in asked and rep["packages"]["retired_skipped"] == ["litellm"], (asked, rep["packages"])
+    assert not any(i.meta.get("dependency") == "litellm" for i in items)
+    # 등급 파일이 없으면 거르지 않고 묻고, 이유를 남긴다
+    with tempfile.TemporaryDirectory() as t:
+        roots, _ = _sec_stack(t)
+        _, rep = security.collect(SEC_CFG, SecFetcher(), SEC_NOW, roots, None, Path(t) / "no-tiers.json")
+    assert "tiers_note" in rep["packages"] and rep["packages"]["total"] == 5
+
+
+def test_security_runtime_notices():
+    # 회귀 정답 (HYO-170): Node.js 10월 보안 릴리스(Brotli RCE) · Python CPython 공지 — 레인 A 런타임 통로로
+    import tempfile
+    from collector.sources import security
+    from pipeline import lanes
+    with tempfile.TemporaryDirectory() as t:
+        roots, tiers = _sec_stack(t)
+        items, rep = security.collect(SEC_CFG, SecFetcher(), W44_NOW, roots, None, tiers)
+    rt = {i.id: i for i in items if i.channels[0].startswith("runtime-security:")}
+    node = rt["runtime-security:nodejs:october-2026-security-releases"]
+    assert node.meta == {"kind": "advisory", "runtime": "nodejs", "dependency": "electron"}, node.meta
+    assert "Brotli" in node.text and node.title == "Node.js security: Wednesday, October 21, 2026 Security Releases"
+    assert node.created_at == "2026-10-21T22:00:00Z"
+    py = rt["runtime-security:python:HCHE62VYTPYI6WO"]
+    assert py.meta.get("dependency") == "python" and py.title.startswith("Python security: [CVE-2026-116566]")
+    cert = rt["runtime-security:python:LSEJ6DOJPIHHNNR"]
+    assert "dependency" not in cert.meta              # CPython이 아니다 — 관문이 제목 이름(certifi)으로 찾는다
+    from pipeline.importance.gate import resolve_technologies
+    assert resolve_technologies(cert.to_dict(), ["python", "certifi"]) == ["certifi"]
+    assert resolve_technologies(py.to_dict(), ["python", "certifi"]) == ["python"]
+    assert resolve_technologies(node.to_dict(), ["python", "electron", "node.js"]) == ["electron"]
+    assert len(rt) == 3 and rep["runtimes"] == {"python": {"entries": 3, "in_window": 2}, "nodejs": {"entries": 2, "in_window": 1}}
+    assert lanes.classify(node.to_dict()) == ("A", ["runtime-security:nodejs"]), lanes.classify(node.to_dict())
+
+
+def test_security_dead_sources_recorded_and_others_continue():
+    import tempfile
+    from collector.sources import security
+    with tempfile.TemporaryDirectory() as t:
+        roots, tiers = _sec_stack(t)
+        items, rep = security.collect(SEC_CFG, SecFetcher(fail=("querybatch", "py.example")), W44_NOW, roots, None, tiers)
+    chans = {x["channel"] for x in rep["failed"]}
+    assert chans == {"security-advisories", "runtime-security:python"}, rep["failed"]
+    assert [i.source for i in items] == ["nodejs"]        # 죽은 출처는 기록만 하고 Node.js 공지는 그대로 받는다
+
+
+def test_fetcher_post_json():
+    import io
+    import urllib.request
+    seen = []
+
+    class Resp(io.BytesIO):
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=60):
+        seen.append((req.get_method(), req.data, req.headers.get("Content-type")))
+        return Resp(b'{"results": []}')
+
+    orig = urllib.request.urlopen
+    urllib.request.urlopen = fake_urlopen
+    try:
+        f = fetch.Fetcher(sleep=lambda s: None)
+        assert f.post_json("https://api.osv.dev/v1/querybatch", {"queries": []}) == {"results": []}
+    finally:
+        urllib.request.urlopen = orig
+    assert seen == [("POST", b'{"queries": []}', "application/json")], seen
+    assert f.log == [("https://api.osv.dev/v1/querybatch", 200, 1)]
+
+
 def main():
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0
