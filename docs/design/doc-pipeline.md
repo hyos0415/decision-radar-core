@@ -254,6 +254,7 @@ excludes:
 
 - 제외 (사용자 결정): NVIDIA API(모델 페이지가 자바스크립트 렌더링이라 비교 불가) · 금감원 Finlife · 국가법령정보 DRF(데이터 의존성 — 바뀌면 fineprint 수집이 깨지며 레포에서 드러난다)
 - **페이지 비교는 본문 텍스트로.** 같은 내용의 페이지도 원본 HTML 해시는 요청마다 달랐다
+- 변경 (2026-11-04, 사용자 결정 — HYO-168 가): **changelog · release notes 페이지의 diff는 날짜 블록마다 항목 하나로 읽는다** (`pipeline/page_entries.py`). 얼린 스냅숏은 그대로 두고 파이프라인이 읽을 때 쪼갠다 — 지난 주에도 같은 코드가 걸린다. deprecations처럼 행마다 날짜가 있는 표는 쪼개지 않는다. 계기: 2026-W44 OpenAI changelog diff 하나에 「Oct 26 · Released GPT-6.1 Terra」와 「Oct 22 · gpt-6-luna Decisions API」가 섞여, 관문이 luna 줄로만 판정해(「가격·한도 변경」으로 남김) Terra는 아무도 보지 않았다. 확인(얼린 W44 · W45, 쪼갠 항목만 관문 gpt-6.1-sol에 다시 걸기, $0.05): Terra 블록은 제 항목이 되지만 관문은 「minor·patch」로 버린다(W45의 GPT-6 Rosalind 출시도 같다) — 이름 기반 관문으로는 새 모델을 못 남긴다. 새 모델 판정(HYO-168 나)이 따로 맡는다
 - 규제 출처는 HYO-68(Could)로 따로 둔다 — 신호만, 판단은 사람
 
 ## 5. 측정
