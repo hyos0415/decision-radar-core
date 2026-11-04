@@ -137,6 +137,33 @@ def test_slots_step_runs_when_profile_exists_and_failure_continues():
     assert [s["ok"] for s in w2.summary()["steps"] if s["name"] == "slots"] == [False]
 
 
+def test_skill_step_off_by_default_and_before_gate_when_on():
+    """HYO-167 합집합 — 스킬 단계는 기본 꺼짐(구독 세션 0). RADAR_UNION=on이면 관문 앞(D6)에서 같은 run 폴더의 union/으로 돌고,
+    실패해도 관문 · detect 입력은 수집 항목만으로 간다. 이미 게시된 주에는 세션을 쓰지 않는다."""
+    w = World()
+    rc, _ = w.go("--no-push")
+    assert rc == 0 and "pipeline.union" not in w.mods()
+    assert [s["skipped"] for s in w.summary()["steps"] if s["name"] == "skill"] == [True]
+    w = World()
+    w.env["RADAR_UNION"] = "on"
+    rc, _ = w.go("--no-push")
+    assert rc == 0 and w.mods()[3:5] == ["pipeline.union", "pipeline.profile_filter"], w.mods()
+    un = w.calls[3]
+    assert un[1][0] == "run" and arg(un, "--week") == WEEK and arg(un, "--snapshots") == str(w.snaps)
+    assert arg(un, "--out") == str(w.pout / WEEK / "union") and arg(un, "--adr") == str(Path(w.env["RADAR_ADR_DIR"]).parent.parent)  # <ADR repo>/docs/adr → repo
+    w2 = World(fail={"pipeline.union"})
+    w2.env["RADAR_UNION"] = "on"
+    rc, _ = w2.go()
+    assert rc == 0 and f"detect/{WEEK}/feed.json" in w2.remote_files()
+    assert [s["ok"] for s in w2.summary()["steps"] if s["name"] == "skill"] == [False]
+    w3 = World()
+    w3.env["RADAR_UNION"] = "on"
+    w3.go()                                    # 게시까지
+    w3.calls.clear()
+    w3.go()
+    assert "pipeline.union" not in w3.mods(), w3.mods()
+
+
 def test_targets_remote_head_and_basis():
     """HYO-162 — 등급·관문은 원격 HEAD 사본을 가리키는 대상 목록을 받고, 관문 뒤 run 폴더에 판정 기준이 남는다."""
     w = World()

@@ -186,6 +186,93 @@ def test_off_by_default():
             os.environ["RADAR_UNION"] = saved
 
 
+# ── 사슬 연결 (D6 관문 앞 · D7 같은 몫) ──────────────────────────────────
+
+def union_run(tmp, corpus, week="2026-W43"):
+    """<run 폴더>/union/skill/ — 주간 사슬의 skill 단계가 남기는 모양 (스킬 줄 실행 대신 지난 초안으로)."""
+    snap = snapshot(tmp, corpus, "snap")
+    run = Path(tmp) / "run"
+    union.build(drafts(tmp), union.skill_dir(run), week=week, snapshot=snap, fetcher=FakeFetcher(PAGES))
+    return snap, run
+
+
+class On:
+    def __init__(self, on=True):
+        self.on, self.saved = on, None
+
+    def __enter__(self):
+        self.saved = os.environ.pop(union.FLAG, None)
+        if self.on:
+            os.environ[union.FLAG] = "on"
+
+    def __exit__(self, *exc):
+        os.environ.pop(union.FLAG, None)
+        if self.saved is not None:
+            os.environ[union.FLAG] = self.saved
+
+
+def test_extra_items_only_when_on():
+    with tempfile.TemporaryDirectory() as tmp:
+        _snap, run = union_run(tmp, W43)
+        with On(False):
+            assert union.extra_items(run) == [] and union.funnel_info(run, [], []) is None  # 폴더가 남아 있어도 꺼져 있으면 없다
+        with On():
+            assert [i["id"] for i in union.extra_items(run)] == ["skill:github.com/anthropics/anthropic-sdk-python/releases/tag/v2.0.0"]
+        assert union.extra_items(Path(tmp) / "nowhere", {"RADAR_UNION": "on"}) == []
+
+
+def test_dependency_item_goes_to_gate_lane_and_model_item_to_slots():
+    from pipeline import lanes, slots
+    with tempfile.TemporaryDirectory() as tmp:
+        items = union.freeze(drafts(tmp), Path(tmp) / "out", week="2026-W43", corpus=W43, fetcher=FakeFetcher(PAGES))
+        assert all(lanes.classify(i)[0] == "A" for i in items), [lanes.classify(i) for i in items]  # 의존성 릴리스 → 레인 A(관문)
+        assert all(slots.why_candidate(i) is None for i in items)                                 # …자리 질의 후보는 아니다
+        model = union.skill_item({"technology": "GPT-6.1 Terra", "version": "6.1", "dependency": False, "title": "GPT-6.1 Terra 출시",
+                                  "evidence": [{"url": "openai.com/index/terra", "source_type": "official_doc"}]},
+                                 "openai.com/index/terra", union.known_packages(W43), "2026-W44", {"status": 200}, "Released GPT-6.1 Terra", "official_doc")
+        assert lanes.classify(model)[0] == "B" and slots.why_candidate(model) == "skill-line"
+        assert detect_feed.slot_entry(model)["source_type"] == "official_doc"  # 스킬 항목은 community로 깎지 않는다 — 1차 출처만 받는다
+
+
+def test_profile_filter_reads_skill_items_when_on():
+    from pipeline import profile_filter
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_profile_filter import PROFILE_YAML
+    for on in (False, True):
+        with tempfile.TemporaryDirectory() as tmp, On(on):
+            snap, run = union_run(tmp, W43)
+            (Path(tmp) / "p.yaml").write_text(PROFILE_YAML, encoding="utf-8")
+            with open(os.devnull, "w", encoding="utf-8") as null:
+                old, sys.stdout = sys.stdout, null
+                try:
+                    assert profile_filter.main(["run", "--snapshot", str(snap), "--profile", str(Path(tmp) / "p.yaml"), "--out", str(run), "--no-stack"]) == 0
+                finally:
+                    sys.stdout = old
+            ids = {e["id"] for e in json.loads((run / "lane_a.json").read_text(encoding="utf-8"))}
+            skill = "skill:github.com/anthropics/anthropic-sdk-python/releases/tag/v2.0.0"
+            assert (skill in ids) is on, (on, sorted(ids))
+            assert "skill:github.com/langfuse/langfuse-python/releases/tag/v5.0.0" not in ids  # 겹친 것은 수집 항목만 (중복 없음)
+
+
+def test_detect_feed_takes_skill_item_and_counts_it():
+    with tempfile.TemporaryDirectory() as tmp, On():
+        snap, run = union_run(tmp, W43)
+        skill = "skill:github.com/anthropics/anthropic-sdk-python/releases/tag/v2.0.0"
+        kb = [{"tier": "L5", "change": "breaking", "technology": "anthropic"}]
+        lane_a = [{"id": skill, "gate": {"keep": True, "status": "ok", "kept_by": kb, "reason": "anthropic L5 × breaking"}, "shown": True},
+                  {"id": "github-release:pydantic/pydantic@v2.14.2", "gate": {"keep": False, "status": "ok", "kept_by": []}, "shown": None}]
+        (run / "lane_a.json").write_text(json.dumps(lane_a), encoding="utf-8")
+        (run / "run.json").write_text(json.dumps({"snapshot": str(snap), "counts": {"items": 5, "lane_a": 2},
+                                                   "lane_a_gate": {"model": "stub", "label": "top-k", "total_kept": 1}}), encoding="utf-8")
+        out = Path(tmp) / "feed"
+        f = detect_feed.build(run, out)
+        feed = json.loads((out / "feed.json").read_text(encoding="utf-8"))
+        assert [e["id"] for e in feed] == [skill] and feed[0]["kind"] == "dependency_release" and feed[0]["package"] == "anthropic", feed
+        assert "BREAKING CHANGES" in (out / "items" / "F01.md").read_text(encoding="utf-8")  # 받은 원문이 detect가 여는 전문
+        assert f["union"] == {"found": 2, "fetched": 2, "not_fetched": 0, "both": 1, "skill_only": 1, "gated": 1, "kept": 1, "to_detect": 1}, f["union"]
+        assert "스킬 줄 2 (겹침 1 · 스킬만 1 → 관문 남김 1 · detect 1)" in detect_feed.funnel_line(f)
+
+
 TESTS = [(n, f) for n, f in globals().items() if n.startswith("test_")]
 
 

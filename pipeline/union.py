@@ -13,11 +13,11 @@
   fetch.json    url마다 받음 · 못 받음(상태) · 받은 시각
   union.json    합치기 결과 — 건수(찾음 · 받음 · 못 받음 · 겹침 · 스킬만) · 겹친 짝(스킬 id → 수집 id들) · 스킬만 id
 
-**합류 지점(E1)과 상한(E2)은 사용자 결정 전이다** — 이 모듈은 어느 쪽이든 붙일 수 있는 데까지만 한다:
-  가(관문 앞)  `merged_items()` = 코퍼스 + 스킬만 항목 → 관문 · 상한 · 자리 질의 · 질의별 top-k가 그대로 읽는다
-  나(관문 뒤)  `skill_only()`를 detect_feed.feed_entry로 바꿔 상한 단계에서 더한다 — 자리 질의는 합친 뒤 후보 전체에 다시 돌려야 한다
-  다(끝)       detect 초안끼리 — 이 모듈의 found_by만 쓴다
-주간 사슬(collector.weekly)에는 아직 안 붙였다 — 단계 자리가 E1에 따라 다르다(가는 관문 앞, 나 · 다는 feed 앞).
+합류 = **관문 앞**(D6) · 몫 = **같은 몫**(D7) (사용자 2026-11-04). 주간 사슬(collector.weekly)의 `skill` 단계가 관문 앞에서
+`run`을 부르고 결과를 `<run 폴더>/union/skill/`에 둔다. 관문(profile_filter) · 자리 질의(slots) · detect 입력(detect_feed)은 코퍼스에
+`extra_items(<run 폴더>)` — 스킬만 잡은 항목 — 를 더해 읽는다. 의존성 릴리스는 `dependency-releases` 통로로 레인 A(관문)에,
+그 밖(새 모델 · 서비스)은 자리 질의 후보로 간다 — 11/4 조건(스킬 항목도 자리 질의 · 질의별 top-k 후보로)을 지키는 길.
+꺼져 있으면(`RADAR_UNION`이 on이 아니면) `extra_items`는 늘 빈 목록이다 — 폴더가 남아 있어도.
 """
 import argparse
 import datetime as dt
@@ -26,7 +26,6 @@ import os
 import re
 import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -40,6 +39,7 @@ from pipeline.revisit_feed import page_text  # noqa: E402
 
 FLAG = "RADAR_UNION"
 SOURCE = "skill"
+RUN_DIR = "union"  # <run 폴더>/union/ — skill-run/(스킬 줄 실행) · skill/(얼린 항목 · union.json)
 _GH_REPO = re.compile(r"github\.com/([^/\s]+/[^/\s#?]+)", re.I)
 _PKG_URL = re.compile(r"(?:pypi\.org/project|npmjs\.com/package)/((?:@[^/\s]+/)?[^/\s#?]+)", re.I)
 URL_ORDER = ("release_note", "official_doc", "issue_pr", "paper", None)  # 원문을 받을 근거 링크 — 1차 출처 먼저 (community · repo: 는 안 받는다)
@@ -81,14 +81,18 @@ def resolve_package(cand, known):
     return known["deps"][max(hits, key=len)] if hits else None
 
 
-def primary_url(cand):
-    """원문을 받을 링크 하나 — 근거 중 1차 출처 순(URL_ORDER). `repo:`(사용자 레포 파일) · community는 받지 않는다."""
+def primary_evidence(cand):
+    """원문을 받을 링크 하나 → (url, source_type) — 근거 중 1차 출처 순(URL_ORDER). `repo:`(사용자 레포 파일) · community는 받지 않는다."""
     ev = [e for e in cand.get("evidence") or [] if not str(e.get("url", "")).startswith("repo:") and e.get("source_type") != "community"]
     for st in URL_ORDER:
         for e in ev:
             if st is None or e.get("source_type") == st:
-                return e["url"]
-    return next((u for u in cand.get("urls") or [] if not u.startswith("repo:")), None)
+                return e["url"], e.get("source_type")
+    return next(((u, None) for u in cand.get("urls") or [] if not u.startswith("repo:")), (None, None))
+
+
+def primary_url(cand):
+    return primary_evidence(cand)[0]
 
 
 def corpus_key(item):
@@ -96,17 +100,20 @@ def corpus_key(item):
     return skill_line.item_key(m.get("dependency"), m.get("tag") or skill_line.version_of(item.get("title")), item.get("url"))
 
 
-def skill_item(cand, url, known, week, fetched, text):
-    """스킬 후보 → 수집 항목 모양. 의존성 릴리스(스킬이 dependency로 본 것)만 meta.dependency · tag를 단다 — detect_feed가 kind를 정한다."""
+def skill_item(cand, url, known, week, fetched, text, source_type=None):
+    """스킬 후보 → 수집 항목 모양. 의존성 릴리스(스킬이 dependency로 본 것)만 meta.dependency · tag와 `dependency-releases` 통로를 단다 —
+    레인 A(관문)로 가고 detect_feed가 kind를 정한다. 나머지(새 모델 · 서비스)는 레인 B 통로 없이 자리 질의 후보로 (slots.why_candidate)."""
     pkg = resolve_package(cand, known)
     ver = cand.get("version")
     meta = {"skill": {k: cand.get(k) for k in ("adr", "technology", "use", "version", "dependency", "affected", "evidence")},
-            "fetch": fetched, "found_by": "skill"}
+            "fetch": fetched, "found_by": "skill", "source_type": source_type or "official_doc"}
+    channels = ["skill-line"]
     if cand.get("dependency") is not False and pkg and ver:
         meta.update(dependency=pkg, tag=ver if ver.startswith("v") else "v" + ver)
+        channels.append("dependency-releases")
     elif pkg:
         meta["package"] = pkg  # 같은 항목 키에는 쓴다 (버전이 있으면)
-    return {"id": f"{SOURCE}:{url_key(url)}", "source": SOURCE, "channels": ["skill-line"],
+    return {"id": f"{SOURCE}:{url_key(url)}", "source": SOURCE, "channels": channels,
             "title": cand.get("title") or " ".join(x for x in (cand.get("technology"), ver) if x), "url": "https://" + url_key(url),
             "created_at": None, "first_seen": week, "new": True, "links": [], "signals": {}, "text": text,
             "meta": meta}
@@ -156,7 +163,7 @@ def freeze(cands, out_dir, *, week, corpus, fetcher=None, now=None, fetch=True):
     at = (now or dt.datetime.now().astimezone()).isoformat(timespec="seconds")
     items, log, seen = [], {}, {}
     for c in cands:
-        url = primary_url(c)
+        url, src_type = primary_evidence(c)
         if not url:
             log[f"(링크 없음) {c.get('technology')}"] = {"status": "no_url", "adr": c.get("adr")}
             continue
@@ -176,7 +183,7 @@ def freeze(cands, out_dir, *, week, corpus, fetcher=None, now=None, fetch=True):
                 (out / name).write_text(f"# {key}\n\n{text}\n", encoding="utf-8", newline="\n")
             seen[key] = ({"status": st, "file": name, "fetched_at": at}, text)
             log[key] = {"status": st, "file": name, "fetched_at": at, "adr": c.get("adr")}
-        it = skill_item(c, key, known, week, dict(seen[key][0]), seen[key][1])
+        it = skill_item(c, key, known, week, dict(seen[key][0]), seen[key][1], src_type)
         if all(x["id"] != it["id"] for x in items):  # 같은 링크를 근거로 든 초안이 둘이면 한 번만
             items.append(it)
     write_items(out, items)
@@ -218,17 +225,46 @@ def merge(corpus, skill_items):
 
 
 def merged_items(corpus, skill_items, union):
-    """가(관문 앞) 자리에서 읽을 목록 — 코퍼스 + 스킬만 항목. 수집 항목에 found_by를 단 사본을 돌려준다(원본은 그대로)."""
+    """관문 앞(D6)에서 읽을 목록 — 코퍼스 + 스킬만 항목. 수집 항목에 found_by를 단 사본을 돌려준다(원본은 그대로)."""
     fb = union["found_by"]
     out = [{**it, "meta": {**(it.get("meta") or {}), "found_by": fb.get(it["id"], "collect")}} for it in corpus]
-    only = set(union["skill_only"])
-    return out + [it for it in skill_items if it["id"] in only]
+    return out + skill_only(skill_items, union)
 
 
 def skill_only(skill_items, union):
-    """나(관문 뒤) 자리에서 더할 것 — 스킬만 잡은 항목."""
+    """스킬만 잡은 항목 — 코퍼스에 더할 것."""
     only = set(union["skill_only"])
     return [it for it in skill_items if it["id"] in only]
+
+
+def skill_dir(run_dir):
+    return Path(run_dir) / RUN_DIR / "skill"
+
+
+def load(run_dir, env=None):
+    """<run 폴더>의 합치기 결과 → (스킬 항목들, union dict). 꺼져 있거나 없으면 None."""
+    d = skill_dir(run_dir)
+    if not enabled(env) or not (d / "union.json").exists():
+        return None
+    items = [json.loads(x) for x in (d / "items.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    return items, json.loads((d / "union.json").read_text(encoding="utf-8"))
+
+
+def extra_items(run_dir, env=None):
+    """관문 · 자리 질의 · detect 입력이 코퍼스에 더해 읽을 것 (D6) — 스킬만 잡은 항목. 꺼져 있으면 []."""
+    got = load(run_dir, env)
+    return skill_only(*got) if got else []
+
+
+def funnel_info(run_dir, lane_a, detect_ids, env=None):
+    """funnel.json 칸 — 스킬 줄 건수 + 스킬만 항목이 관문에서 남았나 · detect로 갔나(질의별 top-k에서 잘렸나, D7). 꺼져 있으면 None."""
+    got = load(run_dir, env)
+    if not got:
+        return None
+    only = set(got[1]["skill_only"])
+    gated = [e for e in lane_a if e["id"] in only]
+    return {**got[1]["counts"], "gated": len(gated), "kept": sum(1 for e in gated if (e.get("gate") or {}).get("keep")),
+            "to_detect": len(only & set(detect_ids))}
 
 
 def summary_line(union):
@@ -261,7 +297,7 @@ def run(week, out_dir, *, snapshots, adr_root, claude_bin=None, fetcher=None):
     if not meta["ok"]:
         raise SystemExit(f"스킬 줄 실패: {meta['error']}")
     cands = json.loads((work / "candidates.json").read_text(encoding="utf-8"))["drafts"]
-    return build(cands, Path(out_dir) / "skill", week=week, snapshot=Path(snapshots) / week, fetcher=fetcher)
+    return build(cands, Path(out_dir) / "skill", week=week, snapshot=Path(snapshots) / week, fetcher=fetcher)  # = skill_dir(<run 폴더>)
 
 
 def replay_candidates(draft_files):
