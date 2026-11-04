@@ -106,6 +106,22 @@ python pipeline/tests/test_alarm.py            # 오프라인 — 경보 그물 
 - manifest는 수집기와 같은 리더(`collector/stack.py`)로 읽는다 — git 추적 파일만, 대상별 `exclude`(radar-targets.json) 적용. `--repo`만 주면 exclude 없이 그 폴더의 추적 파일을 읽는다 (HYO-122)
 - 등급 파일은 `classify-stack`으로 만든다. 등급 스크립트 집행(HYO-67)은 데모 뒤
 
+## 탈락 추적 (HYO-171: `trace.py`)
+
+항목마다 어느 단계를 지나 어디서 왜 빠졌나. 단계 이름(1 레인 나누기 · 2a 기술 소속 · 2b 변화 분류 · 2c 등급 × 변화 결정표 · 2d 우리 것 좁히기 · 3 칸 정리 · 4 자리 질의 · 경보 그물 · 5 detect)과
+「놓친 것」 기록은 `docs/decisions/2026-11-04-missed-items.md`. 모델 호출 없음.
+
+```bash
+python -m pipeline.trace Terra --week 2026-W44                  # 제목 · URL · id에 낱말이 전부 든 항목마다 · 없으면 「수집 안 됨」 (--text: 본문까지)
+python -m pipeline.trace litellm 1.107 --week 2026-W44 --now    # 지금 코드로 다시 — 모델 답은 그 주 lane_a.json에 기록된 것만
+python pipeline/tests/test_trace.py                              # 「놓친 것」 5건 회귀 + 변이 7개
+```
+
+- `detect_feed`가 실행마다 `<detect 폴더>/trace.jsonl`을 쓴다 (항목마다 `{id, end, steps: [[단계, 통과, 이유]]}` — 제목 · URL · 빠진 곳은 읽을 때 코퍼스에서 붙인다). 명령은 이 파일이 있으면 읽고, 없으면(예전 주) run 폴더의 `lane_a.json` · `lane_b.*.json` · `alarm.json` · `slots.json`에서 다시 만든다
+- `end` = detect · list(목록에만) · out(빠짐) · unknown(그 주 detect 입력이 없다). 레인 B 순위 · 레인 C 화제는 기록만 하는 길(「막다른 길」)
+- `--now` 재생: 쪼갠 changelog의 원래 항목 · 경보 그물 글처럼 그 주에 모델 답이 없는 것은 2b에서 「기록된 모델 답 없음」으로 멈춘다 (모델을 부르지 않는다). 자리 질의는 run 폴더(또는 `--slots`)의 결과를 그대로 쓴다
+- `--report <report.json>`이면 5 detect의 결과(초안 · 버림 + 이유 · 이미 반영됨)를 붙인다 — `list.json`에 되돌려 붙이는 건 화면(HYO-168) 뒤
+
 ## 레인 C 화제 (HYO-127: `topics.py`)
 
 분야를 가리지 않고 그 주에 인기 있던 소식을 토픽으로 묶어 상위 k (doc-pipeline §2-3 변경 2026-10-19). A·B와 점수를 합치지 않는다. 네트워크·모델 호출 없음.

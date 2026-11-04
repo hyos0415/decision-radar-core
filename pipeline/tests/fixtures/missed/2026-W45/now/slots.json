@@ -1,0 +1,104 @@
+{
+ "slots_version": 1,
+ "engine": "claude",
+ "k": 3,
+ "fit_min": 2,
+ "candidates": 176,
+ "judged": 176,
+ "releases": 60,
+ "unjudged": [],
+ "dropped": {
+  "unknown_id": 0,
+  "unknown_slot": 0,
+  "bad_fit": 0
+ },
+ "slot_names": {
+  "gate-classifier": "관문 분류",
+  "agent-engine": "에이전트 엔진 (detect · revisit)",
+  "eval-judge": "eval judge",
+  "finance-verifier-local": "금융 verifier (로컬)",
+  "finance-decomposition": "질의 분해",
+  "fineprint-extraction": "조건 추출",
+  "fineprint-local-nl": "자연어 해석 (로컬)",
+  "medical-ops-llm": "의료 운영 LLM",
+  "medical-ondevice": "온디바이스"
+ },
+ "slot_current": {
+  "gate-classifier": [
+   "OpenAI gpt-6.1-sol (API)"
+  ],
+  "agent-engine": [
+   "Anthropic claude-sonnet-5-5 (claude -p",
+   "effort medium)"
+  ],
+  "eval-judge": [
+   "OpenAI gpt-6-sol (codex exec)"
+  ],
+  "finance-verifier-local": [
+   "Intel/Qwen3.5-4B-int4-AutoRound (vLLM)",
+   "kakaocorp/kanana-2-3b-instruct (비교)"
+  ],
+  "finance-decomposition": [
+   "Anthropic claude-sonnet-5"
+  ],
+  "fineprint-extraction": [
+   "Anthropic claude-haiku-4-5-20251001"
+  ],
+  "fineprint-local-nl": [
+   "qwen3.5-4b (llama-server)"
+  ],
+  "medical-ops-llm": [
+   "Amazon Bedrock apac.amazon.nova-pro-v1:0 (서울 apac 추론 프로파일)"
+  ],
+  "medical-ondevice": [
+   "Qwen3.5-2B Q4_0 (GGUF)"
+  ]
+ },
+ "per_slot": {
+  "gate-classifier": [
+   {
+    "id": "hn:50248124",
+    "title": "GPT-6.1 Terra",
+    "url": "https://openai.com/index/introducing-gpt-6-1-terra/",
+    "source": "hn",
+    "why": "hn:637",
+    "fit": 2,
+    "reason": "같은 OpenAI API의 GPT-6.1 Terra는 속도·비용 균형을 내세워 gpt-6.1-sol과 단가·응답 속도를 비교할 만하지만, 구조화 출력 지원과 가격은 글에 없다.",
+    "popularity": -637,
+    "rank": 1
+   }
+  ],
+  "agent-engine": [],
+  "eval-judge": [],
+  "finance-verifier-local": [],
+  "finance-decomposition": [],
+  "fineprint-extraction": [],
+  "fineprint-local-nl": [],
+  "medical-ops-llm": [],
+  "medical-ondevice": []
+ },
+ "to_detect": [
+  "hn:50248124"
+ ],
+ "candidate_list": [
+  {
+   "id": "hn:50248124",
+   "source": "hn",
+   "why": "hn:637",
+   "title": "GPT-6.1 Terra",
+   "url": "https://openai.com/index/introducing-gpt-6-1-terra/",
+   "text": "<a href=\"https:&#x2F;&#x2F;developers.openai.com&#x2F;api&#x2F;docs&#x2F;models&#x2F;gpt-6.1-terra\" rel=\"nofollow\">https:&#x2F;&#x2F;developers.openai.com&#x2F;api&#x2F;docs&#x2F;models&#x2F;gpt-6.1-terra</a>",
+   "popularity": -637
+  },
+  {
+   "id": "vendor:aws-bedrock:0c5c946db9a84a5a290bb7e1c3b4577820eb630a",
+   "source": "vendor",
+   "why": "bedrock-whats-new",
+   "title": "OpenAI GPT-6.1 Terra is now generally available on Amazon Bedrock",
+   "url": "https://aws.amazon.com/about-aws/whats-new/2026/10/openai-gpt-6-1-terra-on-amazon-bedrock/",
+   "text": "Today, AWS announces the general availability of OpenAI GPT-6.1 Terra on Amazon Bedrock. GPT-6.1 Terra expands the GPT-6 family with a balance of capability, speed, and cost efficiency for everyday workloads. As the newest model in the Terra line, GPT-6.1 Terra combines detailed visual reasoning, ac",
+   "popularity": 0
+  }
+ ],
+ "note": "2026-11-04 지금 코드 자리 질의 결과에서 픽스처 항목만 (make_fixture.py) — 건수 칸은 원래 주 전체"
+}

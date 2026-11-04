@@ -1,0 +1,30 @@
+{
+ "snapshot": "radar-snapshots/2026-W45",
+ "counts": {
+  "items": 2601,
+  "lane_a": 311,
+  "lane_b_candidates": 2283,
+  "skipped_pages": 7,
+  "dropped_not_new": 0,
+  "lane_b_ranked": {
+   "kw": 85,
+   "kw+aliases": 288
+  },
+  "lane_a_kept": 17
+ },
+ "stack": {
+  "terms": [
+   "litellm",
+   "openai",
+   "openai-agents",
+   "python"
+  ]
+ },
+ "lane_a_gate": {
+  "model": "gpt-6.1-sol",
+  "mode": null,
+  "label": "5/17",
+  "limit": 5,
+  "total_kept": 17
+ }
+}
