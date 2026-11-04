@@ -46,6 +46,9 @@ def resolve_technologies(item, names, vendor_terms=None):
     for n in names:
         if len(n) >= 3 and re.search(r"(?<![0-9A-Za-z])" + re.escape(n) + r"(?![0-9A-Za-z])", title, re.I):
             add(n)
+    for t in meta.get("alarm_terms") or []:     # 경보 그물(pipeline.alarm, HYO-170)이 제목 · URL에서 찾은 이름 — 등급 파일 표기와 달라도(llama.cpp ↔ llama-cpp) 정규화로 맞춘다
+        if norm(t) in by_norm:
+            add(by_norm[norm(t)])
     return out
 
 
@@ -140,7 +143,8 @@ def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT, mode=None):
       최신 1건으로 접은 것(`folded_into` = 대표 id) + 기술마다 top-k
     - weekly5 (그 전): 5/N 상한 · 기술당 1칸 먼저"""
     mode = mode or policy.CAP_MODE
-    kept = [{"id": e["id"], "kept_by": e["gate"]["kept_by"], "title": e.get("title"), "release_line": _release_line(e)}
+    kept = [{"id": e["id"], "kept_by": e["gate"]["kept_by"], "title": e.get("title"), "release_line": _release_line(e),
+             "alarm": e.get("alarm"), "technologies": e["gate"].get("technologies")}
             for e in entries if (e.get("gate") or {}).get("keep")]
 
     def brief(x):
@@ -148,7 +152,9 @@ def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT, mode=None):
         t = policy.cap_technology(x)
         return {"id": x["id"], "tier": best["tier"], "change": best["change"], "technology": t if isinstance(t, str) else None}
 
-    base = {"total_kept": len(kept), "status_counts": policy.gate_counts(entries), "newer_line_eol": newer_line_eol(entries)}
+    # 판정 못 한 비율 경고는 레인 A 기준 그대로 — 경보 그물 항목(레인 B에서 온 것, 런타임 이름은 등급이 없다)은 세지 않는다
+    base = {"total_kept": len(kept), "status_counts": policy.gate_counts([e for e in entries if not e.get("alarm")]),
+            "newer_line_eol": newer_line_eol(entries)}
     if mode == "weekly5":
         shown, cut, label = policy.apply_cap(kept, limit)
         shown_ids, cut_ids = {s["id"] for s in shown}, {c["id"] for c in cut}

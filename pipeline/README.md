@@ -95,6 +95,7 @@ python -m pipeline.detect_feed --run pipeline/out/w41 --out pipeline/out/w41/det
 
 python pipeline/tests/test_detect_feed.py      # 오프라인 — radar.py feed·fetch 왕복 + 변이 3개
 python pipeline/tests/test_page_entries.py     # 오프라인 — changelog diff 날짜 블록 쪼개기(HYO-168) + 변이 4개
+python pipeline/tests/test_alarm.py            # 오프라인 — 경보 그물 · 「우리 스택 아님」(HYO-170) + 변이 6개
 ```
 
 - changelog · release notes 페이지 diff는 `read_items`가 **날짜 블록마다 항목 하나로** 쪼갠다(`page_entries.py`, HYO-168) — 블록 id · url 끝에 `#<날짜>`. 첫 날짜 앞의 줄과 빠진 줄은 원래 id에 남는다. 얼린 `items.jsonl`은 그대로

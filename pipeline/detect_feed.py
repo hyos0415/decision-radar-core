@@ -31,7 +31,8 @@ from .profile_filter import read_items, write_json
 
 SUMMARY_CHARS = 1500    # triage 프롬프트에 그대로 들어간다. 전문은 snapshot_fetch로
 SLOTS = "slots.json"    # 자리 질의 결과 (pipeline.slots, HYO-168) — run 폴더에 있으면 자리마다 top-k를 detect에 더한다
-LIST = "list.json"      # 이번 주 목록 — 「항상」 · 기술 질의 · 자리 질의 (query-topk.md). 화면이 읽는다
+LIST = "list.json"      # 이번 주 목록 — 「항상」 · 기술 질의 · 자리 질의 (query-topk.md) + 경보 · 우리 스택 아님 (HYO-170). 화면이 읽는다
+ALARM = "alarm.json"    # 경보 그물 · 「우리 스택 아님」 (pipeline.alarm, profile_filter가 쓴다)
 
 
 def url_key(url):
@@ -105,14 +106,36 @@ def slot_entry(item):
     return e
 
 
-def week_list(lane_a, slots, detect_ids):
-    """이번 주 목록 (query-topk.md §2) — 「항상」 · 기술 질의(top-k) · 자리 질의(top-k). 화면이 읽는다. detect로 간 것은 to_detect."""
+def alarm_entry(item):
+    """경보 그물로 온 글의 feed 칸 (HYO-170) — kind는 security_alert. HN · Reddit은 community(근거가 아니다 — detect가 공식 공지를 찾는다, R2)."""
+    e = feed_entry(item)
+    e["kind"] = "security_alert"
+    e["source_type"] = SLOT_SOURCE_TYPE.get(item.get("source"), "community")
+    return e
+
+
+def alarm_unknown(lane_a):
+    """경보 그물에 걸렸는데 관문이 판정 못 한 것(등급 파일에 없는 런타임 — Claude Code · Node.js …) → 버리지 않고 목록 · detect로.
+    같은 이름 묶음은 처음 글 하나만 detect (나머지는 folded_into). → [(항목, 대표 id)]"""
+    out, reps = [], {}
+    for e in lane_a:
+        if e.get("alarm") and (e.get("gate") or {}).get("status") == "unclassified":
+            key = tuple(sorted(t.lower() for t in e["alarm"]))
+            reps.setdefault(key, e["id"])
+            out.append((e, reps[key]))
+    return out
+
+
+def week_list(lane_a, slots, detect_ids, alarm_info=None):
+    """이번 주 목록 (query-topk.md §2) — 「항상」 · 기술 질의(top-k) · 자리 질의(top-k) + 경보(관문이 모르는 기술) · 우리 스택 아님 (HYO-170).
+    화면이 읽는다. detect로 간 것은 to_detect."""
     def brief(e):
         g = e.get("gate") or {}
         best = min(g.get("kept_by") or [{}], key=lambda r: (policy.tier_rank(r["tier"]), policy.severity(r["change"])) if r else (99, 99))
         return {"id": e["id"], "title": e.get("title"), "url": e.get("url"), "tier": best.get("tier"), "change": best.get("change"),
                 "reason": g.get("reason"), "rank": e.get("rank"), "to_detect": e["id"] in detect_ids,
-                "folded_into": e.get("folded_into")}     # 「항상」에서 같은 패키지 · 줄의 더 새 버전으로 접혔으면 그 대표 id (화면이 「외 N건」으로 묶는다)
+                "folded_into": e.get("folded_into"),     # 「항상」에서 같은 패키지 · 줄의 더 새 버전으로 접혔으면 그 대표 id (화면이 「외 N건」으로 묶는다)
+                "alarm": e.get("alarm")}                 # 경보 그물로 온 글이면 걸린 이름들 (HYO-170)
     listed = [e for e in lane_a if e.get("listed")]
     always = [brief(e) for e in listed if e.get("always")]
     tech = {}
@@ -124,21 +147,31 @@ def week_list(lane_a, slots, detect_ids):
         slot_groups.append({"slot": slot, "name": slots["slot_names"].get(slot), "current": slots.get("slot_current", {}).get(slot) or [],
                             "items": [dict({k: x[k] for k in ("id", "title", "url", "source", "fit", "reason", "rank")}, to_detect=x["id"] in detect_ids)
                                       for x in xs]})
+    unknown = [dict(brief(e), reason="경보 그물 · 관문이 모르는 기술 (" + ", ".join(e["alarm"]) + ")", folded_into=rep if rep != e["id"] else None)
+               for e, rep in alarm_unknown(lane_a)]
+    not_ours = list((alarm_info or {}).get("not_ours") or [])
     return {"always": always, "tech": [{"query": q, "items": v} for q, v in tech.items()], "slots": slot_groups,
+            "alarm": unknown, "not_ours": not_ours,
             "counts": {"always": len(always), "tech": sum(len(v) for v in tech.values()),
-                       "slots": sum(len(g["items"]) for g in slot_groups), "to_detect": len(detect_ids)}}
+                       "slots": sum(len(g["items"]) for g in slot_groups), "alarm": len(unknown), "not_ours": len(not_ours),
+                       "to_detect": len(detect_ids)}}
 
 
-def funnel(manifest, lane_a, chosen, slots=None):
+def funnel(manifest, lane_a, chosen, slots=None, alarm_info=None):
     c = manifest.get("counts") or {}
     g = manifest.get("lane_a_gate") or {}
+    own = [e for e in lane_a if not e.get("alarm")]        # 레인 A 건수 · 판정 못 한 비율은 레인 A만 (경보 그물 글은 따로 센다)
     statuses = {}
-    for e in lane_a:
+    for e in own:
         s = (e.get("gate") or {}).get("status") or "none"
         statuses[s] = statuses.get(s, 0) + 1
     f = {"snapshot": manifest.get("snapshot"), "gate_model": g.get("model"), "items": c.get("items"), "lane_a": c.get("lane_a"),
-         "gate_status": statuses, "gate_counts": policy.gate_counts(lane_a), "kept": g.get("total_kept"), "cap": g.get("label"),
+         "gate_status": statuses, "gate_counts": policy.gate_counts(own), "kept": g.get("total_kept"), "cap": g.get("label"),
          "to_detect": len(chosen)}
+    net = [e for e in lane_a if e.get("alarm")]
+    if net or alarm_info:
+        f["alarm"] = {"net": len(net), "kept": sum(1 for e in net if (e.get("gate") or {}).get("keep")),
+                      "unknown": len(alarm_unknown(lane_a)), "not_ours": len((alarm_info or {}).get("not_ours") or [])}
     if g.get("mode") == "topk":
         f["listed"] = len(g.get("listed") or [])
     if slots:
@@ -160,6 +193,9 @@ def funnel_line(f):
     if f.get("slots"):
         s = f["slots"]
         line += f" · 자리 질의 후보 {s['candidates']} → 출시 {s['releases']} → 목록 {s['listed']} (detect {s['to_detect']})"
+    if f.get("alarm"):
+        a = f["alarm"]
+        line += f" · 경보 그물 {a['net']} (관문 남김 {a['kept']} · 관문이 모르는 기술 {a['unknown']}) · 우리 스택 아님 {a['not_ours']}"
     if gc and gc.get("warn"):
         line += (f" — 경고: 관문이 판정 못 한 소식 {gc['ratio']:.0%} (모르는 기술+분류 불가 / 팀원 스택 뺀 레인 A — 기준 {gc['warn_ratio']:.0%}, 잠정)")
     return line
@@ -180,6 +216,11 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
         if sid not in taken:
             chosen.append({"id": sid, "slot": slot, "slot_hit": x})
             taken.add(sid)
+    alarm_info = json.loads((run_dir / ALARM).read_text(encoding="utf-8")) if (run_dir / ALARM).exists() else None
+    for e, rep in alarm_unknown(lane_a):               # 경보 그물 · 관문이 모르는 기술 (HYO-170) — 이름 묶음마다 하나
+        if e["id"] == rep and e["id"] not in taken:
+            chosen.append({**e, "alarm_unknown": True})
+            taken.add(e["id"])
     missing = [e["id"] for e in chosen if e["id"] not in by_id]
     if missing:
         raise SystemExit(f"스냅숏 {snap}에 없는 항목 {len(missing)}개 (다른 주의 run인가?): {missing[:3]}")
@@ -188,7 +229,7 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
     feed, index, why = [], {}, {}
     for i, e in enumerate(chosen, 1):
         item = by_id[e["id"]]
-        entry = slot_entry(item) if e.get("slot") else feed_entry(item)
+        entry = slot_entry(item) if e.get("slot") else alarm_entry(item) if e.get("alarm") else feed_entry(item)
         name = f"items/F{i:02d}.md"
         (out / name).write_text(body_of(item, snap_dir), encoding="utf-8", newline="\n")
         feed.append(entry)
@@ -197,16 +238,19 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
             x = e["slot_hit"]
             why[item["url"]] = {"id": e["id"], "reason": f"자리 {slots['slot_names'].get(e['slot']) or e['slot']} · 적합도 {x['fit']}: {x['reason']}",
                                 "kept_by": [], "shown": True, "slot": e["slot"], "fit": x["fit"]}
+        elif e.get("alarm_unknown"):
+            why[item["url"]] = {"id": e["id"], "reason": "경보 그물 · 관문이 모르는 기술 (" + ", ".join(e["alarm"]) + ")", "kept_by": [],
+                                "shown": True, "alarm": e["alarm"]}
         else:
             g = e["gate"]
             why[item["url"]] = {"id": e["id"], "reason": g.get("reason"), "kept_by": g.get("kept_by") or [], "shown": e.get("shown")}
-    f = funnel(manifest, lane_a, chosen, slots)
+    f = funnel(manifest, lane_a, chosen, slots, alarm_info)
     write_json(out / "feed.json", feed)
     write_json(out / "index.json", index)
     write_json(out / "search.json", [])
     write_json(out / "funnel.json", f)
     write_json(out / "gate.json", why)
-    write_json(out / LIST, week_list(lane_a, slots, {e["id"] for e in chosen}))
+    write_json(out / LIST, week_list(lane_a, slots, {e["id"] for e in chosen}, alarm_info))
     if (run_dir / BASIS).exists():
         (out / BASIS).write_bytes((run_dir / BASIS).read_bytes())
     return f
