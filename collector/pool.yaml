@@ -1,6 +1,7 @@
 # 출처 풀 — 수집 기준 (docs/design/doc-pipeline.md §4, 2026-10-02 사용자 결정)
 # 기준을 바꾸면 이 파일을 고치고 version을 올린다. 결과를 본 뒤 바꾸면 doc-pipeline에 `변경`으로 남긴다.
-version: 2                  # 2026-10-08: 의존성 릴리스에 npm 경로(package.json 직접 읽기) 추가 - 수집 기준이 바뀜
+version: 3                  # 2026-11-04: 공식 보안 채널(security — OSV · Python · Node.js 공지) 추가 (HYO-170 다)
+# version 2 (2026-10-08): 의존성 릴리스에 npm 경로(package.json 직접 읽기) 추가
 
 reddit:
   min_interval_s: 61          # 8초면 429, 60초면 통과 (probe 2026-10-02)
@@ -52,3 +53,22 @@ huggingface:
     - text-ranking
     - image-text-to-text      # 멀티모달 — 사용자 관심사이자 확장할 영역
   daily_papers_days: 7
+
+security:                     # 공식 보안 채널 (HYO-170 다, doc-pipeline §4-6) — 레인 A
+  window_days: 8              # 의존성 릴리스와 같다 (하루 겹치게 — 같은 id는 first-seen이 합친다)
+  osv_min_interval_s: 0.3
+  # OSV: 대상 repo manifest의 PyPI · npm 이름 (등급 파일 retired 제외). 그 주 = 창 안 발행 + MAL- 기록은 창 안 수정도
+  runtimes:
+    - name: python
+      label: Python
+      feed: https://mail.python.org/archives/list/security-announce@python.org/feed/   # PSRT 공식 목록 — CVE마다 한 글
+      strip_title: ["[Security-announce]"]
+      dependency: python
+      # 같은 목록의 certifi · pip 공지는 CPython이 아니다 — 그때는 제목 이름으로 관문이 찾는다. CPython 공지는 「CPython」 낱말이 없어도
+      # python/cpython 링크는 있다 (리뷰 11/4: CVE-2026-115557 ssl 인증서 거부 목록 글이 「Python has added …」로 시작해 빠졌다)
+      dependency_when: 'CPython|github\.com/python/cpython'
+    - name: nodejs
+      label: Node.js
+      feed: https://nodejs.org/en/feed/vulnerability.xml   # 보안 릴리스 글 — 피드 본문이 비어 글 페이지를 받는다
+      fetch_page: true
+      dependency: electron      # 우리 Node는 Electron 안 (등급 파일에 node.js 없음 — 사용자 결정 2026-11-04)

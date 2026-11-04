@@ -266,6 +266,28 @@ excludes:
 - 변경 (2026-11-04, 사용자 결정 — HYO-168 가): **changelog · release notes 페이지의 diff는 날짜 블록마다 항목 하나로 읽는다** (`pipeline/page_entries.py`). 얼린 스냅숏은 그대로 두고 파이프라인이 읽을 때 쪼갠다 — 지난 주에도 같은 코드가 걸린다. deprecations처럼 행마다 날짜가 있는 표는 쪼개지 않는다. 계기: 2026-W44 OpenAI changelog diff 하나에 「Oct 26 · Released GPT-6.1 Terra」와 「Oct 22 · gpt-6-luna Decisions API」가 섞여, 관문이 luna 줄로만 판정해(「가격·한도 변경」으로 남김) Terra는 아무도 보지 않았다. 확인(얼린 W44 · W45, 쪼갠 항목만 관문 gpt-6.1-sol에 다시 걸기, $0.05): Terra 블록은 제 항목이 되지만 관문은 「minor·patch」로 버린다(W45의 GPT-6 Rosalind 출시도 같다) — 이름 기반 관문으로는 새 모델을 못 남긴다. 새 모델 판정(HYO-168 나)이 따로 맡는다
 - 규제 출처는 HYO-68(Could)로 따로 둔다 — 신호만, 판단은 사람
 
+### 4-6. 공식 보안 채널 (변경 2026-11-04, 사용자 — HYO-170 다)
+
+변경 (2026-11-04, 사용자 결정 — W44 우리 스택 사고가 레인 A 출처에 없었다): 출처 풀에 **공식 보안 채널**을 더한다. 위 다섯 출처와 레인 나누기는 그대로 두고, 레인 A 통로가 둘 늘어난다(`pipeline/lanes.py`). 수집 기준 `pool.yaml` version 2 → 3.
+
+| 통로 | 받는 것 | 관문이 보는 기술 (`meta.dependency`) |
+|---|---|---|
+| `security-advisories` (OSV.dev) | 대상 repo manifest(requirements · pyproject · package.json — 관문 · basis와 같은 파서)의 PyPI · npm 이름을 **버전 없이** `POST /v1/querybatch`로 묻는다. 창(8일, 의존성 릴리스와 같다) 안에 **발행된** 공지 + 악성 패키지 기록(`MAL-`)은 창 안에 **수정된** 것도. 공지 하나 = 항목 하나 (같은 취약점의 별칭 GHSA · PYSEC은 하나로). 등급 파일에서 `retired`인 기술은 묻지 않는다 | 그 의존성 |
+| `runtime-security:python` | `security-announce@python.org` 피드 (PSRT 공식 — CVE마다 한 글) | 본문에 CPython이 있으면 python, 아니면 없음(certifi · pip 공지 — 제목 이름으로 관문이 찾는다) — 아래 변경: python/cpython 링크도 |
+| `runtime-security:nodejs` | `nodejs.org/en/feed/vulnerability.xml` (보안 릴리스 글 — 피드 본문이 비어 창 안 글만 페이지를 받는다) | electron (우리 Node는 Electron 안 · 등급 파일에 node.js 없음) |
+
+- 왜: W44에 LiteLLM 1.107.0 백도어(PyPI에만 — GitHub releases를 보는 레인 A가 못 봤다) · http2shell · Broccoli2Shell(Node.js · Python RCE — 레인 A에 런타임 출처가 없다)이 레인 B 커뮤니티 글로만 왔다. 경보 그물(§2-3 변경 11/4)은 커뮤니티에 기대는 보조 그물이고, 이쪽이 주 그물이다. 공식 근거라 R2를 통과한다 (detect 입력 `security_advisory` · `official_doc`)
+- 버전 없이 묻는 이유: basis의 「우리 버전」은 대부분 spec 하한(`>=`)이라 깔린 버전이 아니고, 우리가 그 버전이 아니면 공급망 사고(1.107.0)를 못 잡는다. 우리 버전에 해당하는지는 관문 · detect 몫
+- 날짜 규칙 근거 (2026-11-04 실측): LiteLLM 백도어 기록 `MAL-2026-2144`는 **3/24 발행**(1.82.7 건) 기록에 **10/29 1.107.0이 덧붙은** 것이다 — 발행일만 보면 놓친다. 일반 GHSA 옛 공지도 다시 고쳐지지만 내용은 그대로라 뺀다(W45: 2023년 langchain SQLi 등 4건). 수정으로 들어온 MAL은 id에 수정일을 붙여 새 항목으로 — 같은 기록에 버전이 또 붙으면 다시 올라온다
+- 주별 OSV 공지 수 (우리 의존성 80개 = PyPI 40 · npm 40, 오늘 API로 지난 주를 다시 물은 값 — 지난 주의 수정일은 그 뒤 수정에 덮였을 수 있다): 발행 W41 8 · W42 0 · W43 1 · W44 15(electron 8 · vite 6) · W45 5. 관문(유료) 호출이 주 0~15회 는다. 기술마다 top-3 목록 상한(HYO-168)이 양을 누른다
+- 공식 채널도 늦을 수 있다: 1.107.0 PyPI 업로드 10/21 → OSV 기록 10/29(8일). 그 주는 HN(W44)이 먼저였다 — 경보 그물을 남겨 두는 이유
+- Chromium 보안 공지는 따로 받지 않는다 (제안 — Chrome Releases는 주 여러 건이고, Electron 릴리스 노트가 Chromium CVE 백포트를 적고 Electron 자체 공지는 OSV npm `electron`으로 온다)
+- 실패 규칙은 다른 출처와 같다: 죽은 통로는 `run.json` `sources.security.failed`에 남고 나머지는 계속. 첫 적용 W46(11/10) — `docs/decisions/real-use-changes.md`
+
+변경 (2026-11-04, 사용자 — 리뷰 나안): 위 「우리 버전에 해당하는지는 관문 · detect 몫」을 정한다. 수집은 그대로 버전 없이 받고, 공지마다 **우리 버전으로 다시 물어** `meta.affects_ours`(해당 · 해당 없음 · 모름)를 단다(`security.mark_ours` — 관문 · scope와 같은 버전 읽기, 범위는 하한). 관문은 판정을 바꾸지 않고, 「항상」 칸에서 **해당 없는 공지는 목록에만**(악성 기록 `MAL-`은 `^` 범위가 다음 설치에 끌어올 수 있어 버전과 상관없이 · 모르면 안전 쪽으로 detect), detect로는 **패키지마다 1건**(악성 기록이 대표)으로 접고 접힌 해당분의 제목 · 링크를 대표 입력에 붙인다 (`policy.quiet_advisory` · `fold_key`). Python 공지는 「CPython」 낱말이 없어도 `github.com/python/cpython` 링크가 있으면 python으로.
+- 왜: 보안은 모든 등급에서 남기고 「항상」 칸은 top-3 상한 밖이라(위 「상한이 양을 누른다」는 틀렸다), 공지 하나가 detect 1건이 된다. W44 창 다시 묻기: OSV 20건 중 우리 버전 해당 7(vite 5 · langgraph · langgraph-checkpoint-sqlite) · 해당 없음 13(electron 9 — 우리 45.0.0은 45 알파에서 이미 고침 · mcp 3 — 2.2.0에서 고침 · vite 6.x 1). 우리 버전에서 이미 고쳐진 공지는 결정할 게 없다. CVE-2026-115557(ssl 인증서 거부 목록)은 「Python has added …」로 시작해 CPython 낱말이 없었다
+- 결과 (W44 · W45 창, 모델 없이): OSV detect 20 → 3 · 5 → 1. 범위 하한으로 물으니 실제 깔린 게 더 새 버전이면 「해당」으로 나올 수 있다 — 안전 쪽 오판
+
 ## 5. 측정
 
 | 무엇을 | 어떻게 | 언제 |

@@ -65,6 +65,8 @@ def feed_entry(item):
     meta = item.get("meta") or {}
     if meta.get("kind") == "page-diff":
         kind, source_type, text = "page_change", "official_doc", "더해진 줄: " + " / ".join(_lines(item.get("text")))
+    elif meta.get("kind") == "advisory":       # 공식 보안 채널 (collector/sources/security.py, HYO-170 다)
+        kind, source_type, text = "security_advisory", "official_doc", item.get("text") or ""
     elif meta.get("dependency"):
         kind, source_type, text = "dependency_release", "release_note", item.get("text") or ""
     elif meta.get("tag"):
@@ -152,14 +154,32 @@ def kin_note(items):
     return "## 같은 기술의 다른 경보 (이 글로 접혔다 — 다른 사고면 따로 다룬다)\n\n" + "\n".join(lines) + "\n"
 
 
+def advisory_kin(lane_a):
+    """OSV 공지 대표 id → 같은 패키지로 접힌 공지 id들 (관문 「항상」 접기 folded_into, HYO-170 다)."""
+    kin = {}
+    for e in lane_a:
+        if (e.get("gate") or {}).get("advisory") and e.get("folded_into"):
+            kin.setdefault(e["folded_into"], []).append(e["id"])
+    return kin
+
+
+def folded_note(items, heading):
+    """접힌 항목들을 대표의 detect 입력에 붙이는 문단 — 대표 하나만 detect로 가도 나머지 제목 · 링크를 보게."""
+    if not items:
+        return ""
+    lines = [f"- {it.get('title', '')} — {it.get('url', '')}" for it in items]
+    return f"## {heading}\n\n" + "\n".join(lines) + "\n"
+
+
 def week_list(lane_a, slots, detect_ids, alarm_info=None):
     """이번 주 목록 (query-topk.md §2) — 「항상」 · 기술 질의(top-k) · 자리 질의(top-k) + 경보(관문이 모르는 기술) · 우리 스택 아님 (HYO-170).
     화면이 읽는다. detect로 간 것은 to_detect."""
     def brief(e):
         g = e.get("gate") or {}
         best = min(g.get("kept_by") or [{}], key=lambda r: (policy.tier_rank(r["tier"]), policy.severity(r["change"])) if r else (99, 99))
+        quiet = policy.quiet_advisory({"advisory": g.get("advisory")})
         return {"id": e["id"], "title": e.get("title"), "url": e.get("url"), "tier": best.get("tier"), "change": best.get("change"),
-                "reason": g.get("reason"), "rank": e.get("rank"), "to_detect": e["id"] in detect_ids,
+                "reason": (g.get("reason") or "") + (" · 우리 버전 해당 없음 → 목록만" if quiet else ""), "rank": e.get("rank"), "to_detect": e["id"] in detect_ids,
                 "folded_into": e.get("folded_into"),     # 「항상」에서 같은 패키지 · 줄의 더 새 버전으로 접혔으면 그 대표 id (화면이 「외 N건」으로 묶는다)
                 "alarm": e.get("alarm")}                 # 경보 그물로 온 글이면 걸린 이름들 (HYO-170)
     listed = [e for e in lane_a if e.get("listed")]
@@ -264,12 +284,15 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
     snap_dir = snap if snap.is_dir() else snap.parent
     (out / "items").mkdir(parents=True, exist_ok=True)
     feed, index, why = [], {}, {}
-    kin = alarm_kin(lane_a)
+    kin, adv_kin = alarm_kin(lane_a), advisory_kin(lane_a)
     for i, e in enumerate(chosen, 1):
         item = by_id[e["id"]]
         entry = slot_entry(item) if e.get("slot") else alarm_entry(item) if e.get("alarm") else feed_entry(item)
         body = body_of(item, snap_dir)
-        note = kin_note([by_id[k] for k in kin.get(e["id"], []) if k in by_id]) if e.get("alarm") else ""
+        if e.get("alarm"):      # 경보 글 (HYO-170 나 리뷰) · OSV 공지 (HYO-170 다) — 접힌 것을 대표 입력에
+            note = kin_note([by_id[k] for k in kin.get(e["id"], []) if k in by_id])
+        else:
+            note = folded_note([by_id[k] for k in adv_kin.get(e["id"], []) if k in by_id], "같은 패키지의 다른 보안 공지 (이 공지로 접혔다 — 우리 버전 해당분)")
         if note:
             entry["summary"] = (entry["summary"] + "\n\n" + note).strip()
             body += "\n" + note

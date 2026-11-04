@@ -5,6 +5,7 @@
   python -m collector.run --sources vendor --only aws-bedrock --out /tmp/x    # AWS는 주 2회
 
 환경 변수 (스킬과 같은 이름): RADAR_TARGETS(대상 repo 목록) · RADAR_ADR_DIR(ADR 폴더) · GITHUB_TOKEN(없으면 gh auth token)
+          · RADAR_TIERS(등급 파일 — security 출처가 retired 기술을 OSV에 묻지 않으려고 읽는다)
 주간 스냅숏으로 얼리고 지난 주와 비교하는 일은 collector/snapshot.py(HYO-72) — 여기서는 한 번 모은 원자료만 낸다.
 """
 import argparse
@@ -19,11 +20,11 @@ import yaml
 
 from .fetch import Fetcher
 from .item import merge
-from .sources import github, hn, huggingface, reddit, vendor
+from .sources import github, hn, huggingface, reddit, security, vendor
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
-SOURCES = ("reddit", "hn", "github", "huggingface", "vendor")
+SOURCES = ("reddit", "hn", "github", "huggingface", "vendor", "security")
 
 
 def load_yaml(p):
@@ -187,6 +188,8 @@ def main(argv=None):
                 items, rep = hn.collect(pool["hn"], fetcher, now)
             elif name == "github":
                 items, rep = github.collect(pool["github"], fetcher, now, claude_md, roots, excludes)
+            elif name == "security":
+                items, rep = security.collect(pool["security"], fetcher, now, roots, excludes)
             elif name == "huggingface":
                 items, rep = huggingface.collect(pool["huggingface"], fetcher, now)
             elif name == "vendor":

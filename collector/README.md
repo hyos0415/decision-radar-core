@@ -3,7 +3,7 @@
 수집 파이프라인 ①단계. 제한된 출처 풀에서 한 주치 원자료를 모아 **공통 항목 형식**(`item.py`)으로 낸다. 설계와 기준의 근거는 `docs/design/doc-pipeline.md`. 표준 라이브러리 + PyYAML만 쓴다.
 
 ```bash
-python -m collector.run --out collector/out/<날짜>                          # 다섯 출처 전부 (Reddit 때문에 약 12분)
+python -m collector.run --out collector/out/<날짜>                          # 여섯 출처 전부 (Reddit 때문에 약 12분)
 python -m collector.run --sources hn,github,huggingface --out <폴더>        # 일부만
 python -m collector.run --sources vendor --only aws-bedrock --out <폴더>   # AWS What's New는 주 2회
 python collector/tests/test_collector.py                                    # 오프라인 테스트
@@ -70,6 +70,7 @@ python collector/tests/test_snapshot.py                # 오프라인 테스트
 | GitHub | `sources/github.py` | 통로 ① 7일 안 ★100 · 통로 ② 8~30일 ★500 · 의존성 릴리스: ① 대상 repo CLAUDE.md 표(npm 표시 행 제외) → PyPI `project_urls`로 repo 찾기 ② 대상 repo의 모든 `package.json`(dependencies+devDependencies) → npm registry `repository`로 repo 찾기 (`pool.yaml` `dependency_repos`가 먼저) → 릴리스 API (최근 8일) |
 | HF | `sources/huggingface.py` | trending 100 + 태스크 7개 × 20 + Daily Papers 7일 |
 | 벤더 | `sources/vendor.py` | 규칙(대상 repo 「외부 모델·서비스」 ∪ 살아 있는 ADR의 technology) → `vendors.yaml` 경로. 매핑이 없으면 `run.json`의 `no_route`에 남는다 |
+| 공식 보안 채널 | `sources/security.py` | HYO-170 다 (doc-pipeline §4-6). **OSV**: 대상 repo manifest의 PyPI · npm 이름을 버전 없이 `querybatch`로 묻고, 창(8일) 안에 **발행된** 공지 + 악성 패키지 기록(`MAL-`)은 창 안에 **수정된** 것도 → 공지 하나 = 항목 하나(별칭 GHSA · PYSEC 합침). 등급 파일(`RADAR_TIERS`) `retired` 기술은 묻지 않는다. **런타임**: `pool.yaml` `security.runtimes` 피드 — Python `security-announce` · Node.js `vulnerability.xml`(본문이 비어 글 페이지를 받는다). 통로 `security-advisories` · `runtime-security:<이름>` → 레인 A, `meta.dependency`로 관문이 그 기술 하나로 판정(Node.js → electron) |
 
 **대상 repo는 두 목록이다** (2026-10-08, 나안 — 수집은 같이, 결정 기록은 각자의 ADR repo):
 
