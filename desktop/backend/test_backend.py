@@ -182,6 +182,7 @@ def main():
         scenario_hyo95(tmp)
         scenario_hyo110(tmp)
         scenario_hyo127(tmp)
+        scenario_hyo168(tmp)
         scenario_hyo152(tmp)
         scenario_hyo132(tmp)
         scenario_hyo144(tmp)
@@ -1349,6 +1350,50 @@ def scenario_hyo132(tmp):
     check("근거 url에 관문 항목이 없으면 None", svc._card_action(text_of("https://example.test/none")) is None and svc._card_action("본문만") is None)
     out = c.get("/openapi.json").json()
     check("OpenAPI에 CardAction이 있다", "CardAction" in out["components"]["schemas"])
+
+
+def scenario_hyo168(tmp):
+    """HYO-168 · HYO-170 — 이번 주 목록 API: 빈 상태 · 개발 예시 · 404 · 실사용은 radar-snapshots/detect · 예전 list.json · 파이프라인 모양과 대조."""
+    print("\n— HYO-168: 이번 주 목록 —")
+    import jobs as jobs_mod
+    from pipeline import detect_feed
+    data = os.path.join(tmp, "data168")
+    os.makedirs(data)
+    svc = RadarService(data)
+    c = TestClient(server.create_app(svc, jobs=jobs_mod.Jobs(svc, start=False)))
+    r = c.get("/week-list")
+    check("파일 없음 → 빈 목록 (오류 아님)", r.status_code == 200 and r.json()["week"] is None and r.json()["always"] == [] and r.json()["alarm"] == [], r.text)
+
+    check("ensure_lists: 처음엔 만든다", devdata.ensure_lists(data) is True)
+    check("ensure_lists: 있으면 다시 만들지 않는다", devdata.ensure_lists(data) is False)
+    j = c.get("/week-list").json()
+    check("예시: 가장 새 주차", j["week"] == devdata.LIST_FIXTURE_WEEK and j["weeks"] == [devdata.LIST_FIXTURE_WEEK], j["week"])
+    rows = j["always"] + [x for g in j["tech"] for x in g["items"]] + [x for g in j["slots"] for x in g["items"]] + j["alarm"] + j["not_ours"]
+    check("예시: 전부 [예시] 제목", rows and all((x["title"] or "").startswith("[예시]") for x in rows))
+    check("예시: 접힌 항목의 대표가 「항상」에 있다", all(x["folded_into"] in {y["id"] for y in j["always"]} for x in j["always"] if x["folded_into"]))
+    check("예시: 칸이 다 있다 (경보 · 우리 스택 아님 포함)", all(j[k] for k in ("always", "tech", "slots", "alarm", "not_ours")))
+    check("없는 주차 → 404", c.get("/week-list", params={"week": "2026-W01"}).status_code == 404)
+
+    # 예시가 파이프라인이 쓰는 list.json과 같은 모양인가 (칸 이름 · 항목 필드)
+    pipe = detect_feed.week_list([], None, set(), {"not_ours": []})
+    fixture = json.load(open(devdata.LIST_FIXTURE, encoding="utf-8"))
+    check("예시 칸 = 파이프라인 칸", set(fixture) == set(pipe), sorted(set(fixture) ^ set(pipe)))
+    import schemas
+    fields = set(schemas.WeekListItem.model_fields)
+    extra = {k for x in rows for k in x} - fields
+    check("예시 항목 필드는 계약 안", not extra, extra)
+
+    # 실사용: radar-snapshots/detect/<주차>/list.json — 경보 칸 전(HYO-170 전) 파일도 읽는다
+    snaps = os.path.join(tmp, "snaps168")
+    os.makedirs(os.path.join(snaps, "detect", "2026-W46"))
+    old = {"always": [], "tech": [{"query": "electron", "items": [{"id": "e", "title": "electron v45.0.1", "url": "u", "tier": "L1", "change": "breaking",
+                                                                   "reason": "electron L1 × breaking", "rank": 1, "to_detect": True}]}],
+           "slots": [], "counts": {"always": 0, "tech": 1, "slots": 0, "to_detect": 1}}
+    json.dump(old, open(os.path.join(snaps, "detect", "2026-W46", "list.json"), "w", encoding="utf-8"))
+    svc.mode, svc.snapshot_repo = "real", snaps
+    j = c.get("/week-list").json()
+    check("실사용: radar-snapshots/detect의 주차", j["week"] == "2026-W46" and j["weeks"] == ["2026-W46"], j["weeks"])
+    check("실사용: 예전 파일은 경보 · 우리 스택 아님을 빈 칸으로", j["alarm"] == [] and j["not_ours"] == [] and j["tech"][0]["items"][0]["folded_into"] is None, j)
 
 
 def scenario_hyo127(tmp):

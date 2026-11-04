@@ -203,6 +203,26 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/week-list': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * Week List
+     * @description 이번 주 목록 — 「항상」 · 기술 질의 · 자리 질의 · 경보 · 우리 스택 아님 (HYO-168 · HYO-170).
+     */
+    get: operations['weekList']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/topics/parent-candidates': {
     parameters: {
       query?: never
@@ -1936,6 +1956,156 @@ export interface components {
       /** Context */
       ctx?: Record<string, never>
     }
+    /**
+     * WeekList
+     * @description 이번 주 목록 — 수집 PC가 만든 `detect/<주차>/list.json` (pipeline.detect_feed). 화면은 칸마다 묶어 한 줄씩 보인다.
+     */
+    WeekList: {
+      /**
+       * Week
+       * @description 보여 주는 주차. 목록 파일이 하나도 없으면 null
+       */
+      week: string | null
+      /**
+       * Weeks
+       * @description 목록이 있는 주차 — 새 것 먼저
+       */
+      weeks: string[]
+      /**
+       * Always
+       * @description 「항상」 — 보안 · 우리 버전 EOL · 모델 은퇴. 전부 보이고 folded_into가 있으면 대표 아래로 접는다
+       */
+      always: components['schemas']['WeekListItem'][]
+      /**
+       * Tech
+       * @description 기술 질의 — 기술마다 top-k
+       */
+      tech: components['schemas']['WeekListTech'][]
+      /**
+       * Slots
+       * @description 자리 질의 — 자리마다 새 후보 top-k
+       */
+      slots: components['schemas']['WeekListSlot'][]
+      /**
+       * Alarm
+       * @description 경보 — 관문이 모르는 런타임 · 도구의 사고 글 (HYO-170)
+       */
+      alarm: components['schemas']['WeekListItem'][]
+      /**
+       * Not Ours
+       * @description 우리 스택 아님 — 그 주 큰 사고 중 우리 스택에 안 걸린 것 (보고 넘겼다는 표시)
+       */
+      not_ours: components['schemas']['WeekListItem'][]
+      /**
+       * Counts
+       * @description 칸별 건수 + to_detect
+       */
+      counts: {
+        [key: string]: number
+      }
+    }
+    /**
+     * WeekListItem
+     * @description 이번 주 목록의 한 줄 (HYO-168 · HYO-170 — docs/design/query-topk.md). 칸마다 쓰는 필드가 다르다 — 안 쓰면 null.
+     */
+    WeekListItem: {
+      /**
+       * Id
+       * @description 수집 항목 id (스냅숏 items.jsonl의 id)
+       */
+      id: string
+      /** Title */
+      title?: string | null
+      /** Url */
+      url?: string | null
+      /**
+       * Tier
+       * @description 관문 등급 L0~L8 (「항상」 · 기술 질의 · 경보). 자리 질의 · 우리 스택 아님은 null
+       */
+      tier?: string | null
+      /**
+       * Change
+       * @description 변화 종류 (security · eol · model_retirement · breaking · pricing …)
+       */
+      change?: string | null
+      /**
+       * Reason
+       * @description 왜 왔나 한 줄 — 관문 행(`electron L1 × security`) · 자리 적합도 이유 · 경보 그물
+       */
+      reason?: string | null
+      /**
+       * Rank
+       * @description 질의 안 순위 (1부터). 「항상」 · 경보는 null
+       */
+      rank?: number | null
+      /**
+       * To Detect
+       * @description detect 입력으로 갔나 (초안 후보)
+       * @default false
+       */
+      to_detect: boolean
+      /**
+       * Folded Into
+       * @description 같은 패키지 · 줄의 더 새 버전 또는 같은 사고의 다른 글로 접혔으면 그 대표 id — 화면은 「외 N건」으로 묶는다
+       */
+      folded_into?: string | null
+      /**
+       * Alarm
+       * @description 경보 그물(HYO-170)로 온 글이면 걸린 스택 · 런타임 이름들
+       */
+      alarm?: string[] | null
+      /**
+       * Source
+       * @description 출처 (vendor · hn · reddit · huggingface …) — 자리 질의 · 우리 스택 아님
+       */
+      source?: string | null
+      /**
+       * Fit
+       * @description 자리 적합도 0~3 (자리 질의만)
+       */
+      fit?: number | null
+      /**
+       * Points
+       * @description HN 점수 (우리 스택 아님만, Reddit은 null)
+       */
+      points?: number | null
+    }
+    /** WeekListSlot */
+    WeekListSlot: {
+      /**
+       * Slot
+       * @description 자리 id (ADR repo radar-slots.yaml)
+       */
+      slot: string
+      /**
+       * Name
+       * @description 자리 이름 (예 관문 분류)
+       */
+      name?: string | null
+      /**
+       * Current
+       * @description 지금 그 자리에 있는 모델 · 서비스
+       */
+      current?: string[]
+      /**
+       * Items
+       * @description 새 후보 top-k (적합도 문턱 이상) — 없으면 빈 목록 = 「없음」
+       */
+      items: components['schemas']['WeekListItem'][]
+    }
+    /** WeekListTech */
+    WeekListTech: {
+      /**
+       * Query
+       * @description 기술 이름 (관문의 기술 — 등급 파일 이름)
+       */
+      query: string
+      /**
+       * Items
+       * @description 그 기술의 top-k, 순위대로
+       */
+      items: components['schemas']['WeekListItem'][]
+    }
   }
   responses: never
   parameters: never
@@ -2704,6 +2874,83 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['TopicList']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  weekList: {
+    parameters: {
+      query?: {
+        /** @description 주차 (예 2026-W46). 없으면 가장 새 주차 */
+        week?: string | null
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['WeekList']
         }
       }
       /** @description 서비스 오류 — detail 한 줄 */

@@ -77,6 +77,9 @@ TOPIC_HIER_FEEDBACK_FILE = "topic-hier-feedback.jsonl"  # 화제 부모 제안 �
 BRANCH_ORDER = ("P1-prefix", "P1-shared", "P2")  # 갈래 동률이면 이 순서
 WEEK_NAME = re.compile(r"^\d{4}-W\d{2}$")  # 화제 주차 파일 이름 (pipeline.topics의 `<주차>.json`)
 CAPTURE_SEED_POSTS = 5  # capture 창에 미리 채우는 글 수
+LISTS_DIR = "lists"     # 스텁 · 데모의 이번 주 목록 `<data>/lists/<주차>/list.json` (실사용은 radar-snapshots/detect/<주차>/list.json, HYO-168)
+LIST_FILE = "list.json"
+LIST_KEYS = ("always", "tech", "slots", "alarm", "not_ours")
 TOPICS_MORE_MAX = 120  # 화제 탭 「더 보기」 상한 (HYO-154) — 부모 제안 규칙을 오프라인에서 잰 범위 (gold-w42·w43 상위 120)
 ALERTS_FILE = "alerts.json"  # revisit 충족 알림 — Inbox 항목 (화면 설계 ③). 앱 데이터에만, ADR repo에는 안 쓴다
 DEFAULT_STUB = "JHS-014"  # 2턴 스텁 대본 — 2턴에서는 도구 결과 순서만 보고 끝내므로 항목마다 달라도 같다 (stub_policy.capture_step)
@@ -879,6 +882,36 @@ class RadarService:
         lines = [f"화제 ({week}): {title}"]
         lines += [f"- {p['signal'] + ' · ' if p['signal'] else ''}{p['title']} {p['url']}".rstrip() for p in posts[:CAPTURE_SEED_POSTS]]
         return "\n".join(lines) + "\n\n결정 질문: "
+
+    # ── 이번 주 목록 (HYO-168 · HYO-170, docs/design/query-topk.md) ──
+
+    def _list_root(self):
+        """목록 주차 폴더들의 부모 — 실사용은 radar-snapshots/detect (수집 PC가 push), 그 밖은 <data>/lists (개발 예시)."""
+        return os.path.join(self.snapshot_repo, DETECT_FEEDS) if self.mode == "real" else os.path.join(self.data_dir, LISTS_DIR)
+
+    def _list_weeks(self):
+        root = self._list_root()
+        try:
+            names = os.listdir(root)
+        except OSError:
+            return []
+        return sorted((n for n in names if _WEEK_DIR.match(n) and os.path.exists(os.path.join(root, n, LIST_FILE))), reverse=True)
+
+    def week_list(self, week=None):
+        """이번 주 목록 — 파이프라인이 쓴 list.json을 읽기만 한다. 파일이 하나도 없으면 빈 목록(오류 아님) · 없는 주차는 404.
+        예전 list.json(경보 · 우리 스택 아님 칸 전, HYO-170)은 빈 칸으로 채운다."""
+        weeks = self._list_weeks()
+        empty = {k: [] for k in LIST_KEYS}
+        if not weeks:
+            return {"week": None, "weeks": [], **empty, "counts": {}}
+        week = week or weeks[0]
+        if week not in weeks:
+            raise ServiceError(404, f"목록 주차 {week!r}가 없다 — {weeks}")
+        try:
+            f = json.load(open(os.path.join(self._list_root(), week, LIST_FILE), encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise ServiceError(500, f"목록 파일 {week}/{LIST_FILE}을 못 읽었다: {e}")
+        return {"week": week, "weeks": weeks, **empty, **{k: f.get(k) or [] for k in LIST_KEYS}, "counts": f.get("counts") or {}}
 
     def topics(self, week=None, limit=None):
         """주차의 상위 토픽 — 기본 k개 (k는 파일이 정한다). limit은 「더 보기」: k 아래를 파일 순위 그대로 이어 보이고,
