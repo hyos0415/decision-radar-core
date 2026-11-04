@@ -138,14 +138,15 @@ SKILL_SRC = os.path.join(ROOT, ".claude", "skills", "jhs-decisions")
 SKILL_EXCLUDE = shutil.ignore_patterns("test_*.py", "__pycache__", "*.pyc")  # 테스트는 기대값을 담고 있다
 
 
-def prepare_runroot(work):
+def prepare_runroot(work, src=SKILL_SRC):
     """실행 루트 격리 — 스킬만 복사한 빈 디렉터리에서 claude를 띄운다.
 
     레포 루트에서 실행하면 eval/cases(정답지)가 모델이 닿는 위치에 있다. 506 transcript 스캔에서
     읽은 흔적은 0이었지만 그건 구조가 아니라 운이었다 (2026-09-29).
+    src: 스킬 폴더 — 기본은 작업 트리. 스킬 그림자(pipeline/skill_line, HYO-166)는 tag(skill@v1)에서 꺼낸 폴더를 넘긴다.
     """
     runroot = os.path.join(work, "runroot")
-    shutil.copytree(SKILL_SRC, os.path.join(runroot, ".claude", "skills", "jhs-decisions"), ignore=SKILL_EXCLUDE)
+    shutil.copytree(src, os.path.join(runroot, ".claude", "skills", "jhs-decisions"), ignore=SKILL_EXCLUDE)
     return runroot
 
 

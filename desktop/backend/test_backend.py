@@ -189,6 +189,7 @@ def main():
         scenario_hyo142(tmp)
         scenario_engine(tmp)
         scenario_real(tmp)
+        scenario_hyo166(tmp)
         scenario_hyo158(tmp)
         scenario_hyo158_blocked(tmp)
     finally:
@@ -645,6 +646,195 @@ def _scenario_shadow(root, kw, fake, adr_remote):
         off.shadow_factory = fake
         TestClient(server.create_app(off)).post("/runs/detect", json={})
         check("그림자: RADAR_SHADOW=off면 안 돈다", off.shadow is False and not os.path.exists(os.path.join(root, "sh-off", "shadow.jsonl")))
+
+
+FAKE_SKILL = r'''import json, os, shutil, subprocess, sys, time
+a = sys.argv[1:]
+env = os.environ
+log = env.get("FAKE_SKILL_LOG")
+gate = env.get("FAKE_SKILL_GATE")
+if gate:  # 시험이 「제품 실행은 그림자를 기다리지 않는다」를 보려고 잡아 둔다
+    t0 = time.time()
+    while not os.path.exists(gate) and time.time() - t0 < 60:
+        time.sleep(0.05)
+if env.get("FAKE_SKILL_MODE") == "fail":
+    print("skill boom", file=sys.stderr)
+    sys.exit(3)
+adr = env["RADAR_ADR_DIR"]
+with open(os.path.join(adr, "9001-langfuse-v5.md"), "w", encoding="utf-8", newline="\n") as f:
+    f.write("---\nstatus: proposed\ntechnology: Langfuse\nuse: 의존성 릴리스 v5.0.0 대응 (breaking)\n"
+            "affected:\n  - {repo: finance_verifier, component: tracing}\n"
+            "evidence:\n  - {url: https://github.com/langfuse/langfuse-python/releases/tag/v5.0.0, source_type: release_note}\n"
+            "---\n# Langfuse Python SDK v5.0.0 대응\n")
+gh = shutil.which("gh.cmd" if os.name == "nt" else "gh")
+try:
+    gh_rc = subprocess.run([gh, "pr", "create", "--title", "x"], capture_output=True).returncode if gh else None
+except OSError as e:
+    gh_rc = repr(e)
+push = env.get("FAKE_SKILL_PUSH")
+push_rc = subprocess.run(["git", "-C", push, "push", "-q", "origin", "HEAD:main"], capture_output=True).returncode if push else None
+if log:
+    os.makedirs(log, exist_ok=True)
+    keep = ("RADAR_ADR_DIR", "RADAR_TARGETS", "RADAR_DRY_RUN", "RADAR_SNAPSHOT_DIR", "RADAR_EXPORT", "ANTHROPIC_API_KEY", "GH_TOKEN")
+    skill = os.path.join(os.getcwd(), ".claude", "skills", "jhs-decisions")
+    json.dump({"argv": a, "cwd": os.getcwd(), "env": {k: env.get(k) for k in keep}, "gh": gh, "gh_rc": gh_rc, "push_rc": push_rc,
+               "skill_md": open(os.path.join(skill, "SKILL.md"), encoding="utf-8").read() if os.path.exists(os.path.join(skill, "SKILL.md")) else None,
+               "skill_tests": os.path.exists(os.path.join(skill, "scripts", "test_radar.py")),
+               "cwd_entries": sorted(os.listdir(os.getcwd()))}, open(os.path.join(log, "call.json"), "w", encoding="utf-8"), ensure_ascii=False)
+report = {"run_report": {"flow": "detect", "dry_run": True, "candidates": [{"technology": "Langfuse", "dependency": True,
+          "affected": [{"repo": "finance_verifier", "component": "tracing"}], "source_urls": ["https://langfuse.com/docs/upgrade-v5"]}],
+          "skipped_existing": [{"technology": "FastAPI", "adr": "0003"}], "remote_side_effects": [], "pr": {"needed": True, "opened": False}}}
+for e in ({"type": "system", "subtype": "init"},
+          {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "WebSearch", "input": {"query": "langfuse release"}},
+                                                        {"type": "tool_use", "name": "Bash", "input": {"command": "gh pr create --title x"}},
+                                                        {"type": "tool_use", "name": "Bash", "input": {"command": "git -C x push origin HEAD"}}]}},
+          {"type": "result", "subtype": "success", "is_error": False, "num_turns": 7, "total_cost_usd": 0.42,
+           "result": "끝.\n```json\n" + json.dumps(report, ensure_ascii=False) + "\n```"}):
+    print(json.dumps(e, ensure_ascii=False))
+'''
+
+
+def scenario_hyo166(tmp):
+    """HYO-166 스킬 그림자 — 정기 detect 뒤 skill detect를 가짜 claude(.py)로. PR · 알림 · Inbox · events · runs · ADR repo에 아무것도 안 쓰고,
+    제품 실행은 그림자를 기다리지 않으며, 그림자 실패는 index.jsonl에 이유만. gh · git push는 실제로 막힌다(로컬 bare 원격으로 확인)."""
+    print("\n— HYO-166: 스킬 그림자 (같은 순간 짝) —")
+    saved = {k: os.environ.get(k) for k in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM")}
+    os.environ.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    try:
+        _scenario_hyo166(tmp)
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+
+def _scenario_hyo166(tmp):
+    from pathlib import Path
+    from radar import script as stub_scripts
+    from radar.stub_model import StubChat
+    root = os.path.join(tmp, "hyo166")
+    os.makedirs(root)
+    adr_remote, _adr, _base, snaps = _real_repos(root)
+    fake_bin = os.path.join(root, "fake-skill", "claude_skill.py")
+    os.makedirs(os.path.dirname(fake_bin))
+    with open(fake_bin, "w", encoding="utf-8") as f:
+        f.write(FAKE_SKILL)
+    # 그림자가 push를 시도할 「대상 레포」 — file:// 원격 (실제 원격처럼 URL로 부른다)
+    tgt_remote, tgt = os.path.join(root, "tgt.git"), os.path.join(root, "tgt")
+    _git(root, "init", "--bare", "-q", "-b", "main", tgt_remote)
+    _git(root, "init", "-q", "-b", "main", tgt)
+    for k, v in (("user.name", "t"), ("user.email", "t@x.invalid"), ("commit.gpgsign", "false")):
+        _git(tgt, "config", k, v)
+    _git(tgt, "remote", "add", "origin", Path(tgt_remote).as_uri())
+    for n in ("one", "two"):
+        open(os.path.join(tgt, n), "w").write(n)
+        _git(tgt, "add", "-A")
+        _git(tgt, "commit", "-q", "-m", n)
+        if n == "one":
+            _git(tgt, "push", "-q", "origin", "main")
+    tgt_head = _git(tgt_remote, "rev-parse", "main")
+
+    def stub(flow):
+        return StubChat(script=stub_scripts.detect_script(), flow=flow)
+
+    def make(name, **over):
+        adr = os.path.join(root, f"adr-{name}")
+        _clone(adr_remote, adr)
+        svc = RadarService(os.path.join(root, f"data-{name}"), **{**dict(app_mode="real", real_adr=adr, snapshot_repo=snaps, engine="claude-cli",
+                                                                        chat_factory=stub), **over})
+        svc.skill_shadow_ref, svc.skill_shadow_until, svc.skill_shadow_async = "HEAD", "2099-12-31", False
+        return svc, adr
+
+    def index(svc):
+        p = os.path.join(svc.data_dir, "shadow-skill", "index.jsonl")
+        return [json.loads(x) for x in open(p, encoding="utf-8")] if os.path.exists(p) else []
+
+    gate, logd = os.path.join(root, "gate"), os.path.join(root, "skill-log")
+    with _Env(RADAR_CLAUDE_BIN=fake_bin, RADAR_SHADOW="off", RADAR_SKILL_SHADOW=None, RADAR_SKILL_SHADOW_UNTIL=None, RADAR_REVIEW="app",
+              FAKE_SKILL_LOG=logd, FAKE_SKILL_PUSH=tgt, FAKE_SKILL_MODE="ok", FAKE_SKILL_GATE=gate, ANTHROPIC_API_KEY="sk-test-not-real"):
+        check("스킬 그림자: api 엔진이면 꺼짐", make("api", engine="api")[0].skill_shadow is False)
+        with _Env(RADAR_SKILL_SHADOW="off"):
+            check("스킬 그림자: RADAR_SKILL_SHADOW=off면 꺼짐", make("off")[0].skill_shadow is False)
+        svc, adr = make("main")
+        check("스킬 그림자: claude-cli면 켜짐 · API 그림자와 따로", svc.skill_shadow and svc.shadow is False)
+        check("스킬 그림자: health · API 응답에 내지 않는다 (봉인)", "shadow-skill" not in json.dumps(TestClient(server.create_app(svc)).get("/health").json()))
+
+        m, _ = make("manual")
+        open(gate, "w").close()
+        r = m.run("detect")
+        check("스킬 그림자: 손 실행에는 안 붙는다", r["ok"] and not os.path.exists(os.path.join(m.data_dir, "shadow-skill")), r)
+        os.remove(gate)
+
+        # 정기 detect — 그림자는 잡아 두고(gate) 제품 실행이 먼저 끝나는지, 그 사이와 뒤의 상태가 같은지 본다
+        svc.skill_shadow_async = True
+        r = svc.run("detect", trigger="schedule")
+        check("정기 detect: 제품 실행 ok · 입력 2026-W44", r["ok"] and r.get("input") == "2026-W44", r)
+
+        def state():
+            return {"events": len(events(svc)), "runs": len(svc.runs(limit=500)), "inbox": len(svc.inbox()),
+                    "adr_status": _git(adr, "status", "--porcelain"), "adr_remote": _git(adr_remote, "rev-parse", "main"),
+                    "alerts": svc._alerts(), "files": sorted(x for x in os.listdir(svc.data_dir) if x != "shadow-skill")}
+        before = state()
+        check("스킬 그림자: 제품 실행은 그림자를 기다리지 않는다 (아직 기록 없음)", not index(svc) and svc.skill_shadow_threads)
+        open(gate, "w").close()
+        for t in svc.skill_shadow_threads:
+            t.join(120)
+        after = state()
+        check("스킬 그림자: PR · 알림 · Inbox · events · runs · ADR repo · 데이터 폴더 그대로", after == before,
+              {k: (before[k], after[k]) for k in before if before[k] != after[k]})
+        rows = index(svc)
+        check("스킬 그림자: index.jsonl에 한 줄 — 주 · 실행 id · 성공", len(rows) == 1 and rows[0]["week"] == "2026-W44" and rows[0]["run"] == r["id"]
+              and rows[0]["ok"] and rows[0]["main_ok"] is True, rows)
+        wk = os.path.join(svc.data_dir, "shadow-skill", "2026-W44")
+        meta = json.load(open(os.path.join(wk, "meta.json"), encoding="utf-8"))
+        check("스킬 그림자: 출력은 <data>/shadow-skill/<주>/에 — transcript · report · candidates · meta",
+              all(os.path.exists(os.path.join(wk, f)) for f in ("transcript.jsonl", "report.json", "candidates.json", "meta.json")) and meta["ok"], meta)
+        check("스킬 그림자: 원격 시도를 센다 (gh · git push)", meta["remote_attempts"] == 2 and meta["tool_calls"] == 3 and meta["cost_usd_equiv"] == 0.42, meta)
+        cands = json.load(open(os.path.join(wk, "candidates.json"), encoding="utf-8"))
+        d = (cands.get("drafts") or [{}])[0]
+        check("후보 뽑기: 초안 파일 → 기술 · 버전 · 근거 링크(초안 + run_report)", d.get("technology") == "Langfuse" and d.get("version") == "5.0.0"
+              and d.get("dependency") is True and len(d.get("urls") or []) == 2 and cands["skipped_existing"] == [{"technology": "FastAPI", "adr": "0003"}], cands)
+        check("스킬 그림자: 초안은 그림자 ADR 사본에만", os.path.exists(os.path.join(wk, "adr", "docs", "adr", "9001-langfuse-v5.md"))
+              and not glob.glob(os.path.join(adr, "docs", "adr", "9001-*")))
+        call = json.load(open(os.path.join(logd, "call.json"), encoding="utf-8"))
+        argv, cenv = call["argv"], call["env"]
+        val = lambda flag: argv[argv.index(flag) + 1] if flag in argv else None  # noqa: E731
+        check("CLI: 같은 모델 · effort · 스킬 호출 · 라이브(웹 도구 허용)", val("--model") == "claude-sonnet-5-5" and val("--effort") == "medium"
+              and val("-p").startswith("/jhs-decisions detect") and "라이브 모드" in val("-p") and "WebSearch" in argv and "WebFetch" in argv, argv)
+        check("CLI: git push · gh 호출을 도구 규칙으로 막는다", "Bash(git push:*)" in argv and "Bash(gh:*)" in argv
+              and argv.index("Bash(gh:*)") > argv.index("--disallowedTools"), argv)
+        check("env: API 키 없음 · 스냅숏 아님(라이브) · dry-run · 로컬 내보내기 스위치 없음",
+              cenv["ANTHROPIC_API_KEY"] is None and cenv["RADAR_SNAPSHOT_DIR"] is None and cenv["RADAR_DRY_RUN"] == "1" and cenv["RADAR_EXPORT"] is None
+              and os.path.abspath(cenv["RADAR_ADR_DIR"]).startswith(os.path.abspath(wk)), cenv)
+        check("실행 루트: 스킬만 (테스트 제외) — 레포 루트가 아니다", call["cwd_entries"] == [".claude"] and call["skill_md"] and not call["skill_tests"]
+              and os.path.abspath(call["cwd"]).startswith(os.path.abspath(wk)), call["cwd_entries"])
+        check("스킬은 ref에서 꺼낸다 (HEAD = 지금 커밋의 SKILL.md)",
+              call["skill_md"].strip() == _git(service.REPO, "show", "HEAD:.claude/skills/jhs-decisions/SKILL.md").strip())
+        check("원격 차단: gh는 PATH 맨 앞의 가짜 → 실패", call["gh"] and os.path.abspath(call["gh"]).startswith(os.path.abspath(wk)) and call["gh_rc"] not in (0, None), call)
+        check("원격 차단: git push가 원격에 닿지 않는다", call["push_rc"] not in (0, None) and _git(tgt_remote, "rev-parse", "main") == tgt_head, call["push_rc"])
+        check("스킬 그림자: 주마다 한 번 (k=1)", svc._skill_shadow_prepare("2026-W44") is None)
+
+        # 그림자 실패 — 이유만 남기고 제품 실행은 그대로
+        with _Env(FAKE_SKILL_MODE="fail"):
+            f_svc, _ = make("fail")
+            r = f_svc.run("detect", trigger="schedule")
+            rows = index(f_svc)
+            check("스킬 그림자 실패: 제품 실행 ok · index에 실패 이유", r["ok"] and len(rows) == 1 and rows[0]["ok"] is False
+                  and "claude 종료 3" in (rows[0]["error"] or "") and "skill boom" in rows[0]["error"], rows)
+            check("스킬 그림자 실패: 실행 기록 · 행동 로그에 흔적 없음", len(f_svc.runs()) == 1 and "shadow" not in json.dumps(events(f_svc)))
+
+        # 제품 실행이 죽어도 그림자는 돈다 — 짝의 한쪽은 남긴다
+        def dead(flow):
+            raise RuntimeError("main model down")
+        d_svc, _ = make("dead", chat_factory=dead)
+        r = d_svc.run("detect", trigger="schedule")
+        rows = index(d_svc)
+        check("제품 실행 실패와 무관: 그림자는 돈다 (main_ok false)", r["ok"] is False and len(rows) == 1 and rows[0]["ok"] and rows[0]["main_ok"] is False, (r.get("error"), rows))
+
+        # 등록한 기간 밖이면 안 돈다
+        o_svc, _ = make("late")
+        o_svc.skill_shadow_until = "2000-01-01"
+        o_svc.run("detect", trigger="schedule")
+        check("스킬 그림자: 기간(RADAR_SKILL_SHADOW_UNTIL) 밖이면 안 돈다", not os.path.exists(os.path.join(o_svc.data_dir, "shadow-skill")))
 
 
 def scenario_m2(data):

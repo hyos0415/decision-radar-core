@@ -60,6 +60,7 @@ from common import ops  # noqa: E402
 from pipeline.detect_feed import funnel_line, url_key  # noqa: E402
 from pipeline import basis  # noqa: E402
 from pipeline import topic_hier  # noqa: E402
+from pipeline import skill_line  # noqa: E402
 from pipeline.importance.card_action import card_action  # noqa: E402
 from common.core import SKILL_RADAR, Ctx, RadarError, radar  # noqa: E402
 from common.env import MODEL as REAL_MODEL, load_dotenv  # noqa: E402
@@ -72,6 +73,9 @@ META_FILE = "app-meta.json"
 EVENTS_FILE = "events.jsonl"
 RUNS_FILE = "runs.jsonl"
 SHADOW_FILE = "shadow.jsonl"  # API 그림자 기록 (HYO-99 3단계) — 화면에 안 띄운다
+SKILL_SHADOW_DIR = "shadow-skill"  # 스킬 그림자 (HYO-166, 비교 프로토콜 §7 「같은 순간 짝」) — <data>/shadow-skill/<주>/. 11/22까지 봉인
+SKILL_SHADOW_INDEX = "index.jsonl"  # 주마다 한 줄 — 성공 · 실패 · 이유만 (내용은 주 폴더에)
+SKILL_SHADOW_UNTIL = "2026-11-22"  # 등록한 짝은 W46 · W47 — 실사용 기간 끝(Max 지원 종료)까지만 돈다. RADAR_SKILL_SHADOW_UNTIL로 옮긴다
 TOPICS_SAVED_FILE = "topics-saved.json"  # 저장한 화제 {"items": [...]} — 주차 파일과 따로 둔 복사본
 TOPIC_HIER_FEEDBACK_FILE = "topic-hier-feedback.jsonl"  # 화제 부모 제안 응답 (HYO-152) — 추가만 하는 JSONL, 마지막 응답이 센다
 BRANCH_ORDER = ("P1-prefix", "P1-shared", "P2")  # 갈래 동률이면 이 순서
@@ -185,6 +189,12 @@ class RadarService:
         self.shadow_async = True  # 테스트는 False — 실행 끝에 바로 돈다
         self.shadow_threads = []
         self._shadow_lock = threading.Lock()
+        # 스킬 그림자 (HYO-166) — API 그림자(self.shadow, 엔진 비교)와 다른 것: 정기 detect 뒤 skill@v1을 라이브로 한 번 (_setup_real)
+        self.skill_shadow = False
+        self.skill_shadow_ref = skill_line.SKILL_REF  # 테스트는 HEAD — CI checkout에는 tag가 없다
+        self.skill_shadow_until = os.environ.get("RADAR_SKILL_SHADOW_UNTIL") or SKILL_SHADOW_UNTIL
+        self.skill_shadow_async = True
+        self.skill_shadow_threads = []
         self.login_launcher = subprocess.Popen  # 테스트는 바꿔 끼운다 — 실제 터미널을 열지 않게
         self._engine_cache = None  # (시각, 상태) — 화면이 자주 불러도 claude를 매번 띄우지 않게
         self.engine = None if self.mode == "stub" else "api"
@@ -249,10 +259,12 @@ class RadarService:
         self.snapshot_dir = _latest_feed(snapshot_repo) or os.path.join(snapshot_repo, DETECT_FEEDS)
         # API 그림자 (사용자 10/26): 주 엔진이 구독 CLI면 같은 입력을 API로도 돌려 기록만 — 4주 뒤 엔진 비교. RADAR_SHADOW=off로 끈다
         self.shadow = engine == "claude-cli" and os.environ.get("RADAR_SHADOW", "on") != "off"
+        # 스킬 그림자 (HYO-166, 사용자 11/3): 정기 detect 뒤 같은 기기에서 스킬 detect를 구독 CLI로 — 기록만, 봉인. RADAR_SKILL_SHADOW=off로 끈다
+        self.skill_shadow = engine == "claude-cli" and os.environ.get("RADAR_SKILL_SHADOW", "on") != "off"
         # 검토 PR (HYO-158, 사용자 11/2): detect 초안을 ADR repo PR로 — merge = 채택 · close = 기각. RADAR_REVIEW=app이면 앱 Inbox에서만
         self.review_pr = os.environ.get("RADAR_REVIEW", "pr") != "app"
         self.real_info = {"adr_repo": adr_root, "snapshot_repo": snapshot_repo, "claude_bin": claude_bin, "shadow": self.shadow,
-                          "review": "pr" if self.review_pr else "app"}
+                          "skill_shadow": self.skill_shadow, "review": "pr" if self.review_pr else "app"}
 
     def _api_key(self):
         return bool(load_dotenv().get("ANTHROPIC_API_KEY"))
@@ -1308,7 +1320,7 @@ class RadarService:
                 fn, script = revisit, stub_scripts.revisit_script(stub_scripts.SCRIPT["cases"]["JHS-001"])
             res = {"id": f"{ctx.now}-{flow}", "flow": flow, "at": ctx.now, "mode": self.mode, "trigger": trigger, "ok": True, "error": None,
                    "summary": [], "drafts": [], "alerts": [], "excluded": []}
-            shadow = main_view = None
+            shadow = main_view = skill_sh = None
             try:
                 notes = []
                 if self.mode == "real":
@@ -1332,6 +1344,8 @@ class RadarService:
                             ctx.env["RADAR_BASIS_NOW"] = self.basis_now
                     if self.shadow:  # 주 실행이 ADR을 바꾸기 전에 떠 둔다 — 그림자도 같은 입력을 본다
                         shadow = self._shadow_prepare(res["id"], ctx.env["RADAR_SNAPSHOT_DIR"])
+                    if flow == "detect" and trigger == "schedule" and self._skill_shadow_on():  # 정기 실행만 (§7) — 같은 ADR 사본을 먼저 떠 둔다
+                        skill_sh = self._skill_shadow_prepare(res["input"])
                 queued = {q["item"] for q in hitl.review_queue(ctx)} if flow == "detect" else None
                 rep, diag = asyncio.run(fn(ctx, self.chat(flow, script), ctx.now, self.model_name))
                 if queued is not None:  # 새 detect 초안 = 실행 뒤 검토 대기에 새로 생긴 항목 — 후보 대비 검토율의 분모 (HYO-56, 비교 프로토콜 §7)
@@ -1364,6 +1378,13 @@ class RadarService:
                 t.start()
             else:
                 self._shadow_run(*args)
+        if skill_sh is not None:  # 제품 실행이 끝난 뒤 — 결과(ok든 아니든)와 무관하게 한 번
+            if self.skill_shadow_async:
+                t = threading.Thread(target=self._skill_shadow_run, args=(skill_sh, res), name="radar-skill-shadow", daemon=True)
+                self.skill_shadow_threads.append(t)
+                t.start()
+            else:
+                self._skill_shadow_run(skill_sh, res)
         return res
 
     # ── API 그림자 (HYO-99 3단계) ───────────────────────────────────
@@ -1426,6 +1447,49 @@ class RadarService:
             shutil.rmtree(sh["dir"], ignore_errors=True)
         with self._shadow_lock, open(os.path.join(self.data_dir, SHADOW_FILE), "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        return rec
+
+    # ── 스킬 그림자 (HYO-166, 비교 프로토콜 §7 「같은 순간 짝」) ─────────────────────
+    # 정기 detect 직후 같은 기기에서 skill@v1 detect를 라이브 모드(웹 검색) · 구독 claude -p로 한 번 (pipeline.skill_line — 합집합 스킬 줄과 같은 실행기).
+    # PR · issue · 알림 · Inbox · events.jsonl · runs.jsonl에 아무것도 쓰지 않는다. 출력은 <data>/shadow-skill/<주>/에만, 11/22까지 봉인 —
+    # 화면 · API에 내지 않는다. 주마다 한 번(k=1). 실패해도 제품 실행은 그대로 — 이유만 index.jsonl에.
+
+    def _skill_shadow_on(self):
+        return self.skill_shadow and dt.date.today().isoformat() <= self.skill_shadow_until
+
+    def _skill_shadow_prepare(self, week):
+        """주 폴더를 만들고 제품이 읽을 ADR을 먼저 떠 둔다. 그 주에 이미 돌았으면 None (k=1)."""
+        if not week or not WEEK_NAME.match(week):
+            return None
+        d = os.path.join(self.data_dir, SKILL_SHADOW_DIR, week)
+        if os.path.exists(d):
+            return None
+        try:
+            os.makedirs(d)
+            adr_dir, targets = copy_adr(self.real_info["adr_repo"], os.path.join(d, "adr"))
+        except (OSError, ValueError) as e:
+            return {"week": week, "dir": d, "error": f"ADR 사본을 못 떴다: {type(e).__name__}: {e}"}
+        return {"week": week, "dir": d, "adr_dir": adr_dir, "targets": targets}
+
+    def _skill_shadow_run(self, sh, main):
+        rec = {"week": sh["week"], "run": main["id"], "main_ok": main["ok"], "at": now_iso()}
+        try:
+            bin_ = self._claude_bin()
+            if sh.get("error"):
+                meta = {"ok": False, "error": sh["error"]}
+            elif not bin_:
+                meta = {"ok": False, "error": "claude CLI를 못 찾았다"}
+            else:
+                meta = skill_line.run_detect(sh["dir"], adr_dir=sh["adr_dir"], targets=sh["targets"], now=now_iso(), claude_bin=bin_,
+                                             ref=self.skill_shadow_ref)
+            rec.update(ok=meta["ok"], error=meta.get("error"), wall_s=meta.get("wall_s"), skill_commit=meta.get("skill_commit"))
+        except Exception as e:  # 그림자가 죽어도 주 실행 · 앱은 산다
+            rec.update(ok=False, error=f"{type(e).__name__}: {str(e)[:300]}")
+        try:
+            with self._shadow_lock, open(os.path.join(self.data_dir, SKILL_SHADOW_DIR, SKILL_SHADOW_INDEX), "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
         return rec
 
     def _input_age_hours(self):
