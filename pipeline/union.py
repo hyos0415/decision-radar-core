@@ -88,7 +88,10 @@ def primary_evidence(cand):
         for e in ev:
             if st is None or e.get("source_type") == st:
                 return e["url"], e.get("source_type")
-    return next(((u, None) for u in cand.get("urls") or [] if not u.startswith("repo:")), (None, None))
+    # 유형을 모르는 링크(run_report source_urls)로 물러날 때 — 초안이 community라고 적은 링크는 빼고, 유형은 모름(None)으로 둔다.
+    # 모르는 유형을 official_doc로 채우면 커뮤니티 글이 공식 근거로 둔갑한다 (R2, 리뷰 11/4)
+    community = {url_key(e["url"]) for e in cand.get("evidence") or [] if e.get("url") and e.get("source_type") == "community"}
+    return next(((u, None) for u in cand.get("urls") or [] if not u.startswith("repo:") and url_key(u) not in community), (None, None))
 
 
 def primary_url(cand):
@@ -106,7 +109,7 @@ def skill_item(cand, url, known, week, fetched, text, source_type=None):
     pkg = resolve_package(cand, known)
     ver = cand.get("version")
     meta = {"skill": {k: cand.get(k) for k in ("adr", "technology", "use", "version", "dependency", "affected", "evidence")},
-            "fetch": fetched, "found_by": "skill", "source_type": source_type or "official_doc"}
+            "fetch": fetched, "found_by": "skill", "source_type": source_type}   # 모르면 None — slot_entry가 community로 본다 (R2)
     channels = ["skill-line"]
     if cand.get("dependency") is not False and pkg and ver:
         meta.update(dependency=pkg, tag=ver if ver.startswith("v") else "v" + ver)

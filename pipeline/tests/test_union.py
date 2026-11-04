@@ -108,6 +108,14 @@ def test_primary_url_first_party_order():
                       {"url": "docs.x.com/upgrade", "source_type": "official_doc"}, {"url": "github.com/a/b/releases/tag/v1.0.0", "source_type": "release_note"}]}
     assert union.primary_url(c) == "github.com/a/b/releases/tag/v1.0.0"
     assert union.primary_url({"evidence": [{"url": "repo:fv/x.py", "source_type": "repo"}], "urls": ["repo:fv/x.py"]}) is None
+    # 리뷰 11/4: 근거가 커뮤니티뿐이면 공식 근거로 둔갑하지 않는다 (R2) — 초안이 community라고 적은 링크는 건너뛰고, 유형 모르는 링크는 None
+    hn = {"technology": "NewModel X", "evidence": [{"url": "https://news.ycombinator.com/item?id=1", "source_type": "community"}],
+          "urls": ["https://news.ycombinator.com/item?id=1"]}
+    assert union.primary_evidence(hn) == (None, None)
+    other = dict(hn, urls=hn["urls"] + ["https://blog.example.com/x"])
+    assert union.primary_evidence(other) == ("https://blog.example.com/x", None)
+    it = union.skill_item(other, "blog.example.com/x", {"deps": {}, "repos": {}}, "2026-W46", {"status": 200}, "body", None)
+    assert it["meta"]["source_type"] is None and detect_feed.slot_entry(it)["source_type"] == "community"
 
 
 def test_replay_w43_both_and_skill_only():
