@@ -577,7 +577,7 @@ SEC_NOW = time.mktime((2026, 11, 3, 7, 0, 0, 0, 0, 0)) - time.timezone
 W44_NOW = time.mktime((2026, 10, 27, 7, 0, 0, 0, 0, 0)) - time.timezone     # Node.js 10/21 보안 릴리스가 든 주
 SEC_CFG = {"window_days": 8, "runtimes": [
     {"name": "python", "label": "Python", "feed": "https://py.example/feed/", "strip_title": ["[Security-announce]"],
-     "dependency": "python", "dependency_when": "CPython"},
+     "dependency": "python", "dependency_when": r"CPython|github\.com/python/cpython"},
     {"name": "nodejs", "label": "Node.js", "feed": "https://node.example/vulnerability.xml", "fetch_page": True, "dependency": "electron"}]}
 
 # OSV 실제 응답 모양 (2026-11-04 api.osv.dev에서 확인 — 본문은 줄였다)
@@ -648,6 +648,11 @@ PY_SEC_RSS = b"""<?xml version="1.0" encoding="utf-8"?><rss version="2.0"><chann
  <link>https://mail.python.org/archives/list/security-announce@python.org/message/LSEJ6DOJPIHHNNR/</link>
  <description>certifi removes compromised intermediate certificates.</description>
  <pubDate>Tue, 27 Oct 2026 14:03:26 +0000</pubDate></item>
+<item><title>[Security-announce][CVE-2026-115557] Distrust compromised intermediate certificates in ssl module</title>
+ <link>https://mail.python.org/archives/list/security-announce@python.org/message/FNAJMZV6XQYLVPA/</link>
+ <description>&lt;p&gt;Python has added a denylist for known compromised certificates to the "ssl" module.
+ &lt;a href="https://github.com/python/cpython/issues/150001"&gt;issue&lt;/a&gt;&lt;/p&gt;</description>
+ <pubDate>Sat, 24 Oct 2026 14:20:01 +0000</pubDate></item>
 <item><title>[Security-announce][CVE-2026-19445] Use-after-free of a server-side SSLContext</title>
  <link>https://mail.python.org/archives/list/security-announce@python.org/message/QMQIUQB6WGGC3MI/</link>
  <description>affecting CPython</description><pubDate>Wed, 30 Sep 2026 16:10:08 +0000</pubDate></item>
@@ -736,11 +741,13 @@ def test_security_runtime_notices():
     assert py.meta.get("dependency") == "python" and py.title.startswith("Python security: [CVE-2026-116566]")
     cert = rt["runtime-security:python:LSEJ6DOJPIHHNNR"]
     assert "dependency" not in cert.meta              # CPython이 아니다 — 관문이 제목 이름(certifi)으로 찾는다
+    ssl = rt["runtime-security:python:FNAJMZV6XQYLVPA"]   # 「CPython」 낱말 없이 python/cpython 링크만 있는 CPython 공지 (리뷰 11/4)
+    assert ssl.meta.get("dependency") == "python" and ssl.title.startswith("Python security: "), (ssl.meta, ssl.title)
     from pipeline.importance.gate import resolve_technologies
     assert resolve_technologies(cert.to_dict(), ["python", "certifi"]) == ["certifi"]
     assert resolve_technologies(py.to_dict(), ["python", "certifi"]) == ["python"]
     assert resolve_technologies(node.to_dict(), ["python", "electron", "node.js"]) == ["electron"]
-    assert len(rt) == 3 and rep["runtimes"] == {"python": {"entries": 3, "in_window": 2}, "nodejs": {"entries": 2, "in_window": 1}}
+    assert len(rt) == 4 and rep["runtimes"] == {"python": {"entries": 4, "in_window": 3}, "nodejs": {"entries": 2, "in_window": 1}}
     assert lanes.classify(node.to_dict()) == ("A", ["runtime-security:nodejs"]), lanes.classify(node.to_dict())
 
 

@@ -11,7 +11,7 @@ W44 LiteLLM 1.107.0 백도어는 PyPI에만 있어 GitHub releases를 보는 레
   공지 하나 = 항목 하나 (같은 취약점의 별칭 GHSA · PYSEC은 하나로). 등급 파일에서 retired인 기술은 묻지 않는다.
 - 런타임: pool.yaml `security.runtimes`의 피드. 본문이 빈 피드(Node.js)는 창 안 글만 페이지를 받아 본문으로 쓴다.
   `dependency`(관문이 그 기술 하나로만 판정 — gate.resolve_technologies)는 설정에서: Node.js 공지는 electron(우리 Node는 Electron 안 — 사용자 결정 2026-11-04).
-  `dependency_when`이 있으면 제목 · 본문에 그 낱말이 있을 때만 붙인다 (Python 목록의 certifi · pip 공지는 CPython이 아니다 → 제목 이름으로 관문이 찾는다).
+  `dependency_when`(정규식)이 있으면 제목 · 본문 · 링크에 맞을 때만 붙인다 (Python 목록의 certifi · pip 공지는 CPython이 아니다 → 제목 이름으로 관문이 찾는다).
 """
 import email.utils
 import json
@@ -191,7 +191,8 @@ def runtime_item(cfg, entry, body_text=None):
     meta = {"kind": "advisory", "runtime": cfg["name"]}
     dep = cfg.get("dependency")
     when = cfg.get("dependency_when")
-    if dep and (not when or re.search(when, f"{title}\n{text}")):
+    links = extract_links(entry["content"] or "")
+    if dep and (not when or re.search(when, "\n".join([title, text, *links]))):
         meta["dependency"] = dep
     slug = link.rstrip("/").split("/")[-1] or entry["id"]
     ts = _rfc822_ts(entry["published"] or entry["updated"] or "")
@@ -199,7 +200,7 @@ def runtime_item(cfg, entry, body_text=None):
     return Item(id=f"runtime-security:{cfg['name']}:{slug}", source=cfg["name"], channels=[f"runtime-security:{cfg['name']}"],
                 title=f"{cfg['label']} security: {title}" if "dependency" in meta else title, url=link,
                 created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)) if ts else "",    # RSS 날짜(RFC 822) → ISO 8601 (Item 형식)
-                text=text, links=extract_links(entry["content"] or ""), meta=meta)
+                text=text, links=links, meta=meta)
 
 
 def collect_runtime(cfg, fetcher, since_ts, report):
