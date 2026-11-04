@@ -100,6 +100,8 @@ class TierStore:
                     eff[k] = ov[k]
             if ov.get("tiers"):
                 eff["unresolved"] = False
+            if ov.get("retired"):             # 스택에서 뺀 기술 (사람이 적는다, 2026-11-04 HYO-170) — 관문이 판정하지 않는다
+                eff["retired"] = ov["retired"]
             eff["human"] = True
         return eff
 

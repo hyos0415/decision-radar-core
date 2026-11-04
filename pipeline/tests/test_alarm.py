@@ -114,6 +114,19 @@ def test_detect_feed_lists_alarm_unknown_and_not_ours():
         assert "경보 그물 5" in detect_feed.funnel_line(f)
 
 
+def test_retired_technology_stays_quiet():
+    # LiteLLM 기각(2026-11-04): 등급 파일 사람 수정에 retired → PyPI 이름으로 그물에 걸려도 관문이 「스택에서 뺀 기술」로 빼고 경보 칸에도 안 간다
+    st = _store()
+    st.data["overrides"]["litellm"] = {"technology": "litellm", "retired": "2026-11-04 기각"}
+    g = gate_mod.Gate(StubBackend(changes={i: ["security"] for i in NET_IDS}), st)
+    res = profile_filter.run_filter(ITEMS, _profile(), ["kw"], [t for t in STACK if t != "litellm"], gate=g)
+    a = {e["id"]: e for e in res["lane_a"]}
+    assert a["hn:litellm"]["gate"]["status"] == "retired" and not a["hn:litellm"]["gate"]["keep"], a["hn:litellm"]["gate"]
+    assert "hn:litellm" not in {x["id"] for x in res["gate_summary"]["shown"]}
+    assert [e["id"] for e, _ in detect_feed.alarm_unknown(res["lane_a"])] == ["hn:cc"]        # 경보 칸은 Claude Code만
+    assert res["gate_summary"]["status_counts"]["lane_a"] == 0                                  # 그물 글은 레인 A 비율에 안 든다
+
+
 TESTS = [(n, f) for n, f in globals().items() if n.startswith("test_")]
 
 

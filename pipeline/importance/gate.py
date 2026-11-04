@@ -95,13 +95,18 @@ class Gate:
                 return {**base, "status": "other-stack", "technologies": other,
                         "reason": "팀원 스택(수집 전용 대상)에만 있는 기술 → 내 관문 밖 (" + ", ".join(other) + ")"}
             return {**base, "reason": "소식이 걸린 스택 기술을 모른다 → 후보에서 뺌 (technology-unresolved)"}
-        effs = {}
+        effs, retired = {}, []
         for t in techs:
             e = self.store.effective(t)
-            if e is None or e.get("unresolved") or not e.get("tiers"):
+            if e is not None and e.get("retired"):      # 스택에서 뺀 기술 — 등급 파일에 기록은 남기되 판정하지 않는다 (HYO-170)
+                retired.append(t)
+                base["skipped"].append({"technology": t, "why": f"스택에서 뺀 기술 ({e['retired']})"})
+            elif e is None or e.get("unresolved") or not e.get("tiers"):
                 base["skipped"].append({"technology": t, "why": "등급 분류 불가 (v1.1 U4)"})
             else:
                 effs[t] = e
+        if not effs and retired and len(retired) == len(techs):
+            return {**base, "status": "retired", "reason": "스택에서 뺀 기술 → 후보에서 뺌 (" + ", ".join(retired) + ")"}
         if not effs:
             return {**base, "reason": "등급이 분류 불가 → 후보에서 뺌 (" + ", ".join(techs) + ")"}
         q = NewsQuery(id=item["id"], technology=", ".join(effs), title=item.get("title", ""), text=item.get("text", ""), source=item.get("source", ""))

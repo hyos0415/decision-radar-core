@@ -244,9 +244,10 @@ def apply_topk(entries, k=None):
 
 def gate_counts(entries, warn_ratio=None):
     """레인 A 항목들(각각 `gate` 칸) → 요약 건수 + 경고. 모르는 기술 = unclassified인데 걸린 기술이 없음, 분류 불가 = 기술은 있는데 등급이 없음.
-    ratio = (모르는 기술 + 분류 불가) / (레인 A − 팀원 스택). 분모가 0이면 None (경고 없음)."""
+    ratio = (모르는 기술 + 분류 불가) / (레인 A − 팀원 스택 − 스택에서 뺀 기술). 분모가 0이면 None (경고 없음).
+    스택에서 뺀 기술(retired, HYO-170)은 일부러 뺀 것이라 「판정 못 함」이 아니다 — 팀원 스택처럼 분모에서도 뺀다."""
     warn_ratio = UNKNOWN_WARN_RATIO if warn_ratio is None else warn_ratio
-    c = {"lane_a": len(entries), "kept": 0, "unknown": 0, "unresolved": 0, "other_stack": 0, "error": 0}
+    c = {"lane_a": len(entries), "kept": 0, "unknown": 0, "unresolved": 0, "other_stack": 0, "retired": 0, "error": 0}
     for e in entries:
         g = e.get("gate") or {}
         s = g.get("status")
@@ -256,9 +257,11 @@ def gate_counts(entries, warn_ratio=None):
             c["unresolved" if g.get("technologies") else "unknown"] += 1
         elif s == "other-stack":
             c["other_stack"] += 1
+        elif s == "retired":
+            c["retired"] += 1
         elif s == "error":
             c["error"] += 1
-    base = c["lane_a"] - c["other_stack"]
+    base = c["lane_a"] - c["other_stack"] - c["retired"]
     c["ratio"] = (c["unknown"] + c["unresolved"]) / base if base else None
     c["warn_ratio"] = warn_ratio
     c["warn"] = c["ratio"] is not None and c["ratio"] > warn_ratio

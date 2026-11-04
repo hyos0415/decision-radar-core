@@ -645,6 +645,22 @@ def test_gate_counts_and_warning_ratio():
     allother = policy.gate_counts([_ga("other-stack")] * 2)
     assert allother["ratio"] is None and not allother["warn"]
     assert policy.gate_counts([], 0.5)["ratio"] is None
+    # 스택에서 뺀 기술(retired, HYO-170)은 판정 못 함이 아니다 — 따로 세고 분모에서도 뺀다 (W44 재생: litellm 17건이 경고를 울리지 않게)
+    r = policy.gate_counts([_ga("retired")] * 17 + [_ga("unclassified")] + [_ga("ok")] * 19)
+    assert r["retired"] == 17 and r["unknown"] == 1 and abs(r["ratio"] - 1 / 20) < 1e-12 and not r["warn"], r
+
+
+def test_retired_technology_is_recorded_but_not_judged():
+    # HYO-170 (2026-11-04 사용자): LiteLLM 기각 — 등급 파일에서 지우지 않고 사람 수정에 retired를 적는다
+    st = _store(litellm={"tiers": ["L5"]}, python={"tiers": ["L0", "L1"]})
+    st.data["overrides"]["litellm"] = {"technology": "litellm", "path": "dev", "retired": "2026-11-04 기각"}
+    assert st.effective("litellm")["retired"] == "2026-11-04 기각" and "retired" not in st.effective("python")
+    g = gate_mod.Gate(StubBackend(changes={"l": ["security"], "both": ["security"]}), st)
+    r = g(_item("l", "BerriAI/litellm v1.107.0", tech="litellm"))
+    assert r["status"] == "retired" and r["keep"] is False and "스택에서 뺀 기술" in r["reason"], r
+    assert r["skipped"] == [{"technology": "litellm", "why": "스택에서 뺀 기술 (2026-11-04 기각)"}]
+    both = g({"id": "both", "source": "hn", "title": "LiteLLM and Python RCE", "url": "", "text": "", "channels": ["stories"], "meta": {}})
+    assert both["status"] == "ok" and both["keep"] and [k["technology"] for k in both["kept_by"]] == ["python", "python"], both   # 남은 기술은 그대로 판정
 
 
 def test_cli_run_reads_team_stack_from_collect_only_targets():
@@ -1992,6 +2008,16 @@ def _ignore_overrides(self, name):
     return None if rec is None else {**rec, "sensitive": rec.get("sensitive", False), "local": rec.get("local", False)}
 
 
+_ORIG_EFFECTIVE = TierStore.effective
+
+
+def _retired_ignored(self, name):
+    e = _ORIG_EFFECTIVE(self, name)
+    if e:
+        e.pop("retired", None)
+    return e
+
+
 def _cap_no_fill(entries, limit=policy.WEEKLY_LIMIT, per_tech=None):
     """기술당 1칸만 하고 남은 칸을 비워 둔다."""
     shown, cut, _ = _ORIG_APPLY_CAP(entries, limit, per_tech)
@@ -2118,6 +2144,7 @@ def mutations():
         ("top-k: k를 무시 (전부 목록)", [(policy, "TOPK", 99)], test_topk_always_then_per_technology),
         ("top-k: 기술 대신 항목마다 따로 셈", [(policy, "cap_technology", lambda e: e["id"])], test_topk_always_then_per_technology),
         ("top-k: 관문 배선이 예전 5칸으로", [(policy, "CAP_MODE", "weekly5")], test_lane_a_gate_wiring_and_cap),
+        ("스택에서 뺀 기술(retired)을 무시하고 판정", [(TierStore, "effective", _retired_ignored)], test_retired_technology_is_recorded_but_not_judged),
         ("top-k: 기술 질의는 1위만 detect (11/4 오전 규칙)", [(policy, "DETECT_TOPK", 1)], test_topk_always_then_per_technology),
         ("top-k: 「항상」을 접지 않음 (전부 detect)", [(policy, "fold_key", lambda e: ("item", e["id"]))], test_topk_always_then_per_technology),
         ("top-k: 「항상」을 기술당 1건으로 (안 A — 줄 무시)", [(policy, "fold_key", lambda e: ("tech", policy.cap_technology(e)))], test_topk_always_then_per_technology),
