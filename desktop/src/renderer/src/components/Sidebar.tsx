@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Bell,
+  CalendarDays,
   Inbox as InboxIcon,
   Library,
   Loader2,
@@ -19,7 +20,7 @@ import { shortcutText, timeOnly } from '@renderer/lib/format'
 import type { RadarInfo, ThemeSource } from '../../../shared'
 import { COPY } from '../../../copy'
 
-export type View = 'inbox' | 'decisions' | 'topics' | 'runs'
+export type View = 'inbox' | 'weekList' | 'decisions' | 'topics' | 'runs'
 
 export type RunState = {
   active: Job | null // detect · revisit 작업이 접수됐거나 도는 중
@@ -241,6 +242,12 @@ export function Sidebar({
           label={COPY.term.inbox}
           count={pending}
           onClick={() => onView('inbox')}
+        />
+        <NavItem
+          active={view === 'weekList'}
+          icon={<CalendarDays size={16} />}
+          label={COPY.term.weekList}
+          onClick={() => onView('weekList')}
         />
         <NavItem
           active={view === 'decisions'}

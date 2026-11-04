@@ -421,6 +421,22 @@ kbd {
 .tag.mono {
   font-family: var(--font-code);
 }
+/* 이번 주 목록 배지 (HYO-168) — 보안 · 경보 · 초안 후보 */
+.tag.tag-danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.tag.tag-warning {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+.tag.tag-strong {
+  border-color: var(--foreground);
+  color: var(--foreground);
+}
+.week-row-security {
+  box-shadow: inset 2px 0 0 var(--danger);
+}
 
 .icon-button {
   width: var(--control-sm);
