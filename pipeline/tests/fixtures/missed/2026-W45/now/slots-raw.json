@@ -1,0 +1,38 @@
+{
+ "structured_output": {
+  "judgments": [
+   {
+    "id": "hn:50248124",
+    "release": true,
+    "matches": [
+     {
+      "slot": "gate-classifier",
+      "fit": 2,
+      "reason": "같은 OpenAI API의 GPT-6.1 Terra는 속도·비용 균형을 내세워 gpt-6.1-sol과 단가·응답 속도를 비교할 만하지만, 구조화 출력 지원과 가격은 글에 없다."
+     },
+     {
+      "slot": "fineprint-extraction",
+      "fit": 1,
+      "reason": "비용 효율형 신모델이라 Haiku 4.5와 추출 품질·단가를 비교할 수 있으나, 한국어와 구조화 출력은 확인되지 않는다."
+     },
+     {
+      "slot": "finance-decomposition",
+      "fit": 1,
+      "reason": "주장 분해를 claude-sonnet-5와 비교할 후보지만, 한국어 성능과 단가가 글에 없다."
+     }
+    ]
+   },
+   {
+    "id": "vendor:aws-bedrock:0c5c946db9a84a5a290bb7e1c3b4577820eb630a",
+    "release": true,
+    "matches": [
+     {
+      "slot": "medical-ops-llm",
+      "fit": 1,
+      "reason": "Bedrock에서 제공되는 GPT-6.1 Terra를 nova-pro와 비교할 수 있으나, 서울·apac 프로파일 제공과 한국어 성능은 글에서 확인되지 않는다."
+     }
+    ]
+   }
+  ]
+ }
+}

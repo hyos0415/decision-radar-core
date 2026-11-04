@@ -1,0 +1,137 @@
+{
+ "slots_version": 1,
+ "engine": "claude",
+ "k": 3,
+ "fit_min": 2,
+ "candidates": 155,
+ "judged": 155,
+ "releases": 65,
+ "unjudged": [],
+ "dropped": {
+  "unknown_id": 0,
+  "unknown_slot": 0,
+  "bad_fit": 0
+ },
+ "slot_names": {
+  "gate-classifier": "관문 분류",
+  "agent-engine": "에이전트 엔진 (detect · revisit)",
+  "eval-judge": "eval judge",
+  "finance-verifier-local": "금융 verifier (로컬)",
+  "finance-decomposition": "질의 분해",
+  "fineprint-extraction": "조건 추출",
+  "fineprint-local-nl": "자연어 해석 (로컬)",
+  "medical-ops-llm": "의료 운영 LLM",
+  "medical-ondevice": "온디바이스"
+ },
+ "slot_current": {
+  "gate-classifier": [
+   "OpenAI gpt-6.1-sol (API)"
+  ],
+  "agent-engine": [
+   "Anthropic claude-sonnet-5-5 (claude -p",
+   "effort medium)"
+  ],
+  "eval-judge": [
+   "OpenAI gpt-6-sol (codex exec)"
+  ],
+  "finance-verifier-local": [
+   "Intel/Qwen3.5-4B-int4-AutoRound (vLLM)",
+   "kakaocorp/kanana-2-3b-instruct (비교)"
+  ],
+  "finance-decomposition": [
+   "Anthropic claude-sonnet-5"
+  ],
+  "fineprint-extraction": [
+   "Anthropic claude-haiku-4-5-20251001"
+  ],
+  "fineprint-local-nl": [
+   "qwen3.5-4b (llama-server)"
+  ],
+  "medical-ops-llm": [
+   "Amazon Bedrock apac.amazon.nova-pro-v1:0 (서울 apac 추론 프로파일)"
+  ],
+  "medical-ondevice": [
+   "Qwen3.5-2B Q4_0 (GGUF)"
+  ]
+ },
+ "per_slot": {
+  "gate-classifier": [
+   {
+    "id": "hn:49996437",
+    "title": "Claude Haiku 5.5",
+    "url": "https://www.anthropic.com/claude-haiku-5-5",
+    "source": "hn",
+    "why": "hn:1047",
+    "fit": 2,
+    "reason": "빠르고 싼 고처리량 모델이라 분류 자리에서 gpt-6.1-sol 대비 단가·속도를 비교해 볼 만하나 구조화 출력 지원은 확인이 필요하다.",
+    "popularity": -1047,
+    "rank": 3
+   }
+  ],
+  "agent-engine": [],
+  "eval-judge": [],
+  "finance-verifier-local": [],
+  "finance-decomposition": [
+   {
+    "id": "hn:49996437",
+    "title": "Claude Haiku 5.5",
+    "url": "https://www.anthropic.com/claude-haiku-5-5",
+    "source": "hn",
+    "why": "hn:1047",
+    "fit": 2,
+    "reason": "대량·저비용 작업용 Haiku 5.5로 Sonnet 5보다 싼 단가에 주장 분해가 되는지 비교해 볼 만하다.",
+    "popularity": -1047,
+    "rank": 3
+   }
+  ],
+  "fineprint-extraction": [
+   {
+    "id": "hn:49996437",
+    "title": "Claude Haiku 5.5",
+    "url": "https://www.anthropic.com/claude-haiku-5-5",
+    "source": "hn",
+    "why": "hn:1047",
+    "fit": 3,
+    "reason": "Haiku 4.5보다 약 75% 싸고 더 강한 후속 Haiku라 같은 API·구조화 추출 자리에서 claude-haiku-4-5와 바로 비교할 후보다.",
+    "popularity": -1047,
+    "rank": 2
+   },
+   {
+    "id": "vendor:aws-bedrock:5a50599c4c217241c21e7c6d72c35ac8787ec30c",
+    "title": "Claude Haiku 5.5 is now available on AWS",
+    "url": "https://aws.amazon.com/about-aws/whats-new/2026/10/claude-haiku-5-5-aws/",
+    "source": "vendor",
+    "why": "bedrock-whats-new",
+    "fit": 2,
+    "reason": "Haiku 4.5보다 약 75% 싼 Haiku 5.5를 Bedrock으로도 쓸 수 있어 추출 단가 비교 후보다.",
+    "popularity": 0,
+    "rank": 3
+   }
+  ],
+  "fineprint-local-nl": [],
+  "medical-ops-llm": [],
+  "medical-ondevice": []
+ },
+ "to_detect": [],
+ "candidate_list": [
+  {
+   "id": "hn:49996437",
+   "source": "hn",
+   "why": "hn:1047",
+   "title": "Claude Haiku 5.5",
+   "url": "https://www.anthropic.com/claude-haiku-5-5",
+   "text": "",
+   "popularity": -1047
+  },
+  {
+   "id": "vendor:aws-bedrock:5a50599c4c217241c21e7c6d72c35ac8787ec30c",
+   "source": "vendor",
+   "why": "bedrock-whats-new",
+   "title": "Claude Haiku 5.5 is now available on AWS",
+   "url": "https://aws.amazon.com/about-aws/whats-new/2026/10/claude-haiku-5-5-aws/",
+   "text": "AWS now offers Claude Haiku 5.5, the fastest and most efficient model in the Claude 5.5 family, built for subagents and high-volume, cost-sensitive work. According to Anthropic, it costs around 75% less than Claude Haiku 4.5 for most tasks. Claude Haiku 5.5 is Anthropic's most capable Haiku yet, a s",
+   "popularity": 0
+  }
+ ],
+ "note": "2026-11-04 지금 코드 자리 질의 결과에서 픽스처 항목만 (make_fixture.py) — 건수 칸은 원래 주 전체"
+}

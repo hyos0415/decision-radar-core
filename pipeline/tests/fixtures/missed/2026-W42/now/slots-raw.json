@@ -1,0 +1,48 @@
+{
+ "structured_output": {
+  "judgments": [
+   {
+    "id": "hn:49996437",
+    "release": true,
+    "matches": [
+     {
+      "slot": "fineprint-extraction",
+      "fit": 3,
+      "reason": "Haiku 4.5보다 약 75% 싸고 더 강한 후속 Haiku라 같은 API·구조화 추출 자리에서 claude-haiku-4-5와 바로 비교할 후보다."
+     },
+     {
+      "slot": "finance-decomposition",
+      "fit": 2,
+      "reason": "대량·저비용 작업용 Haiku 5.5로 Sonnet 5보다 싼 단가에 주장 분해가 되는지 비교해 볼 만하다."
+     },
+     {
+      "slot": "gate-classifier",
+      "fit": 2,
+      "reason": "빠르고 싼 고처리량 모델이라 분류 자리에서 gpt-6.1-sol 대비 단가·속도를 비교해 볼 만하나 구조화 출력 지원은 확인이 필요하다."
+     },
+     {
+      "slot": "agent-engine",
+      "fit": 1,
+      "reason": "서브에이전트용 경량 모델이라 도구 호출 에이전트에서 Sonnet 5.5를 대체하기엔 능력이 부족할 수 있다."
+     }
+    ]
+   },
+   {
+    "id": "vendor:aws-bedrock:5a50599c4c217241c21e7c6d72c35ac8787ec30c",
+    "release": true,
+    "matches": [
+     {
+      "slot": "fineprint-extraction",
+      "fit": 2,
+      "reason": "Haiku 4.5보다 약 75% 싼 Haiku 5.5를 Bedrock으로도 쓸 수 있어 추출 단가 비교 후보다."
+     },
+     {
+      "slot": "medical-ops-llm",
+      "fit": 1,
+      "reason": "저가 모델이지만 서울·apac 제공 여부가 글에 없어 Nova Pro 대체로는 불확실하다."
+     }
+    ]
+   }
+  ]
+ }
+}

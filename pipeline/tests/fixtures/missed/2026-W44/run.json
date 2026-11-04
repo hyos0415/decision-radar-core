@@ -1,0 +1,30 @@
+{
+ "snapshot": "radar-snapshots/2026-W44",
+ "counts": {
+  "items": 2562,
+  "lane_a": 391,
+  "lane_b_candidates": 2164,
+  "skipped_pages": 7,
+  "dropped_not_new": 0,
+  "lane_b_ranked": {
+   "kw": 99,
+   "kw+aliases": 324
+  },
+  "lane_a_kept": 31
+ },
+ "stack": {
+  "terms": [
+   "litellm",
+   "openai",
+   "openai-agents",
+   "python"
+  ]
+ },
+ "lane_a_gate": {
+  "model": "gpt-6.1-sol",
+  "mode": null,
+  "label": "5/31",
+  "limit": 5,
+  "total_kept": 31
+ }
+}

@@ -1,0 +1,178 @@
+[
+ {
+  "id": "vendor-diff:openai:https://platform.openai.com/docs/changelog@2026-W44",
+  "source": "vendor",
+  "title": "[openai] https://platform.openai.com/docs/changelog 변경 (2026-W43 → 2026-W44)",
+  "url": "https://platform.openai.com/docs/changelog",
+  "lane": "A",
+  "reasons": [
+   "page-diff:openai"
+  ],
+  "gate": {
+   "keep": true,
+   "status": "ok",
+   "technologies": [
+    "openai",
+    "openai-agents",
+    "gpt-6-luna",
+    "gpt-6-sol"
+   ],
+   "tiers": {
+    "openai": [
+     "L5"
+    ],
+    "openai-agents": [
+     "L4"
+    ],
+    "gpt-6-luna": [
+     "L2"
+    ],
+    "gpt-6-sol": [
+     "L2"
+    ]
+   },
+   "changes": [
+    "pricing"
+   ],
+   "model_changes": [
+    "pricing"
+   ],
+   "rows": [
+    {
+     "tier": "L5",
+     "change": "pricing",
+     "base": "—",
+     "keep": false,
+     "adjusted_by": [],
+     "technology": "openai"
+    },
+    {
+     "tier": "L4",
+     "change": "pricing",
+     "base": "—",
+     "keep": false,
+     "adjusted_by": [],
+     "technology": "openai-agents"
+    },
+    {
+     "tier": "L2",
+     "change": "pricing",
+     "base": "✅",
+     "keep": true,
+     "adjusted_by": [],
+     "technology": "gpt-6-luna"
+    },
+    {
+     "tier": "L2",
+     "change": "pricing",
+     "base": "✅",
+     "keep": false,
+     "adjusted_by": [
+      "경로=개발 → security만 남김"
+     ],
+     "technology": "gpt-6-sol"
+    }
+   ],
+   "kept_by": [
+    {
+     "tier": "L2",
+     "change": "pricing",
+     "base": "✅",
+     "keep": true,
+     "adjusted_by": [],
+     "technology": "gpt-6-luna"
+    }
+   ],
+   "defaulted_change": false,
+   "skipped": [],
+   "successor": [],
+   "reason": "gpt-6-luna L2 × 가격·한도 변경"
+  },
+  "gate_status": "ok",
+  "also_matches_interest": {
+   "kw": false,
+   "kw+aliases": true
+  },
+  "known_example": false,
+  "shown": false
+ },
+ {
+  "id": "vendor:aws-bedrock:0c5c946db9a84a5a290bb7e1c3b4577820eb630a",
+  "source": "vendor",
+  "title": "OpenAI GPT-6.1 Terra is now generally available on Amazon Bedrock",
+  "url": "https://aws.amazon.com/about-aws/whats-new/2026/10/openai-gpt-6-1-terra-on-amazon-bedrock/",
+  "lane": "A",
+  "reasons": [
+   "vendor-feed:aws-bedrock"
+  ],
+  "gate": {
+   "keep": false,
+   "status": "ok",
+   "technologies": [
+    "Amazon Bedrock",
+    "Amazon Bedrock Guardrails",
+    "openai"
+   ],
+   "tiers": {
+    "Amazon Bedrock": [
+     "L2",
+     "L3"
+    ],
+    "Amazon Bedrock Guardrails": [
+     "L3"
+    ],
+    "openai": [
+     "L5"
+    ]
+   },
+   "changes": [],
+   "model_changes": [],
+   "rows": [
+    {
+     "tier": "L2",
+     "change": "minor_patch",
+     "base": "❌",
+     "keep": false,
+     "adjusted_by": [],
+     "technology": "Amazon Bedrock"
+    },
+    {
+     "tier": "L3",
+     "change": "minor_patch",
+     "base": "❌",
+     "keep": false,
+     "adjusted_by": [],
+     "technology": "Amazon Bedrock"
+    },
+    {
+     "tier": "L3",
+     "change": "minor_patch",
+     "base": "❌",
+     "keep": false,
+     "adjusted_by": [],
+     "technology": "Amazon Bedrock Guardrails"
+    },
+    {
+     "tier": "L5",
+     "change": "minor_patch",
+     "base": "❌",
+     "keep": false,
+     "adjusted_by": [],
+     "technology": "openai"
+    }
+   ],
+   "kept_by": [],
+   "defaulted_change": true,
+   "skipped": [],
+   "successor": [],
+   "reason": "남기는 행 없음: L2×minor·patch=❌, L3×minor·patch=❌, L5×minor·patch=❌"
+  },
+  "gate_status": "ok",
+  "also_matches_interest": {
+   "kw": false,
+   "kw+aliases": false
+  },
+  "known_example": false,
+  "shown": null
+ }
+]
