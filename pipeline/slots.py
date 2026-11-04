@@ -11,7 +11,7 @@ GPT-6.1 Terra(관문 분류 자리) · Claude Haiku 5.5(조건 추출 자리)가
    스크립트가 id · 자리 이름 · 점수를 검사한다. 원본 응답은 `slots-raw.json`
 3. 순위: 자리마다 적합도 → 공식 출처 먼저 → 출처 안 인기 → id. 문턱(FIT_MIN) 이상 top-k. 없으면 「없음」
 
-출력 `<out>/slots.json`: {slots_version, candidates, judged, per_slot: {자리: [후보…]}, to_detect: [자리마다 1위 id], unjudged}
+출력 `<out>/slots.json`: {slots_version, candidates, judged, per_slot: {자리: [후보…]}, to_detect: [자리마다 top-k id], unjudged}
 """
 import argparse
 import json
@@ -242,10 +242,9 @@ def run(items, slots, engine="claude", out=None, reuse=False):
         raise SlotError(f"모르는 엔진 {engine!r} (claude · stub — codex는 HYO-169)")
     judged, dropped = validate(so, cands, slots)
     per = rank(cands, judged, slots)
-    to_detect = []
+    to_detect = []      # 자리마다 top-k 전부 (detect_feed.slot_picks와 같은 규칙 — query-topk.md §2 변경 2026-11-04)
     for s in slots["slots"]:
-        if per[s["id"]] and per[s["id"]][0]["id"] not in to_detect:
-            to_detect.append(per[s["id"]][0]["id"])
+        to_detect += [x["id"] for x in per[s["id"]] if x["id"] not in to_detect]
     return {"slots_version": slots.get("version"), "engine": engine, "k": TOPK, "fit_min": FIT_MIN,
             "candidates": len(cands), "judged": len(judged), "releases": sum(1 for j in judged.values() if j["release"]),
             "unjudged": sorted({c["id"] for c in cands} - set(judged)), "dropped": dropped,

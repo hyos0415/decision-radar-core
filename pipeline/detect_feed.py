@@ -15,8 +15,8 @@
                detect가 지금 기준과 대조해 이미 반영된 릴리스를 뺀다 (모델에는 안 보인다)
   list.json    이번 주 목록 — 「항상」 · 기술 질의 top-k · 자리 질의 top-k (HYO-168, docs/design/query-topk.md). 화면이 읽는다
 
-무엇을 넣나: 관문이 남기고(keep) detect로 고른 것(shown — 「항상」 + 기술마다 1위, 2026-11-04 전에는 5/N 상한 안)
-+ run 폴더에 slots.json(pipeline.slots)이 있으면 자리마다 1위 (kind model_release). `--all-kept`면 관문이 남긴 것 전부.
+무엇을 넣나: 관문이 남기고(keep) detect로 고른 것(shown — 「항상」을 (패키지 × 줄)마다 1건으로 접은 것 + 기술마다 top-k, 2026-11-04 전에는 5/N 상한 안)
++ run 폴더에 slots.json(pipeline.slots)이 있으면 자리마다 top-k 전부 (kind model_release). `--all-kept`면 관문이 남긴 것 전부.
 버린 이유(결정표의 행)는 여기 옮기지 않는다 — `lane_a.json`·`gate-calls.jsonl`에 이미 있다 (깔때기 화면은 만들지 않는다, 10/8).
 """
 import argparse
@@ -30,7 +30,7 @@ from .importance import policy
 from .profile_filter import read_items, write_json
 
 SUMMARY_CHARS = 1500    # triage 프롬프트에 그대로 들어간다. 전문은 snapshot_fetch로
-SLOTS = "slots.json"    # 자리 질의 결과 (pipeline.slots, HYO-168) — run 폴더에 있으면 자리마다 1위를 detect에 더한다
+SLOTS = "slots.json"    # 자리 질의 결과 (pipeline.slots, HYO-168) — run 폴더에 있으면 자리마다 top-k를 detect에 더한다
 LIST = "list.json"      # 이번 주 목록 — 「항상」 · 기술 질의 · 자리 질의 (query-topk.md). 화면이 읽는다
 
 
@@ -83,12 +83,14 @@ def select(lane_a, all_kept=False):
     return [e for e in lane_a if (e.get("gate") or {}).get("keep") and (all_kept or e.get("shown"))]
 
 
-def slot_firsts(slots):
-    """자리 질의 결과(slots.json) → {항목 id: (자리, 1위 기록)} — 자리마다 1위만 detect로 (query-topk.md §2). 같은 항목이 여러 자리 1위면 처음 자리."""
+def slot_picks(slots):
+    """자리 질의 결과(slots.json) → {항목 id: (자리, 기록)} — 자리마다 top-k 전부 detect로 (query-topk.md §2 변경 2026-11-04:
+    처음엔 1위만이었는데 Haiku 5.5(W42)는 2 · 3위, Terra(W44)는 2위라 목록에만 떴다). 같은 항목이 여러 자리에 들면 처음 자리 · 높은 순위."""
     out = {}
     for slot, xs in ((slots or {}).get("per_slot") or {}).items():
-        if xs and xs[0]["id"] not in out:
-            out[xs[0]["id"]] = (slot, xs[0])
+        for x in xs:
+            if x["id"] not in out or x["rank"] < out[x["id"]][1]["rank"]:
+                out[x["id"]] = (slot, x)
     return out
 
 
@@ -109,7 +111,8 @@ def week_list(lane_a, slots, detect_ids):
         g = e.get("gate") or {}
         best = min(g.get("kept_by") or [{}], key=lambda r: (policy.tier_rank(r["tier"]), policy.severity(r["change"])) if r else (99, 99))
         return {"id": e["id"], "title": e.get("title"), "url": e.get("url"), "tier": best.get("tier"), "change": best.get("change"),
-                "reason": g.get("reason"), "rank": e.get("rank"), "to_detect": e["id"] in detect_ids}
+                "reason": g.get("reason"), "rank": e.get("rank"), "to_detect": e["id"] in detect_ids,
+                "folded_into": e.get("folded_into")}     # 「항상」에서 같은 패키지 · 줄의 더 새 버전으로 접혔으면 그 대표 id (화면이 「외 N건」으로 묶는다)
     listed = [e for e in lane_a if e.get("listed")]
     always = [brief(e) for e in listed if e.get("always")]
     tech = {}
@@ -173,7 +176,7 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
     by_id = {it["id"]: it for it in read_items(snap)}
     chosen = select(lane_a, all_kept)
     taken = {e["id"] for e in chosen}
-    for sid, (slot, x) in slot_firsts(slots).items():   # 자리 질의 1위 (HYO-168) — 관문이 이미 넣은 항목이면 한 번만
+    for sid, (slot, x) in slot_picks(slots).items():   # 자리 질의 top-k (HYO-168) — 관문이 이미 넣은 항목이면 한 번만
         if sid not in taken:
             chosen.append({"id": sid, "slot": slot, "slot_hit": x})
             taken.add(sid)

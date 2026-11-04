@@ -180,25 +180,48 @@ def test_cap_one_slot_per_technology_then_fill():
     assert policy.cap_technology(_cand("y", "L4", "security")) != policy.cap_technology(_cand("z", "L4", "security"))   # 기술 없는 옛 기록은 따로
 
 
+def _rcand(i, title, tier, change, tech, line=None):
+    e = _tcand(i, tier, change, tech)
+    e["title"] = title
+    if line:
+        e["release_line"] = {"line": line}
+    return e
+
+
 def test_topk_always_then_per_technology():
-    # §4 변경 2026-11-04 (HYO-168): 「항상」(보안 · 우리 버전 EOL · 모델 은퇴)은 몇 건이든 · 기술마다 top-3 목록 · 1위만 detect
-    w44 = [_tcand(f"electron@v{v}", "L1", "security", "electron") for v in ("42.11.16", "43.8.1", "44.9.1", "45.0.0-beta.6")]
-    w44 += [_tcand("electron@v45.0.0", "L1", "breaking", "electron"), _tcand("electron@v45.0.0-beta.7", "L1", "deprecation", "electron"),
-            _tcand("electron@v45.1.0", "L1", "major", "electron"), _tcand("electron@v45.2.0", "L1", "major", "electron"),
-            _tcand("openai:deprecations", "L2", "model_retirement", "gpt-6-luna"), _tcand("bedrock:pricing", "L2", "pricing", "Amazon Bedrock"),
+    # §4 변경 2026-11-04 (HYO-168): 「항상」(보안 · 우리 버전 EOL · 모델 은퇴)은 몇 건이든 목록 · detect로는 (패키지 × 줄)마다 최신 1건 (안 A') ·
+    # 기술마다 top-3 목록 = detect. W44 모양: Electron 다른 줄 보안 · EOL 5건 + 우리 줄 베타 보안, langfuse 3.x · 4.x(줄 기록 없음 → 주 버전)
+    ele = "electron/electron electron v"
+    w44 = [_rcand(f"e{v}", ele + v, "L1", "security", "electron", "other") for v in ("42.11.16", "43.8.1", "44.9.1")]
+    w44 += [_rcand(f"e{v}", ele + v, "L1", "eol", "electron", "other") for v in ("42.11.17", "42.11.18")]
+    w44 += [_rcand("e45b6", ele + "45.0.0-beta.6", "L1", "security", "electron", "ours")]
+    w44 += [_rcand(f"lf{v}", f"langfuse/langfuse v{v}", "L3", "security", "langfuse") for v in ("3.225.14", "4.69.0", "4.70.0")]
+    w44 += [_rcand("e45", ele + "45.0.0", "L1", "breaking", "electron", "ours"), _rcand("e45b7", ele + "45.0.0-beta.7", "L1", "deprecation", "electron", "ours"),
+            _rcand("e451", ele + "45.1.0", "L1", "major", "electron", "ours"), _rcand("e452", ele + "45.2.0", "L1", "major", "electron", "ours"),
+            _rcand("openai:deprecations", "[openai] https://platform.openai.com/docs/deprecations 변경 (2026-W43 → 2026-W44)", "L2", "model_retirement", "gpt-6-luna"),
+            _tcand("bedrock:pricing", "L2", "pricing", "Amazon Bedrock"),
             _tcand("anthropic:a", "L5", "breaking", "anthropic"), _tcand("anthropic:b", "L5", "deprecation", "anthropic"),
             _tcand("anthropic:c", "L5", "major", "anthropic"), _tcand("anthropic:d", "L5", "major", "anthropic")]
     r = policy.apply_topk(w44)
-    always = [e["id"] for e in r["always"]]
-    assert always == ["electron@v42.11.16", "electron@v43.8.1", "electron@v44.9.1", "electron@v45.0.0-beta.6", "openai:deprecations"], always
-    # electron: 보안 4건은 「항상」이라 몫을 안 쓴다 → 나머지 4건 중 top-3 목록, 1위(breaking)만 detect
-    assert [r["rank"][i] for i in ("electron@v45.0.0", "electron@v45.0.0-beta.7", "electron@v45.1.0", "electron@v45.2.0")] == [1, 2, 3, 4]
+    always = {e["id"] for e in r["always"]}
+    assert always == {"e42.11.16", "e43.8.1", "e44.9.1", "e42.11.17", "e42.11.18", "e45b6", "lf3.225.14", "lf4.69.0", "lf4.70.0", "openai:deprecations"}, always
+    # 접기: 다른 줄 5건 → 가장 새 v44.9.1 · 우리 줄 베타는 따로 · langfuse 4.x 둘 → v4.70.0 · 3.x는 따로 · 벤더 문서는 접지 않는다
+    assert r["folded"] == {"e42.11.16": "e44.9.1", "e43.8.1": "e44.9.1", "e42.11.17": "e44.9.1", "e42.11.18": "e44.9.1", "lf4.69.0": "lf4.70.0"}, r["folded"]
+    # electron: 「항상」은 몫을 안 쓴다 → 나머지 4건 중 top-3 목록 · detect
+    assert [r["rank"][i] for i in ("e45", "e45b7", "e451", "e452")] == [1, 2, 3, 4]
     listed = {e["id"] for e in r["listed"]}
-    assert "electron@v45.1.0" in listed and "electron@v45.2.0" not in listed and "anthropic:d" not in listed
-    assert {e["id"] for e in r["detect"]} == set(always) | {"electron@v45.0.0", "bedrock:pricing", "anthropic:a"}, [e["id"] for e in r["detect"]]
-    assert {e["id"] for e in r["cut"]} == {"electron@v45.2.0", "anthropic:d"}
-    assert len(r["listed"]) == 5 + 3 + 1 + 3 and r["query"]["anthropic:b"] == "anthropic"
-    assert policy.apply_topk(w44, k=1)["listed"] == policy.apply_topk(w44, k=1)["detect"]          # k=1이면 목록 = detect
+    assert always <= listed and "e451" in listed and "e452" not in listed and "anthropic:d" not in listed
+    detect = {e["id"] for e in r["detect"]}
+    assert detect == {"e44.9.1", "e45b6", "lf3.225.14", "lf4.70.0", "openai:deprecations", "e45", "e45b7", "e451", "bedrock:pricing",
+                      "anthropic:a", "anthropic:b", "anthropic:c"}, sorted(detect)
+    assert {e["id"] for e in r["cut"]} == {"e452", "anthropic:d"}
+    assert len(r["listed"]) == 10 + 3 + 1 + 3 and r["query"]["anthropic:b"] == "anthropic"
+    one = policy.apply_topk(w44, k=1)
+    assert {e["id"] for e in one["detect"]} - always == {e["id"] for e in one["listed"]} - always == {"e45", "bedrock:pricing", "anthropic:a"}
+    # 줄 기록이 없으면 주 버전(0.x는 부 버전)으로 · 패키지가 다르면 따로 (langchain-core ≠ langchain)
+    assert policy.fold_key({"id": "u", "title": "astral-sh/uv 0.13.5"}) == ("uv", "line", (0, 13))
+    assert policy.fold_key({"id": "c", "title": "langchain-ai/langchain langchain-core==1.7.4"}) != policy.fold_key({"id": "l", "title": "langchain-ai/langchain langchain==1.4.8"})
+    assert policy.release_of({"title": "pydantic/pydantic v2.14.2 2026-10-29"}) == ("pydantic", (2, 14, 2))
 
 
 # ---------------------------------------------------------------- 등급: 신호 · 검증 · 저장
@@ -859,13 +882,13 @@ def test_lane_a_gate_wiring_and_cap():
     assert all(e["gate_status"] == "ok" and e["gate"] is not None for e in a.values())
     assert a["m"]["gate"]["keep"] is False and a["m"]["shown"] is None
     summ = res["gate_summary"]
-    # 질의별 top-3 (§4 변경 2026-11-04, HYO-168): security는 「항상」, 기술마다 top-3 목록 · 1위만 detect
-    assert summ["mode"] == "topk" and summ["total_kept"] == 9 and summ["label"] == "3/9 · 목록 5", summ["label"]
+    # 질의별 top-3 (§4 변경 2026-11-04, HYO-168): security는 「항상」, 기술마다 top-3 목록 = detect
+    assert summ["mode"] == "topk" and summ["total_kept"] == 9 and summ["label"] == "5/9 · 목록 5", summ["label"]
     assert [x["id"] for x in summ["always"]] == ["s"]
     assert [(x["id"], x["rank"]) for x in summ["listed"]] == [("s", None), ("d0", 1), ("d1", 2), ("d2", 3), ("f", 1)], summ["listed"]
-    assert [x["id"] for x in summ["shown"]] == ["s", "d0", "f"], summ["shown"]
+    assert [x["id"] for x in summ["shown"]] == ["s", "d0", "d1", "d2", "f"], summ["shown"]
     assert {c["id"] for c in summ["truncated"]} == {"d3", "d4", "d5", "d6"}
-    assert a["s"]["always"] is True and a["d1"]["listed"] is True and a["d1"]["shown"] is False and a["d3"]["listed"] is False
+    assert a["s"]["always"] is True and a["d1"]["listed"] is True and a["d1"]["shown"] is True and a["d3"]["listed"] is False and a["d3"]["shown"] is False
     assert a["d0"]["query"] == "pydantic" and a["f"]["rank"] == 1
     # 예전 동작(weekly5): 5/N · 기술당 1칸 먼저 (§4 변경 2026-10-27) — pydantic 7건이 칸을 다 채우지 않고 fastapi가 들어온다
     summ5 = gate_mod.cap_lane_a(res["lane_a"], 5, mode="weekly5")
@@ -2095,6 +2118,10 @@ def mutations():
         ("top-k: k를 무시 (전부 목록)", [(policy, "TOPK", 99)], test_topk_always_then_per_technology),
         ("top-k: 기술 대신 항목마다 따로 셈", [(policy, "cap_technology", lambda e: e["id"])], test_topk_always_then_per_technology),
         ("top-k: 관문 배선이 예전 5칸으로", [(policy, "CAP_MODE", "weekly5")], test_lane_a_gate_wiring_and_cap),
+        ("top-k: 기술 질의는 1위만 detect (11/4 오전 규칙)", [(policy, "DETECT_TOPK", 1)], test_topk_always_then_per_technology),
+        ("top-k: 「항상」을 접지 않음 (전부 detect)", [(policy, "fold_key", lambda e: ("item", e["id"]))], test_topk_always_then_per_technology),
+        ("top-k: 「항상」을 기술당 1건으로 (안 A — 줄 무시)", [(policy, "fold_key", lambda e: ("tech", policy.cap_technology(e)))], test_topk_always_then_per_technology),
+        ("top-k: 우리 줄 · 다른 줄 기록 무시", [(policy, "fold_key", lambda e: (policy.release_of(e) or ("item", e["id"]))[0])], test_topk_always_then_per_technology),
         ("채점이 오류·분류 불가 상태를 무시", [(evaluate, "score_run", _score_status_ignored)], test_score_run_by_hand),
         ("허용 호스트를 넓힘", [(agents_backend, "ALLOWED_HOSTS", {"api.openai.com", "telemetry.example.invalid"})], test_netguard_blocks_outside_api_openai_and_stops_without_retry),
         ("개발 경로가 최우선이 아님 (떠 있는 태그·민감이 되살림)", [(policy, "cell", _dev_not_first)], test_dev_path_is_top_priority),

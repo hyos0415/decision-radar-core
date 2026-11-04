@@ -136,10 +136,12 @@ class Gate:
 def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT, mode=None):
     """레인 A 항목들(각각 `gate` 칸을 가짐)에서 detect로 갈 것을 고른다. 항목에 `shown`(= detect로 간다)을 쓰고 요약을 돌려준다.
     잘린 것은 summary["truncated"] — 로그용.
-    - topk (기본, 2026-11-04 HYO-168): 「항상」 + 기술마다 top-k 목록(`listed` · `rank` · `always` · `query`), detect는 「항상」 + 기술마다 1위
+    - topk (기본, 2026-11-04 HYO-168): 「항상」 + 기술마다 top-k 목록(`listed` · `rank` · `always` · `query`), detect는 「항상」을 (패키지 × 줄)마다
+      최신 1건으로 접은 것(`folded_into` = 대표 id) + 기술마다 top-k
     - weekly5 (그 전): 5/N 상한 · 기술당 1칸 먼저"""
     mode = mode or policy.CAP_MODE
-    kept = [{"id": e["id"], "kept_by": e["gate"]["kept_by"]} for e in entries if (e.get("gate") or {}).get("keep")]
+    kept = [{"id": e["id"], "kept_by": e["gate"]["kept_by"], "title": e.get("title"), "release_line": _release_line(e)}
+            for e in entries if (e.get("gate") or {}).get("keep")]
 
     def brief(x):
         best = min(x["kept_by"], key=lambda r: (policy.tier_rank(r["tier"]), policy.severity(r["change"])))
@@ -164,10 +166,19 @@ def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT, mode=None):
         e["shown"] = e["id"] in detect_ids
         e["listed"], e["always"] = e["id"] in listed_ids, e["id"] in always_ids
         e["query"], e["rank"] = r["query"].get(e["id"]), r["rank"].get(e["id"])
+        e["folded_into"] = r["folded"].get(e["id"])
     label = f"{len(r['detect'])}/{len(kept)} · 목록 {len(r['listed'])}"
-    return {"mode": mode, "label": label, "k": policy.TOPK, **base, "always": [brief(x) for x in r["always"]],
+    return {"mode": mode, "label": label, "k": policy.TOPK, **base, "always": [brief(x) for x in r["always"]], "folded": r["folded"],
             "listed": [dict(brief(x), rank=r["rank"].get(x["id"]), always=x["id"] in always_ids) for x in r["listed"]],
             "shown": [brief(x) for x in r["detect"]], "truncated": [brief(x) for x in r["cut"]]}
+
+
+def _release_line(entry):
+    """관문이 기록한 우리 줄 / 다른 줄 (scope.release_line — 판정에는 안 쓰고 「항상」 접기에만 쓴다, HYO-168) | None."""
+    for s in (entry.get("gate") or {}).get("scope") or []:
+        if s.get("release_line"):
+            return s["release_line"]
+    return None
 
 
 def newer_line_eol(entries):

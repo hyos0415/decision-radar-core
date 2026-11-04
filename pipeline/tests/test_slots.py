@@ -4,9 +4,9 @@
 
 Terra 모양을 재현한다: OpenAI changelog 블록 「Released GPT-6.1 Terra」 · HN 637점 · Bedrock What's New가 이름 기반 관문에서 빠졌다.
 - 후보 모으기는 결정론 (출처별 규칙) · 판정은 모델 → 스크립트가 id · 자리 · 점수를 검사 · 순위는 적합도 → 공식 먼저 → 인기
-- detect 입력에는 자리마다 1위만 (kind model_release · HN은 community), 목록(list.json)에는 자리마다 top-3
+- detect 입력 · 목록(list.json) 모두 자리마다 top-3 (kind model_release · HN은 community) — 변경 2026-11-04: 처음엔 detect는 1위만
 - 구독으로만: 가짜 CLI가 API 키를 보면 실패한다
-뒤쪽 변이 검사(규율 3): 문턱을 없애거나 · 모델 답을 검사 없이 믿거나 · API 키를 안 지우거나 · 자리마다 전부 detect로 보내면 위 테스트가 빨개져야 한다.
+뒤쪽 변이 검사(규율 3): 문턱을 없애거나 · 모델 답을 검사 없이 믿거나 · API 키를 안 지우거나 · 자리마다 1위만 detect로 보내면(Terra W44 2위가 빠진다) 위 테스트가 빨개져야 한다.
 """
 import json
 import os
@@ -99,7 +99,7 @@ def test_rank_threshold_order_topk():
 
 def test_run_stub_and_to_detect():
     res = slots.run(ITEMS, SLOTS, engine="stub")
-    assert res["candidates"] == 5 and res["unjudged"] == [] and res["to_detect"] == [res["per_slot"]["gate-classifier"][0]["id"]], res["to_detect"]
+    assert res["candidates"] == 5 and res["unjudged"] == [] and res["to_detect"] == [x["id"] for x in res["per_slot"]["gate-classifier"]], res["to_detect"]
 
 
 def _fake_cli(d, answer):
@@ -132,7 +132,7 @@ def test_claude_engine_subscription_only_and_raw_saved():
         assert again["per_slot"]["gate-classifier"][0]["id"] == "hn:1"
 
 
-def test_detect_feed_adds_slot_firsts_and_list():
+def test_detect_feed_adds_slot_picks_and_list():
     with tempfile.TemporaryDirectory() as d:
         snap, run, out = Path(d) / "snap", Path(d) / "run", Path(d) / "out"
         snap.mkdir(), run.mkdir()
@@ -152,12 +152,13 @@ def test_detect_feed_adds_slot_firsts_and_list():
         f = detect_feed.build(run, out)
         feed = json.loads((out / "feed.json").read_text(encoding="utf-8"))
         kinds = {e["id"]: (e["kind"], e["source_type"]) for e in feed}
-        assert kinds == {"vendor:aws-bedrock:t": ("vendor_news", "official_doc"), "hn:1": ("model_release", "community")}, kinds   # 자리 1위만
-        assert f["to_detect"] == 2 and f["slots"]["listed"] == 3 and "자리 질의" in detect_feed.funnel_line(f)
+        assert kinds == {"vendor:aws-bedrock:t": ("vendor_news", "official_doc"), "hn:1": ("model_release", "community"),
+                         TERRA_CL: ("model_release", "official_doc")}, kinds        # 자리 top-3 전부 — Terra changelog 블록(2위)도 · Bedrock은 관문 몫으로 한 번
+        assert f["to_detect"] == 3 and f["slots"]["listed"] == 3 and "자리 질의" in detect_feed.funnel_line(f)
         lst = json.loads((out / "list.json").read_text(encoding="utf-8"))
         assert [x["id"] for x in lst["always"]] == ["vendor:aws-bedrock:t"]
         g = next(s for s in lst["slots"] if s["slot"] == "gate-classifier")
-        assert [(x["id"], x["to_detect"]) for x in g["items"]] == [("hn:1", True), (TERRA_CL, False), ("vendor:aws-bedrock:t", True)], g["items"]
+        assert [(x["id"], x["to_detect"]) for x in g["items"]] == [("hn:1", True), (TERRA_CL, True), ("vendor:aws-bedrock:t", True)], g["items"]
         why = json.loads((out / "gate.json").read_text(encoding="utf-8"))
         assert why["https://openai.com/index/introducing-gpt-6-1-terra/"]["slot"] == "gate-classifier"
 
@@ -166,19 +167,19 @@ TESTS = [(n, f) for n, f in globals().items() if n.startswith("test_")]
 
 
 def mutations():
-    orig_validate, orig_firsts = slots.validate, detect_feed.slot_firsts
+    orig_validate, orig_picks = slots.validate, detect_feed.slot_picks
 
     def trust(so, cands, sl):     # 모델 답을 검사 없이
         return {j["id"]: {"release": j["release"], "matches": j["matches"]} for j in so["judgments"]}, {"unknown_id": 0, "unknown_slot": 0, "bad_fit": 0}
 
-    def all_to_detect(sl):        # 자리마다 top-3 전부 detect로
-        return {x["id"]: (s, x) for s, xs in ((sl or {}).get("per_slot") or {}).items() for x in xs}
+    def firsts_only(sl):          # 자리마다 1위만 detect로 (11/4 오전 규칙)
+        return {xs[0]["id"]: (s, xs[0]) for s, xs in ((sl or {}).get("per_slot") or {}).items() if xs}
 
     return [
         ("문턱 없음 (fit 1도 목록에)", lambda: setattr(slots, "FIT_MIN", 0), lambda: setattr(slots, "FIT_MIN", 2)),
         ("모델 답을 검사 없이 믿음", lambda: setattr(slots, "validate", trust), lambda: setattr(slots, "validate", orig_validate)),
         ("API 키를 안 지움", lambda: setattr(slots, "STRIP_ENV", ()), lambda: setattr(slots, "STRIP_ENV", ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"))),
-        ("자리마다 전부 detect로", lambda: setattr(detect_feed, "slot_firsts", all_to_detect), lambda: setattr(detect_feed, "slot_firsts", orig_firsts)),
+        ("자리마다 1위만 detect로", lambda: setattr(detect_feed, "slot_picks", firsts_only), lambda: setattr(detect_feed, "slot_picks", orig_picks)),
         ("HN 점수 문턱 없음", lambda: setattr(slots, "HN_MIN_POINTS", 0), lambda: setattr(slots, "HN_MIN_POINTS", 100)),
     ]
 

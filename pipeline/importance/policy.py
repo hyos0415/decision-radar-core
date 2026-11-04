@@ -52,6 +52,11 @@ CAP_MODE = "topk"
 TOPK = 3
 # 「항상」 칸 — 이 종류로 남긴 것은 몇 건이든 보이고 detect로 간다 (순위·몫 밖, 사용자 11/4 「아묻따 항상」)
 ALWAYS_CHANGES = ("security", "eol", "model_retirement")
+# 변경 (2026-11-04, 사용자 — W44 · W45 오프라인 비교 뒤): 「항상」은 목록에는 전부, detect로는 (패키지 × 줄)마다 최신 1건 (안 A').
+# 같은 보안 수정의 다른 줄(Electron 42 · 43 · 44)이 detect를 채우던 것. 기술당 1건(안 A)은 대표가 id 순이라 옛 줄이 남아 기각
+# 기술 질의 detect 몫 — 처음(11/4 오전)은 1위만, 변경 (2026-11-04, 사용자 「놓치는 게 소음보다 더 거슬린다」): 목록과 같은 top-k 전부
+DETECT_TOPK = None      # None = TOPK
+_RELEASE_VERSION = re.compile(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)*)")
 
 # 관문이 판정 못 한 비율 경고 (HYO-122 ⑤ — 592건이 요약에 안 보이고 조용히 빠졌다). (모르는 기술 + 분류 불가) / (레인 A − 팀원 스택)이 넘으면 경고.
 # 잠정 (2026-10-15, 사용자 — 아직 재 보지 않은 첫 제안. 고치기 전 W42 ≈ 81%). HYO-122 PR 4 뒤 W42(+W41)를 다시 돌려 정상 비율을 보고
@@ -176,14 +181,47 @@ def is_always(entry):
     return any(r["change"] in ALWAYS_CHANGES for r in entry["kept_by"])
 
 
+def release_of(entry):
+    """릴리스 제목 → (패키지, 버전 튜플) | None. `langchain-ai/langchain langchain-core==1.7.4` → ("langchain-core", (1, 7, 4)) ·
+    `electron/electron electron v45.0.0-beta.6` → ("electron", (45, 0, 0)). 벤더 문서(`[vendor] …`)·버전 없는 제목은 None."""
+    title = entry.get("title") or ""
+    found = _RELEASE_VERSION.findall(title)
+    if not found or title.startswith("["):
+        return None
+    m = re.search(r"([\w.-]+)==", title)
+    pkg = m.group(1) if m else title.split()[0].split("/")[-1]
+    return pkg.lower(), tuple(int(x) for x in found[-1].split("."))
+
+
+def fold_key(entry):
+    """「항상」 접기 열쇠 = (패키지, 줄). 줄은 관문이 기록한 우리 줄 / 다른 줄(scope.release_line, entry["release_line"]) —
+    없으면 제목 버전의 주 버전(0.x는 부 버전까지). 릴리스가 아니면 접지 않는다 (항목마다 따로)."""
+    r = release_of(entry)
+    if r is None:
+        return ("item", entry["id"])
+    pkg, v = r
+    line = (entry.get("release_line") or {}).get("line")
+    if line in ("ours", "other"):
+        return (pkg, line)
+    return (pkg, "line", v[:2] if v[0] == 0 else v[:1])
+
+
 def apply_topk(entries, k=None):
-    """남긴 후보 → 질의별 top-k (§4 변경 2026-11-04). entries는 {"id", "kept_by", ...}.
-    「항상」(보안 · 우리 버전 EOL · 모델 은퇴)은 몫 밖에서 전부 목록 · detect. 나머지는 기술(cap_technology)마다 정렬 순서로
-    k개까지 목록, 1위만 detect. → {"always", "listed"(항상 포함, 정렬 순서), "detect", "cut", "rank": {id: 기술 안 순위}, "query": {id: 기술}}"""
+    """남긴 후보 → 질의별 top-k (§4 변경 2026-11-04). entries는 {"id", "kept_by", ...} (+ 접기에 쓰는 "title" · "release_line").
+    「항상」(보안 · 우리 버전 EOL · 모델 은퇴)은 몫 밖에서 전부 목록, detect로는 fold_key마다 가장 새 버전 1건(같으면 정렬 순서 앞).
+    나머지는 기술(cap_technology)마다 정렬 순서로 k개까지 목록 · DETECT_TOPK개까지 detect.
+    → {"always", "listed"(항상 포함, 정렬 순서), "detect", "cut", "rank": {id: 기술 안 순위}, "query": {id: 기술}, "folded": {접힌 id: 대표 id}}"""
     k = TOPK if k is None else k
+    dk = k if DETECT_TOPK is None else DETECT_TOPK
     ordered = sorted(entries, key=rank_key)
     always = [e for e in ordered if is_always(e)]
-    used, rank, query, listed_ids, detect_ids = {}, {}, {}, {e["id"] for e in always}, {e["id"] for e in always}
+    reps = {}
+    for e in always:
+        key, cur = fold_key(e), reps.get(fold_key(e))
+        if cur is None or release_of(e)[1] > release_of(cur)[1]:
+            reps[key] = e
+    folded = {e["id"]: reps[fold_key(e)]["id"] for e in always if reps[fold_key(e)]["id"] != e["id"]}
+    used, rank, query, listed_ids, detect_ids = {}, {}, {}, {e["id"] for e in always}, {e["id"] for e in reps.values()}
     for e in ordered:
         t = cap_technology(e)
         query[e["id"]] = t if isinstance(t, str) else None
@@ -194,11 +232,11 @@ def apply_topk(entries, k=None):
         rank[e["id"]] = n
         if n <= k:
             listed_ids.add(e["id"])
-        if n == 1:
+        if n <= dk:
             detect_ids.add(e["id"])
     return {"always": always, "listed": [e for e in ordered if e["id"] in listed_ids],
             "detect": [e for e in ordered if e["id"] in detect_ids], "cut": [e for e in ordered if e["id"] not in listed_ids],
-            "rank": rank, "query": query}
+            "rank": rank, "query": query, "folded": folded}
 
 
 def gate_counts(entries, warn_ratio=None):
