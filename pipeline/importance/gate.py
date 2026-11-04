@@ -138,7 +138,15 @@ class Gate:
                "남기는 행 없음: " + ", ".join(sorted({f"{r['tier']}×{policy.CHANGE_LABEL[r['change']]}={r['base']}" for r in rows})))
         return {"keep": keep, "status": "ok", "technologies": techs, "tiers": {t: e["tiers"] for t, e in effs.items()}, "changes": changes, "model_changes": list(ans.labels),
                 "rows": rows, "kept_by": kept_by, "defaulted_change": defaulted, "skipped": base["skipped"], "successor": base["successor"],
-                "scope": scoped, "reason": why}
+                "scope": scoped, "reason": why, **_advisory(item)}
+
+
+def _advisory(item):
+    """OSV 공지(공식 보안 채널, HYO-170 다)면 접기 · detect 나누기에 쓰는 것 — 판정(남김 · 버림)에는 안 쓴다 (리뷰 2026-11-04, 사용자 나안)."""
+    m = item.get("meta") or {}
+    if m.get("kind") != "advisory" or not m.get("osv_id"):
+        return {}
+    return {"advisory": {"package": m.get("dependency"), "affects_ours": m.get("affects_ours"), "malicious": str(m["osv_id"]).startswith("MAL-")}}
 
 
 def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT, mode=None):
@@ -149,7 +157,7 @@ def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT, mode=None):
     - weekly5 (그 전): 5/N 상한 · 기술당 1칸 먼저"""
     mode = mode or policy.CAP_MODE
     kept = [{"id": e["id"], "kept_by": e["gate"]["kept_by"], "title": e.get("title"), "release_line": _release_line(e),
-             "alarm": e.get("alarm"), "technologies": e["gate"].get("technologies")}
+             "alarm": e.get("alarm"), "technologies": e["gate"].get("technologies"), "advisory": e["gate"].get("advisory")}
             for e in entries if (e.get("gate") or {}).get("keep")]
 
     def brief(x):

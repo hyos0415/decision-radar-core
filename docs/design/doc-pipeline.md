@@ -269,7 +269,7 @@ excludes:
 | 통로 | 받는 것 | 관문이 보는 기술 (`meta.dependency`) |
 |---|---|---|
 | `security-advisories` (OSV.dev) | 대상 repo manifest(requirements · pyproject · package.json — 관문 · basis와 같은 파서)의 PyPI · npm 이름을 **버전 없이** `POST /v1/querybatch`로 묻는다. 창(8일, 의존성 릴리스와 같다) 안에 **발행된** 공지 + 악성 패키지 기록(`MAL-`)은 창 안에 **수정된** 것도. 공지 하나 = 항목 하나 (같은 취약점의 별칭 GHSA · PYSEC은 하나로). 등급 파일에서 `retired`인 기술은 묻지 않는다 | 그 의존성 |
-| `runtime-security:python` | `security-announce@python.org` 피드 (PSRT 공식 — CVE마다 한 글) | 본문에 CPython이 있으면 python, 아니면 없음(certifi · pip 공지 — 제목 이름으로 관문이 찾는다) |
+| `runtime-security:python` | `security-announce@python.org` 피드 (PSRT 공식 — CVE마다 한 글) | 본문에 CPython이 있으면 python, 아니면 없음(certifi · pip 공지 — 제목 이름으로 관문이 찾는다) — 아래 변경: python/cpython 링크도 |
 | `runtime-security:nodejs` | `nodejs.org/en/feed/vulnerability.xml` (보안 릴리스 글 — 피드 본문이 비어 창 안 글만 페이지를 받는다) | electron (우리 Node는 Electron 안 · 등급 파일에 node.js 없음) |
 
 - 왜: W44에 LiteLLM 1.107.0 백도어(PyPI에만 — GitHub releases를 보는 레인 A가 못 봤다) · http2shell · Broccoli2Shell(Node.js · Python RCE — 레인 A에 런타임 출처가 없다)이 레인 B 커뮤니티 글로만 왔다. 경보 그물(§2-3 변경 11/4)은 커뮤니티에 기대는 보조 그물이고, 이쪽이 주 그물이다. 공식 근거라 R2를 통과한다 (detect 입력 `security_advisory` · `official_doc`)
@@ -279,6 +279,10 @@ excludes:
 - 공식 채널도 늦을 수 있다: 1.107.0 PyPI 업로드 10/21 → OSV 기록 10/29(8일). 그 주는 HN(W44)이 먼저였다 — 경보 그물을 남겨 두는 이유
 - Chromium 보안 공지는 따로 받지 않는다 (제안 — Chrome Releases는 주 여러 건이고, Electron 릴리스 노트가 Chromium CVE 백포트를 적고 Electron 자체 공지는 OSV npm `electron`으로 온다)
 - 실패 규칙은 다른 출처와 같다: 죽은 통로는 `run.json` `sources.security.failed`에 남고 나머지는 계속. 첫 적용 W46(11/10) — `docs/decisions/real-use-changes.md`
+
+변경 (2026-11-04, 사용자 — 리뷰 나안): 위 「우리 버전에 해당하는지는 관문 · detect 몫」을 정한다. 수집은 그대로 버전 없이 받고, 공지마다 **우리 버전으로 다시 물어** `meta.affects_ours`(해당 · 해당 없음 · 모름)를 단다(`security.mark_ours` — 관문 · scope와 같은 버전 읽기, 범위는 하한). 관문은 판정을 바꾸지 않고, 「항상」 칸에서 **해당 없는 공지는 목록에만**(악성 기록 `MAL-`은 `^` 범위가 다음 설치에 끌어올 수 있어 버전과 상관없이 · 모르면 안전 쪽으로 detect), detect로는 **패키지마다 1건**(악성 기록이 대표)으로 접고 접힌 해당분의 제목 · 링크를 대표 입력에 붙인다 (`policy.quiet_advisory` · `fold_key`). Python 공지는 「CPython」 낱말이 없어도 `github.com/python/cpython` 링크가 있으면 python으로.
+- 왜: 보안은 모든 등급에서 남기고 「항상」 칸은 top-3 상한 밖이라(위 「상한이 양을 누른다」는 틀렸다), 공지 하나가 detect 1건이 된다. W44 창 다시 묻기: OSV 20건 중 우리 버전 해당 7(vite 5 · langgraph · langgraph-checkpoint-sqlite) · 해당 없음 13(electron 9 — 우리 45.0.0은 45 알파에서 이미 고침 · mcp 3 — 2.2.0에서 고침 · vite 6.x 1). 우리 버전에서 이미 고쳐진 공지는 결정할 게 없다. CVE-2026-115557(ssl 인증서 거부 목록)은 「Python has added …」로 시작해 CPython 낱말이 없었다
+- 결과 (W44 · W45 창, 모델 없이): OSV detect 20 → 3 · 5 → 1. 범위 하한으로 물으니 실제 깔린 게 더 새 버전이면 「해당」으로 나올 수 있다 — 안전 쪽 오판
 
 ## 5. 측정
 

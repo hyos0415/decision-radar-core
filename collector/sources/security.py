@@ -9,6 +9,7 @@ W44 LiteLLM 1.107.0 백도어는 PyPI에만 있어 GitHub releases를 보는 레
   3/24 발행 기록에 10/29 litellm 1.107.0이 덧붙었다. 일반 GHSA의 옛 공지 재수정은 내용이 그대로라 뺀다).
   수정으로 들어온 MAL은 id에 수정일을 붙여 새 항목으로 — 같은 기록에 버전이 또 붙으면 다시 올라온다.
   공지 하나 = 항목 하나 (같은 취약점의 별칭 GHSA · PYSEC은 하나로). 등급 파일에서 retired인 기술은 묻지 않는다.
+  공지마다 우리 버전으로 다시 물어 `meta.affects_ours`를 단다 (mark_ours) — 해당 없는 공지는 목록에만 (관문 쪽 policy.quiet_advisory).
 - 런타임: pool.yaml `security.runtimes`의 피드. 본문이 빈 피드(Node.js)는 창 안 글만 페이지를 받아 본문으로 쓴다.
   `dependency`(관문이 그 기술 하나로만 판정 — gate.resolve_technologies)는 설정에서: Node.js 공지는 electron(우리 Node는 Electron 안 — 사용자 결정 2026-11-04).
   `dependency_when`(정규식)이 있으면 제목 · 본문 · 링크에 맞을 때만 붙인다 (Python 목록의 certifi · pip 공지는 CPython이 아니다 → 제목 이름으로 관문이 찾는다).
@@ -77,14 +78,16 @@ def stack_packages(target_roots, target_excludes=None):
 
 
 def query_batch(fetcher, packages, report, batch_size=500, max_pages=5):
-    """[(eco, name)] → {(eco, name): [{id, modified}]}. 한 패키지의 공지가 많으면 OSV가 page_token을 준다 — 그 패키지만 다시 묻는다."""
+    """[(eco, name)] 또는 [(eco, name, version)] → {키: [{id, modified}]}. 버전을 주면 그 버전에 해당하는 공지만 (OSV가 범위를 판정한다).
+    한 패키지의 공지가 많으면 OSV가 page_token을 준다 — 그 패키지만 다시 묻는다."""
     out = {p: [] for p in packages}
     todo = [(p, None) for p in packages]
     for _ in range(max_pages):
         nxt = []
         for i in range(0, len(todo), batch_size):
             chunk = todo[i:i + batch_size]
-            qs = [{"package": {"name": n, "ecosystem": e}, **({"page_token": t} if t else {})} for (e, n), t in chunk]
+            qs = [{"package": {"name": p[1], "ecosystem": p[0]}, **({"version": p[2]} if len(p) > 2 else {}), **({"page_token": t} if t else {})}
+                  for p, t in chunk]
             report["requests"] += 1
             try:
                 d = fetcher.post_json(f"{OSV_API}/querybatch", {"queries": qs})
@@ -180,6 +183,39 @@ def collect_osv(fetcher, packages, since_ts, report):
     return items
 
 
+def our_versions(target_roots, target_excludes=None):
+    """대상 repo들 → {정규화 이름: [우리 버전]} — 관문 · scope와 같은 읽기(signals.read_repo_versions). 범위(`^` · `>=`)는 하한이다."""
+    from pipeline.importance.signals import read_repo_versions
+    rows = {}
+    for repo, root in (target_roots or {}).items():
+        read_repo_versions(root, (target_excludes or {}).get(repo) or (), repo, rows)
+    return {k: list(dict.fromkeys(str(r["version"]) for r in rs)) for k, rs in rows.items()}
+
+
+def mark_ours(fetcher, items, versions, report):
+    """OSV 공지마다 우리 버전이 해당되나 — 우리 버전으로 다시 묻는다 (리뷰 2026-11-04, 사용자 나안: W44 창 OSV 20건 중 13건이 우리 버전에서
+    이미 고쳐졌거나 다른 줄이었다 — electron 9 · mcp 3 · vite 6.x 1). meta.affects_ours = True | False | None(버전 모름 · 묻기 실패 — 안전 쪽).
+    관문은 False인 공지(악성 기록 MAL- 빼고)를 목록에만 두고 detect로 보내지 않는다 (policy.quiet_advisory).
+    범위 하한으로 물으니 실제 깔린 게 더 새 버전이면 「해당」으로 나올 수 있다 — 안전 쪽 오판."""
+    keys = sorted({(it.meta["ecosystem"], it.meta["dependency"], v) for it in items for v in versions.get(_norm(it.meta["dependency"]), [])})
+    before = len(report["failed"])
+    hits = query_batch(fetcher, keys, report) if keys else {}
+    broken = len(report["failed"]) > before
+    counts = {"yes": 0, "no": 0, "unknown": 0}
+    for it in items:
+        dep, eco = it.meta["dependency"], it.meta["ecosystem"]
+        vs = versions.get(_norm(dep), [])
+        ids = {it.meta["osv_id"], *(it.meta.get("aliases") or [])}
+        hit = [v for v in vs if ids & {x["id"] for x in hits.get((eco, dep, v), [])}]
+        ours = None if (not vs or broken) else bool(hit)
+        it.meta["our_versions"], it.meta["affects_ours"] = vs, ours
+        counts["unknown" if ours is None else "yes" if ours else "no"] += 1
+        it.text += f"\n\nOur {dep} versions: {', '.join(vs) or 'unknown'} — " + (
+            "unknown whether affected" if ours is None else f"affected ({', '.join(hit)})" if ours else "not affected")
+    report.setdefault("osv", {})["affects_ours"] = counts
+    return items
+
+
 # ---- 런타임 보안 공지 ---------------------------------------------------------
 
 def runtime_item(cfg, entry, body_text=None):
@@ -245,7 +281,7 @@ def collect(cfg, fetcher, now=None, target_roots=None, target_excludes=None, tie
     by_eco = {e: sum(1 for p in pkgs if p[0] == e) for e in ECOSYSTEMS}
     report["packages"] = {"total": len(pkgs), "by_ecosystem": by_eco, "retired_skipped": skip, **({"tiers_note": why} if why else {})}
     if pkgs:
-        items += collect_osv(fetcher, pkgs, since, report)
+        items += mark_ours(fetcher, collect_osv(fetcher, pkgs, since, report), our_versions(target_roots, target_excludes), report)
     for rt in cfg.get("runtimes") or []:
         try:
             items += collect_runtime(rt, fetcher, since, report)

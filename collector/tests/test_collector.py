@@ -611,12 +611,18 @@ class SecFetcher:
 
     def post_json(self, url, payload, headers=None):
         self.posts.append(payload)
-        if any(f in url for f in self.fail):
+        versioned = any("version" in q for q in payload["queries"])
+        if any(f in url for f in self.fail) or (versioned and "versioned" in self.fail):
             raise fetch.FetchError(url, 503, b"down")
         index = {("litellm", "PyPI"): ["MAL-2026-2144", "GHSA-hhww-mrg2-969h", "PYSEC-2026-77", "GHSA-old-outside"],
                  ("langchain", "PyPI"): ["GHSA-8h5w-f6q9-wg35"], ("vite", "npm"): ["GHSA-8g5g-mxqh-grgj"]}
+        # 우리 버전으로 물으면 (OSV가 범위를 판정): litellm 1.80은 XSS(<1.107.1)에 해당 · 악성 1.107.0엔 아님 · vite 7.1.0은 6.x 공지에 아님
+        affects = {("litellm", "PyPI", "1.80"): ["GHSA-hhww-mrg2-969h", "PYSEC-2026-77"]}
         res = []
         for q in payload["queries"]:
+            if "version" in q:
+                res.append({"vulns": [{"id": i, "modified": "x"} for i in affects.get((q["package"]["name"], q["package"]["ecosystem"], q["version"]), [])]})
+                continue
             ids = index.get((q["package"]["name"], q["package"]["ecosystem"]), [])
             res.append({"vulns": [{"id": i, "modified": (OSV_VULNS.get(i) or {"modified": "2025-01-01T00:00:00Z"})["modified"]} for i in ids]})
         return {"results": res}
@@ -705,6 +711,24 @@ def test_security_osv_catches_litellm_backdoor_update():
     # 관문은 그 의존성 하나로만 본다 — 제목의 「Python SDK」 같은 낱말에 python이 붙지 않게 (gate.resolve_technologies)
     from pipeline.importance.gate import resolve_technologies
     assert resolve_technologies(mal.to_dict(), ["python", "litellm"]) == ["litellm"]
+    # 우리 버전 해당 여부 (리뷰 2026-11-04, 사용자 나안) — 범위 하한(litellm>=1.80 → 1.80 · ^7.1.0 → 7.1.0)으로 다시 묻는다
+    assert {i: x.meta["affects_ours"] for i, x in osv.items()} == {
+        "osv:MAL-2026-2144@2026-10-29": False, "osv:GHSA-hhww-mrg2-969h": True, "osv:GHSA-8g5g-mxqh-grgj": False}
+    assert osv["osv:GHSA-hhww-mrg2-969h"].meta["our_versions"] == ["1.80"] and "affected (1.80)" in osv["osv:GHSA-hhww-mrg2-969h"].text
+    assert osv["osv:GHSA-8g5g-mxqh-grgj"].text.endswith("Our vite versions: 7.1.0 — not affected")
+    assert c["affects_ours"] == {"yes": 1, "no": 2, "unknown": 0}, c
+
+
+def test_security_affects_ours_unknown_when_versioned_query_fails():
+    # 우리 버전으로 묻기가 죽으면 「모름」(None) — 관문은 detect로 보낸다 (안전 쪽). 「해당 없음」으로 지어내지 않는다
+    import tempfile
+    from collector.sources import security
+    with tempfile.TemporaryDirectory() as t:
+        roots, tiers = _sec_stack(t)
+        items, rep = security.collect(SEC_CFG, SecFetcher(fail=("versioned",)), SEC_NOW, roots, None, tiers)
+    osv = [i for i in items if i.source == "osv"]
+    assert len(osv) == 3 and all(i.meta["affects_ours"] is None for i in osv), [i.meta.get("affects_ours") for i in osv]
+    assert rep["osv"]["affects_ours"] == {"yes": 0, "no": 0, "unknown": 3} and rep["failed"], rep
 
 
 def test_security_retired_technology_not_queried():
