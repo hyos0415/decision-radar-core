@@ -14,7 +14,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import judging, keyword_match, lanes, page_entries
+from . import alarm, judging, keyword_match, lanes, page_entries
 from .interest_profile import ProfileError, load_profile
 
 REPO = Path(__file__).resolve().parents[1]
@@ -64,24 +64,41 @@ def run_filter(items, profile, strategies, stack_terms=(), only_new=False, gate=
         lane_b = [it for it in lane_b if it.get("new", True)]
         dropped_old = before - len(lane_b)
     a_out = []
-    for it, reasons in lane_a:
+
+    def gate_entry(it, reasons, alarm_terms=None):
         by = {}
         for s in strategies:
             sc = keyword_match.score_item(it, profile, s)
             by[s] = [{"kind": "lane", "lane": "A", "why": reasons}] + (sc["matched_by"] if sc else [])
         verdict = gate(it, reasons) if gate is not None else lanes.GATE
-        a_out.append({"id": it["id"], "source": it["source"], "title": it["title"], "url": it["url"],
-                      "lane": "A", "reasons": reasons, "gate": verdict, "gate_status": "not-implemented" if verdict is None else "ok",
-                      "also_matches_interest": {s: any(e["kind"] == "match" for e in by[s]) for s in strategies},
-                      "known_example": bool(keyword_match.known_examples(it, profile)), "matched_by": by})
+        e = {"id": it["id"], "source": it["source"], "title": it["title"], "url": it["url"],
+             "lane": "A", "reasons": reasons, "gate": verdict, "gate_status": "not-implemented" if verdict is None else "ok",
+             "also_matches_interest": {s: any(e["kind"] == "match" for e in by[s]) for s in strategies},
+             "known_example": bool(keyword_match.known_examples(it, profile)), "matched_by": by}
+        if alarm_terms:
+            e["alarm"] = alarm_terms
+        return e
+
+    for it, reasons in lane_a:
+        a_out.append(gate_entry(it, reasons))
+    # 경보 그물 (HYO-170 가): 레인 B 중 스택 · 런타임 이름 + 사고 낱말 → 관문에도 (레인 B 순위에도 그대로 남는다).
+    # 관문이 이름을 알아보게 걸린 이름을 meta.alarm_terms로 넘긴다
+    net = alarm.net(lane_b, stack_terms) if gate is not None else []
+    for it, terms in net:
+        hinted = dict(it, meta=dict(it.get("meta") or {}, alarm_terms=terms))
+        a_out.append(gate_entry(hinted, [f"alarm-net:{', '.join(terms)}"], terms))
     b_out = {s: keyword_match.rank_items(lane_b, profile, s) for s in strategies}
     mentions = {it["id"]: m for it in lane_b if (m := lanes.stack_mentions(it, stack_terms))}
     for ranked in b_out.values():
         for e in ranked:
             e["stack_mentions"] = mentions.get(e["id"], [])
-    counts = {"items": len(items), "lane_a": len(a_out), "lane_b_candidates": len(lane_b), "skipped_pages": len(skipped),
+    counts = {"items": len(items), "lane_a": len(lane_a), "lane_b_candidates": len(lane_b), "skipped_pages": len(skipped),
               "dropped_not_new": dropped_old, "lane_b_ranked": {s: len(r) for s, r in b_out.items()}}
     res = {"lane_a": a_out, "lane_b": b_out, "counts": counts, "texts": {it["id"]: it.get("text", "") for it in lane_b}}
+    if gate is not None:
+        counts["alarm_net"] = len(net)
+        res["alarm"] = {"net": [it["id"] for it, _ in net], "not_ours": alarm.not_ours(lane_b, {it["id"] for it, _ in net}),
+                        "runtime_terms": list(alarm.RUNTIME_TERMS)}
     if gate is not None:
         from .importance.gate import cap_lane_a      # 5/N 상한 — 잘린 것은 summary에 남는다 (버리지 않는다)
         res["gate_summary"] = cap_lane_a(a_out, gate.limit)
@@ -134,6 +151,8 @@ def cmd_run(a):
     for s, ranked in res["lane_b"].items():
         write_json(out / f"lane_b.{s}.json", ranked)
     write_json(out / "texts.json", res["texts"])
+    if "alarm" in res:
+        write_json(out / "alarm.json", res["alarm"])     # 경보 그물 · 「우리 스택 아님」 (HYO-170) — detect_feed가 목록에 싣는다
     manifest = {"snapshot": str(a.snapshot), "profile": str(a.profile), "profile_version": profile["version"],
                 "strategies": strategies, "counts": res["counts"], "stack": stack, "profile_warnings": warnings,
                 "weights": {"PRIORITY_WEIGHT": keyword_match.PRIORITY_WEIGHT, "MATCH_BASE": keyword_match.MATCH_BASE,

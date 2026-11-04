@@ -196,6 +196,8 @@ def release_of(entry):
 def fold_key(entry):
     """「항상」 접기 열쇠 = (패키지, 줄). 줄은 관문이 기록한 우리 줄 / 다른 줄(scope.release_line, entry["release_line"]) —
     없으면 제목 버전의 주 버전(0.x는 부 버전까지). 릴리스가 아니면 접지 않는다 (항목마다 따로)."""
+    if entry.get("alarm"):          # 경보 그물(HYO-170)로 온 글 — 같은 사고의 글 여러 개(LiteLLM 백도어 HN · Reddit 4건)는 관문이 붙인 기술로 묶는다
+        return ("alarm",) + tuple(sorted(entry.get("technologies") or []))
     r = release_of(entry)
     if r is None:
         return ("item", entry["id"])
@@ -218,7 +220,8 @@ def apply_topk(entries, k=None):
     reps = {}
     for e in always:
         key, cur = fold_key(e), reps.get(fold_key(e))
-        if cur is None or release_of(e)[1] > release_of(cur)[1]:
+        new, old = release_of(e), release_of(cur) if cur else None
+        if cur is None or (new and old and new[1] > old[1]):      # 버전이 없으면(경보 글) 정렬 순서 앞이 대표
             reps[key] = e
     folded = {e["id"]: reps[fold_key(e)]["id"] for e in always if reps[fold_key(e)]["id"] != e["id"]}
     used, rank, query, listed_ids, detect_ids = {}, {}, {}, {e["id"] for e in always}, {e["id"] for e in reps.values()}

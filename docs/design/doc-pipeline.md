@@ -155,6 +155,11 @@ excludes:
 - 근거 (응답 0건, 제안 수만 셈 — 백엔드 계산 그대로): 보이는 범위별 부모 제안 수 W41 1·1·1·1·3 / W42 1·2·3·4·6 / W43 1·1·3·5·5 / W44 0·3·4·4·5 (상위 10·20·30·50·120)
 - 「쓸모 판정」(저장·capture 수)은 펼친 화제도 함께 센다. 펼친 화제에서 나온 것인지는 순위로 가를 수 있다
 
+변경 (2026-11-04, 사용자 — HYO-170 가 · 나): **경보 그물**을 더한다. 레인 나누기와 위 세 표는 그대로 둔다. 레인 B 중 제목에 스택 이름(+ 런타임 · 도구 이름 Python · CPython · Node.js · Chromium · PyPI · npm · Docker · GitHub Actions · Claude Code · Codex)과 사고 · 종료 낱말(CVE · backdoor · malware · compromised · RCE · PSA · deprecat · retire · EOL · shut down …)이 **함께** 나오면 인기와 상관없이 **관문에도** 보낸다(레인 B 순위에도 그대로 남는다 — `pipeline/alarm.py`). 관문이 등급 × 변화로 정하고, 등급 파일에 없는 런타임 · 도구(Claude Code 등)라 판정 못 하면 버리지 않고 목록 「경보」 칸 · detect로(`security_alert` · community — detect가 공식 공지를 찾는다, R2). 같은 사고 글 여러 개는 관문이 붙인 기술로 묶어 하나만 detect. 「우리 스택 아님」: 사고 낱말 + 인기 높음(HN 100점 · Reddit 10위) + 그물 밖 상위 5건을 목록 맨 아래에 한 줄씩.
+- 왜: W44에 우리 스택의 사고 4건이 수집되고도 레인 B 순위에만 있었다 — LiteLLM 1.107.0 PyPI 백도어(HN 596점 · Reddit 3, 1.107.0은 PyPI에만 있어 레인 A가 못 봤다) · http2shell · Broccoli2Shell(Node.js · Python RCE — 레인 A에 런타임 출처가 없다) · llama.cpp CVE PSA. 레인 B는 관심사 점수 순위라 detect에도 화면에도 이어져 있지 않다(HYO-167). 같은 주 PHP2Shell은 우리 스택이 아니라 안 올린 게 맞지만 「보고 넘겼다」가 보이지 않았다
+- 오프라인(W41~W45 얼린 스냅숏, 모델 없이): 그물 주 2 · 1 · 0 · 8 · 5건, 위 사고 전부 걸림. 흔한 영어 낱말인 스택 이름(`requests`)은 제목에서 이름으로 보지 않는다(W43 「… in response to requests」). 낱말 · 문턱은 첫 값 — 바꾸면 여기에 변경으로
+- 커뮤니티 출처는 늦다(HN 2일 지연 — §4-2). 주 그물은 공식 보안 채널(OSV · Python · Node.js 공지 — HYO-170 다, 수집기)이어야 하고 이 그물은 보조다
+
 ### 2-4. 주간 스냅숏 (HYO-72, 2026-10-06)
 
 - **저장 위치 = 새 private data repo `hyos0415/radar-snapshots`** (사용자 결정 2026-10-06). 기각: decision-radar(나중에 공개한다 — Reddit·HN 본문을 재배포하게 되고 git 이력에서 빼기 어렵다) · ADR repo(설정은 필요 없지만 사람이 쓴 결정 기록과 스킬 배포 대상 사이에 매주 기계 커밋이 섞인다). 대가: 클라우드 skill v2(HYO-75)가 읽으려면 GitHub App과 routine sources에 이 repo를 붙여야 한다
