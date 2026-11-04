@@ -15,8 +15,8 @@ langchain-core==1.6.6
 langchain-anthropic==1.7.5
 anthropic==1.9.0
 
-# litellm — Agents SDK의 Claude 경로. 선언 충돌(litellm 1.103.1은 openai<3)이라 메인 .venv에 넣지 않는다.
-# 별도 venv에 설치 순서로 맞춘다: spike/agents_sdk/README.md 「실제 모델(LiteLLM) 준비」 — litellm==1.103.1 후 openai==3.22.1
+# litellm — 기각 (2026-11-04, 사용자): Agents SDK의 Claude 경로(LiteLLM 어댑터)는 런타임 스파이크용이었다 — ADR 0006 기각 · 0008 SDK는 OpenAI 모델로.
+# 설치하지 않는다. 예전 준비 단계는 spike/agents_sdk/README.md에 기록으로만 남는다
 
 # 데스크톱 앱 백엔드 (E6, desktop/backend — localhost API). 2026-10-06 설치, 메인 .venv (pip check 통과)
 fastapi==0.142.2

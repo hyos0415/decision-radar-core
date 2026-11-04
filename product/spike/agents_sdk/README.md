@@ -26,6 +26,8 @@ python -m venv .venv && .venv/Scripts/pip install -r product/requirements.txt   
 
 ### 실제 모델(LiteLLM) 준비 — 메인 `.venv`와 따로
 
+> **변경 (2026-11-04, 사용자 — 기각)**: LiteLLM 경로를 코드와 스택(CLAUDE.md 표 · 관문 등급 파일)에서 지웠다. 아래 준비 단계와 결과표는 기록으로 남긴다 — ADR 0006 · 0008의 근거다. 다시 돌리려면 git 기록에서 `models.make_litellm`을 되살린다.
+
 litellm은 `openai<3`을 선언하고 openai-agents는 `openai>=3`을 요구한다. 설치 순서로 억지로 맞춘다 (선언 충돌은 남는다 — pip가 경고한다).
 Windows 경로 길이 제한 때문에 **짧은 경로**에 만든다 (긴 경로에서는 litellm 설치가 `OSError: No such file`로 실패).
 

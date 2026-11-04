@@ -1,6 +1,6 @@
 """capture 2턴 — **새 프로세스**에서 파일의 RunState를 복원해 재개한다 (런타임 스파이크 P6). eval 어댑터가 subprocess로 부른다.
 
-  python resume.py --state S --decision approve|reject --now T --radar R --out DIR (--stub-script F | --litellm [--no-register])
+  python resume.py --state S --decision approve|reject --now T --radar R --out DIR --stub-script F   (실제 모델 경로는 기각 — 2026-11-04)
 
 RADAR_* 환경변수는 부모가 넘긴다. 1턴의 파이썬 객체는 여기 없다 — 파일 하나만 이어 준다.
 결과: DIR/transcript-2.jsonl (채점용) · DIR/resume.json (pid · 복원한 대기 승인 수 · P3 · P5 · 토큰)
@@ -28,12 +28,10 @@ def main():
     ap.add_argument("--now", required=True)
     ap.add_argument("--radar", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--stub-script")
-    ap.add_argument("--litellm", action="store_true")
-    ap.add_argument("--no-register", dest="register", action="store_false")
+    ap.add_argument("--stub-script", required=True)
     a = ap.parse_args()
-    stub = a.stub_script is not None
-    spec = {"kind": "stub", "script": json.load(open(a.stub_script, encoding="utf-8"))} if stub else {"kind": "litellm", "register": a.register}
+    stub = True
+    spec = {"kind": "stub", "script": json.load(open(a.stub_script, encoding="utf-8"))}
     rt = runtime.Runtime()
 
     ctx = Ctx.from_env(dict(os.environ), radar_py=a.radar)

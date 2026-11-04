@@ -157,27 +157,24 @@ class Runtime:
     state_filename = "capture-state.json"
 
     def add_args(self, ap):
-        ap.add_argument("--no-register", dest="register", action="store_false",
-                        help="litellm 모델 표 등록을 끈다 — 어댑터 기본값 재현용. 기본은 등록 (사용자 결정 2026-09-30: 네이티브 구조화 출력)")
+        pass
 
     def real_spec(self, a):
-        return {"kind": "litellm", "register": a.register}
+        import models
+        raise SystemExit(models.REJECTED)        # 변경 (2026-11-04, 사용자): LiteLLM 경로 기각 — 스텁만
 
     def label(self, spec):
-        return "litellm-registered" if spec["register"] else "litellm-default"
+        return spec["kind"]
 
     def new_shapes(self, spec):
-        if spec["kind"] == "stub":
-            return None
-        import models
-        return models.RequestShapes()
+        return None
 
     def make_model(self, spec, shapes, flow):
         if spec["kind"] == "stub":
             from stub_model import CaptureStub, StubModel
             return CaptureStub(spec["script"]) if flow == "capture" else StubModel(spec["script"])
         import models
-        return models.make_litellm(spec["register"], shapes)
+        raise SystemExit(models.REJECTED)
 
     def settings(self, spec):
         if spec["kind"] == "stub":
@@ -193,4 +190,5 @@ class Runtime:
                "--radar", radar_py, "--out", out_dir]
         if spec["kind"] == "stub":
             return cmd + ["--stub-script", spec["script_file"]]
-        return cmd + ["--litellm"] + ([] if spec["register"] else ["--no-register"])
+        import models
+        raise SystemExit(models.REJECTED)

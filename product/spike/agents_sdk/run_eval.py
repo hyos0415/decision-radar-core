@@ -2,7 +2,7 @@
 
   python product/spike/agents_sdk/run_eval.py --stub                 # 기준 11케이스(revisit 6 + capture 5) + 음성 대조 7 (API 없음)
   python product/spike/agents_sdk/run_eval.py --stub JHS-037 JHS-047 --k 3
-  python product/spike/agents_sdk/run_eval.py --model litellm JHS-001 [--no-register]   # 실제 Claude (API 과금, .env 키, litellm venv)
+  (실제 모델 경로 `--model litellm`은 기각 — 2026-11-04, ADR 0006. 결과 기록은 README 「P3 조기 확인」)
 """
 
 import os
