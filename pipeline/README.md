@@ -94,7 +94,10 @@ python -m pipeline.detect_feed --run pipeline/out/w41 --out pipeline/out/w41/det
 .venv/Scripts/python product/radar/run_detect.py --snapshot pipeline/out/w41/detect-snapshot --adr ../adr --out pipeline/out/w41/detect [--model anthropic --real-api]
 
 python pipeline/tests/test_detect_feed.py      # 오프라인 — radar.py feed·fetch 왕복 + 변이 3개
+python pipeline/tests/test_page_entries.py     # 오프라인 — changelog diff 날짜 블록 쪼개기(HYO-168) + 변이 4개
 ```
+
+- changelog · release notes 페이지 diff는 `read_items`가 **날짜 블록마다 항목 하나로** 쪼갠다(`page_entries.py`, HYO-168) — 블록 id · url 끝에 `#<날짜>`. 첫 날짜 앞의 줄과 빠진 줄은 원래 id에 남는다. 얼린 `items.jsonl`은 그대로
 
 - `funnel.json` = 건수(수집 → 레인 A → 관문 남김 → detect 입력) + 관문이 판정 못 한 것(`gate_counts`: 모르는 기술 · 분류 불가 · 팀원 스택(`other-stack`) · 오류). 실행 요약의 첫 줄이 된다 (`run_detect` · 데스크톱 `_summarize_detect`). (모르는 기술+분류 불가)/(레인 A−팀원 스택)이 `policy.UNKNOWN_WARN_RATIO`(5%, 잠정 — 2026-10-15 20%에서 변경, 다시 잰 정상 비율 W41 0.9% · W42 0.8%)를 넘으면 같은 줄에 경고 (HYO-122)
 - `gate.json` = url → 왜 남았나(`kept_by`). **detect 입력(feed)에는 넣지 않는다** — 모델 판단을 흔들지 않게. 화면의 「왜 왔나」 칸(HYO-85)이 읽는다

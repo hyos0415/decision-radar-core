@@ -14,17 +14,18 @@ import os
 import sys
 from pathlib import Path
 
-from . import judging, keyword_match, lanes
+from . import judging, keyword_match, lanes, page_entries
 from .interest_profile import ProfileError, load_profile
 
 REPO = Path(__file__).resolve().parents[1]
 
 
 def read_items(path):
+    """스냅숏 항목. changelog 페이지 diff는 날짜 블록마다 쪼갠다 (HYO-168 — 얼린 파일은 그대로, detect_feed도 이 함수로 읽는다)."""
     p = Path(path)
     if p.is_dir():
         p = p / "items.jsonl"
-    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return page_entries.expand([json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()])
 
 
 def load_stack(targets_path=None, adr_dir=None):
