@@ -975,6 +975,105 @@
         }
       }
     },
+    "/week-list": {
+      "get": {
+        "summary": "Week List",
+        "description": "이번 주 목록 — 「항상」 · 기술 질의 · 자리 질의 · 경보 · 우리 스택 아님 (HYO-168 · HYO-170).",
+        "operationId": "weekList",
+        "parameters": [
+          {
+            "name": "week",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "주차 (예 2026-W46). 없으면 가장 새 주차",
+              "title": "Week"
+            },
+            "description": "주차 (예 2026-W46). 없으면 가장 새 주차"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서비스 오류 — detail 한 줄",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/topics/parent-candidates": {
       "get": {
         "summary": "Topic Parent Candidates",
@@ -5767,6 +5866,311 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WeekList": {
+        "properties": {
+          "week": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Week",
+            "description": "보여 주는 주차. 목록 파일이 하나도 없으면 null"
+          },
+          "weeks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Weeks",
+            "description": "목록이 있는 주차 — 새 것 먼저"
+          },
+          "always": {
+            "items": {
+              "$ref": "#/components/schemas/WeekListItem"
+            },
+            "type": "array",
+            "title": "Always",
+            "description": "「항상」 — 보안 · 우리 버전 EOL · 모델 은퇴. 전부 보이고 folded_into가 있으면 대표 아래로 접는다"
+          },
+          "tech": {
+            "items": {
+              "$ref": "#/components/schemas/WeekListTech"
+            },
+            "type": "array",
+            "title": "Tech",
+            "description": "기술 질의 — 기술마다 top-k"
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/WeekListSlot"
+            },
+            "type": "array",
+            "title": "Slots",
+            "description": "자리 질의 — 자리마다 새 후보 top-k"
+          },
+          "alarm": {
+            "items": {
+              "$ref": "#/components/schemas/WeekListItem"
+            },
+            "type": "array",
+            "title": "Alarm",
+            "description": "경보 — 관문이 모르는 런타임 · 도구의 사고 글 (HYO-170)"
+          },
+          "not_ours": {
+            "items": {
+              "$ref": "#/components/schemas/WeekListItem"
+            },
+            "type": "array",
+            "title": "Not Ours",
+            "description": "우리 스택 아님 — 그 주 큰 사고 중 우리 스택에 안 걸린 것 (보고 넘겼다는 표시)"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts",
+            "description": "칸별 건수 + to_detect"
+          }
+        },
+        "type": "object",
+        "required": [
+          "week",
+          "weeks",
+          "always",
+          "tech",
+          "slots",
+          "alarm",
+          "not_ours",
+          "counts"
+        ],
+        "title": "WeekList",
+        "description": "이번 주 목록 — 수집 PC가 만든 `detect/<주차>/list.json` (pipeline.detect_feed). 화면은 칸마다 묶어 한 줄씩 보인다."
+      },
+      "WeekListItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "수집 항목 id (스냅숏 items.jsonl의 id)"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier",
+            "description": "관문 등급 L0~L8 (「항상」 · 기술 질의 · 경보). 자리 질의 · 우리 스택 아님은 null"
+          },
+          "change": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change",
+            "description": "변화 종류 (security · eol · model_retirement · breaking · pricing …)"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "왜 왔나 한 줄 — 관문 행(`electron L1 × security`) · 자리 적합도 이유 · 경보 그물"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank",
+            "description": "질의 안 순위 (1부터). 「항상」 · 경보는 null"
+          },
+          "to_detect": {
+            "type": "boolean",
+            "title": "To Detect",
+            "description": "detect 입력으로 갔나 (초안 후보)",
+            "default": false
+          },
+          "folded_into": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folded Into",
+            "description": "같은 패키지 · 줄의 더 새 버전 또는 같은 사고의 다른 글로 접혔으면 그 대표 id — 화면은 「외 N건」으로 묶는다"
+          },
+          "alarm": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alarm",
+            "description": "경보 그물(HYO-170)로 온 글이면 걸린 스택 · 런타임 이름들"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "출처 (vendor · hn · reddit · huggingface …) — 자리 질의 · 우리 스택 아님"
+          },
+          "fit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fit",
+            "description": "자리 적합도 0~3 (자리 질의만)"
+          },
+          "points": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Points",
+            "description": "HN 점수 (우리 스택 아님만, Reddit은 null)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "WeekListItem",
+        "description": "이번 주 목록의 한 줄 (HYO-168 · HYO-170 — docs/design/query-topk.md). 칸마다 쓰는 필드가 다르다 — 안 쓰면 null."
+      },
+      "WeekListSlot": {
+        "properties": {
+          "slot": {
+            "type": "string",
+            "title": "Slot",
+            "description": "자리 id (ADR repo radar-slots.yaml)"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "자리 이름 (예 관문 분류)"
+          },
+          "current": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Current",
+            "description": "지금 그 자리에 있는 모델 · 서비스"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WeekListItem"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "새 후보 top-k (적합도 문턱 이상) — 없으면 빈 목록 = 「없음」"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slot",
+          "items"
+        ],
+        "title": "WeekListSlot"
+      },
+      "WeekListTech": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query",
+            "description": "기술 이름 (관문의 기술 — 등급 파일 이름)"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WeekListItem"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "그 기술의 top-k, 순위대로"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "items"
+        ],
+        "title": "WeekListTech"
       }
     }
   }

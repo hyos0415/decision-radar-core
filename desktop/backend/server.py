@@ -102,6 +102,11 @@ def create_app(svc: RadarService = None, scheduler_on: bool = False, jobs: Jobs 
         """화제 탭 (레인 C, HYO-127) — 그 주의 상위 k 토픽 (+ 더 보기). 화제 파일이 없으면 빈 목록. 읽기만."""
         return svc.topics(week, limit)
 
+    @app.get("/week-list", response_model=S.WeekList, operation_id="weekList")
+    def week_list(week: Optional[str] = Query(default=None, description="주차 (예 2026-W46). 없으면 가장 새 주차")):
+        """이번 주 목록 — 「항상」 · 기술 질의 · 자리 질의 · 경보 · 우리 스택 아님 (HYO-168 · HYO-170)."""
+        return svc.week_list(week)
+
     @app.get("/topics/parent-candidates", response_model=S.TopicParentCandidateList, operation_id="topicParentCandidates")
     def topic_parent_candidates(week: Optional[str] = Query(default=None, description="주차. 없으면 가장 새 주차"),
                                 q: str = Query(default="", description="제목에 든 글자 (대소문자 무시)"),
@@ -239,6 +244,8 @@ def main(argv=None):
             print("개발 데이터에 스냅숏을 더했다", flush=True)
         if devdata.ensure_topics(a.data_dir):
             print("개발 데이터에 화제 예시를 더했다", flush=True)
+        if devdata.ensure_lists(a.data_dir):
+            print("개발 데이터에 이번 주 목록 예시를 더했다", flush=True)
     try:
         svc = RadarService(a.data_dir, profile=profile)  # 폴더를 만든 프로필과 다르면 거부한다
     except ServiceError as e:

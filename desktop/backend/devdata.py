@@ -71,6 +71,21 @@ def ensure_topics(data_dir):
     return True
 
 
+LIST_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "list_example.json")
+LIST_FIXTURE_WEEK = "2026-W45"
+
+
+def ensure_lists(data_dir):
+    """이번 주 목록 예시 (HYO-168) — `<data>/lists/<주차>/list.json`이 없으면 합성 목록(list_example.json, 전부 [예시])을 둔다. 만들었으면 True.
+    모양은 `python -m pipeline.detect_feed`가 쓰는 list.json과 같다 (test_backend가 대조한다)."""
+    root = os.path.join(data_dir, "lists")
+    if os.path.isdir(root) and any(os.path.exists(os.path.join(root, n, "list.json")) for n in os.listdir(root)):
+        return False
+    os.makedirs(os.path.join(root, LIST_FIXTURE_WEEK), exist_ok=True)
+    shutil.copyfile(LIST_FIXTURE, os.path.join(root, LIST_FIXTURE_WEEK, "list.json"))
+    return True
+
+
 def seed_profile(data_dir, profile):
     """프로필 폴더 → 데이터 폴더. ADR 사본(adr-fixture) · 대상 repo 사본 · 스냅숏 · 스텁 capture 대기 항목."""
     meta = devprofiles.load_json(profile, "profile.json")
@@ -81,6 +96,7 @@ def seed_profile(data_dir, profile):
     devprofiles.write_marker(data_dir, profile)  # 서비스가 어느 프로필 대본을 쓸지 — 폴더가 기억한다
     ensure_snapshots(data_dir, profile)
     ensure_topics(data_dir)
+    ensure_lists(data_dir)
     svc = RadarService(data_dir)
     convs = devprofiles.load_json(profile, "conversations.json")
     out = []
@@ -100,6 +116,7 @@ def seed(data_dir, profile=devprofiles.DEFAULT):
         shutil.copytree(os.path.join(FIX, "repos", r), os.path.join(data_dir, r))
     ensure_snapshots(data_dir)
     ensure_topics(data_dir)
+    ensure_lists(data_dir)
     svc = RadarService(data_dir)
     convs = json.load(open(os.path.join(FIX, "conversations.json"), encoding="utf-8"))
     out = []

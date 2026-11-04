@@ -448,6 +448,47 @@ class TopicList(BaseModel):
     items: list[TopicRow] = Field(description="상위 limit개 (없으면 k개), 순위대로")
 
 
+class WeekListItem(BaseModel):
+    """이번 주 목록의 한 줄 (HYO-168 · HYO-170 — docs/design/query-topk.md). 칸마다 쓰는 필드가 다르다 — 안 쓰면 null."""
+    id: str = Field(description="수집 항목 id (스냅숏 items.jsonl의 id)")
+    title: Optional[str] = None
+    url: Optional[str] = None
+    tier: Optional[str] = Field(default=None, description="관문 등급 L0~L8 (「항상」 · 기술 질의 · 경보). 자리 질의 · 우리 스택 아님은 null")
+    change: Optional[str] = Field(default=None, description="변화 종류 (security · eol · model_retirement · breaking · pricing …)")
+    reason: Optional[str] = Field(default=None, description="왜 왔나 한 줄 — 관문 행(`electron L1 × security`) · 자리 적합도 이유 · 경보 그물")
+    rank: Optional[int] = Field(default=None, description="질의 안 순위 (1부터). 「항상」 · 경보는 null")
+    to_detect: bool = Field(default=False, description="detect 입력으로 갔나 (초안 후보)")
+    folded_into: Optional[str] = Field(default=None, description="같은 패키지 · 줄의 더 새 버전 또는 같은 사고의 다른 글로 접혔으면 그 대표 id — 화면은 「외 N건」으로 묶는다")
+    alarm: Optional[list[str]] = Field(default=None, description="경보 그물(HYO-170)로 온 글이면 걸린 스택 · 런타임 이름들")
+    source: Optional[str] = Field(default=None, description="출처 (vendor · hn · reddit · huggingface …) — 자리 질의 · 우리 스택 아님")
+    fit: Optional[int] = Field(default=None, description="자리 적합도 0~3 (자리 질의만)")
+    points: Optional[int] = Field(default=None, description="HN 점수 (우리 스택 아님만, Reddit은 null)")
+
+
+class WeekListTech(BaseModel):
+    query: str = Field(description="기술 이름 (관문의 기술 — 등급 파일 이름)")
+    items: list[WeekListItem] = Field(description="그 기술의 top-k, 순위대로")
+
+
+class WeekListSlot(BaseModel):
+    slot: str = Field(description="자리 id (ADR repo radar-slots.yaml)")
+    name: Optional[str] = Field(default=None, description="자리 이름 (예 관문 분류)")
+    current: list[str] = Field(default_factory=list, description="지금 그 자리에 있는 모델 · 서비스")
+    items: list[WeekListItem] = Field(description="새 후보 top-k (적합도 문턱 이상) — 없으면 빈 목록 = 「없음」")
+
+
+class WeekList(BaseModel):
+    """이번 주 목록 — 수집 PC가 만든 `detect/<주차>/list.json` (pipeline.detect_feed). 화면은 칸마다 묶어 한 줄씩 보인다."""
+    week: Optional[str] = Field(description="보여 주는 주차. 목록 파일이 하나도 없으면 null")
+    weeks: list[str] = Field(description="목록이 있는 주차 — 새 것 먼저")
+    always: list[WeekListItem] = Field(description="「항상」 — 보안 · 우리 버전 EOL · 모델 은퇴. 전부 보이고 folded_into가 있으면 대표 아래로 접는다")
+    tech: list[WeekListTech] = Field(description="기술 질의 — 기술마다 top-k")
+    slots: list[WeekListSlot] = Field(description="자리 질의 — 자리마다 새 후보 top-k")
+    alarm: list[WeekListItem] = Field(description="경보 — 관문이 모르는 런타임 · 도구의 사고 글 (HYO-170)")
+    not_ours: list[WeekListItem] = Field(description="우리 스택 아님 — 그 주 큰 사고 중 우리 스택에 안 걸린 것 (보고 넘겼다는 표시)")
+    counts: dict[str, int] = Field(description="칸별 건수 + to_detect")
+
+
 class SavedTopic(BaseModel):
     """저장한 화제 — 복사본이라 주차 파일이 다시 만들어지거나 지워져도 남는다."""
     id: str

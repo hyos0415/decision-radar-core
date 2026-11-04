@@ -1,0 +1,34 @@
+{
+ "always": [
+  {"id": "github-release:example/runtime@v45.0.1", "title": "[예시] example/runtime v45.0.1", "url": "https://github.com/example/runtime/releases/tag/v45.0.1", "tier": "L1", "change": "security", "reason": "example-runtime L1 × security", "rank": null, "to_detect": true, "folded_into": null, "alarm": null},
+  {"id": "github-release:example/runtime@v44.9.2", "title": "[예시] example/runtime v44.9.2", "url": "https://github.com/example/runtime/releases/tag/v44.9.2", "tier": "L1", "change": "security", "reason": "example-runtime L1 × security", "rank": null, "to_detect": true, "folded_into": null, "alarm": null},
+  {"id": "github-release:example/runtime@v43.8.2", "title": "[예시] example/runtime v43.8.2", "url": "https://github.com/example/runtime/releases/tag/v43.8.2", "tier": "L1", "change": "security", "reason": "example-runtime L1 × security", "rank": null, "to_detect": false, "folded_into": "github-release:example/runtime@v44.9.2", "alarm": null},
+  {"id": "vendor-diff:example-ai:https://example.com/docs/deprecations@2026-W45", "title": "[예시] [example-ai] docs/deprecations 변경 — example-model-1 은퇴 2027-01-15", "url": "https://example.com/docs/deprecations", "tier": "L2", "change": "model_retirement", "reason": "example-model-1 L2 × 모델 은퇴", "rank": null, "to_detect": true, "folded_into": null, "alarm": null},
+  {"id": "hn:ex-alarm-1", "title": "[예시] Compromised example-proxy 2.0.0 on PyPI installs a credential stealer", "url": "https://example.com/blog/example-proxy-compromise", "tier": "L5", "change": "security", "reason": "example-proxy L5 × security", "rank": null, "to_detect": true, "folded_into": null, "alarm": ["example-proxy", "PyPI"]},
+  {"id": "reddit:ex-alarm-1", "title": "[예시] PSA: example-proxy 2.0.0 shipped a backdoor", "url": "https://www.reddit.com/r/ExampleLLM/comments/ex_alarm_1/", "tier": "L5", "change": "security", "reason": "example-proxy L5 × security", "rank": null, "to_detect": false, "folded_into": "hn:ex-alarm-1", "alarm": ["example-proxy"]}
+ ],
+ "tech": [
+  {"query": "example-web", "items": [
+   {"id": "github-release:example/web@0.150.0", "title": "[예시] example/web 0.150.0", "url": "https://github.com/example/web/releases/tag/0.150.0", "tier": "L4", "change": "breaking", "reason": "example-web L4 × breaking", "rank": 1, "to_detect": true, "folded_into": null, "alarm": null},
+   {"id": "github-release:example/web@0.151.0", "title": "[예시] example/web 0.151.0", "url": "https://github.com/example/web/releases/tag/0.151.0", "tier": "L4", "change": "breaking", "reason": "example-web L4 × breaking", "rank": 2, "to_detect": true, "folded_into": null, "alarm": null}
+  ]},
+  {"query": "example-model-2", "items": [
+   {"id": "vendor-diff:example-ai:https://example.com/docs/changelog@2026-W45#nov-2", "title": "[예시] [example-ai] docs/changelog Nov 2: example-model-2 가격 인하", "url": "https://example.com/docs/changelog#nov-2", "tier": "L2", "change": "pricing", "reason": "example-model-2 L2 × 가격·한도 변경", "rank": 1, "to_detect": true, "folded_into": null, "alarm": null}
+  ]}
+ ],
+ "slots": [
+  {"slot": "gate-classifier", "name": "관문 분류", "current": ["[예시] example-model-2 (API)"], "items": [
+   {"id": "hn:ex-model-1", "title": "[예시] Example-Model-3 Terra-mini", "url": "https://example.com/blog/example-model-3", "source": "hn", "fit": 3, "reason": "[예시] 구조화 출력 · 더 싸다 — 관문 분류 자리에 맞다", "rank": 1, "to_detect": true},
+   {"id": "vendor-diff:example-ai:https://example.com/docs/changelog@2026-W45#nov-3", "title": "[예시] [example-ai] docs/changelog Nov 3: Released example-model-3", "url": "https://example.com/docs/changelog#nov-3", "source": "vendor", "fit": 2, "reason": "[예시] 같은 계열의 작은 모델", "rank": 2, "to_detect": true}
+  ]},
+  {"slot": "medical-ondevice", "name": "의료 온디바이스", "current": ["[예시] example-2b Q4"], "items": []}
+ ],
+ "alarm": [
+  {"id": "hn:ex-alarm-2", "title": "[예시] Backdoor in example-cli editor extension", "url": "https://example.com/blog/example-cli-extension", "tier": null, "change": null, "reason": "경보 그물 · 관문이 모르는 기술 (example-cli)", "rank": null, "to_detect": true, "folded_into": null, "alarm": ["example-cli"]}
+ ],
+ "not_ours": [
+  {"id": "hn:ex-notours-1", "title": "[예시] Critical RCE in ExampleLang runtime", "url": "https://example.com/blog/examplelang-rce", "source": "hn", "points": 812},
+  {"id": "hn:ex-notours-2", "title": "[예시] Example CA intermediate certificate compromised", "url": "https://example.com/blog/example-ca", "source": "hn", "points": 455}
+ ],
+ "counts": {"always": 6, "tech": 3, "slots": 2, "alarm": 1, "not_ours": 2, "to_detect": 10}
+}
