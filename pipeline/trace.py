@@ -123,6 +123,12 @@ def cap_step(entry, cap):
         if entry.get("shown"):
             return step("3", True, "「항상」 칸 — detect로" if entry.get("always") else f"기술 질의 {q} {entry.get('rank')}위 — detect로")
         if entry.get("listed"):
+            adv = (entry.get("gate") or {}).get("advisory")     # OSV 공지 (HYO-170 다)
+            if adv and policy.quiet_advisory({"advisory": adv}):
+                return step("3", False, "목록에만 — 우리 버전 해당 없는 보안 공지 (OSV — 이미 고쳐진 버전 · 다른 줄)"
+                            + (f" · 같은 패키지 공지와 한 줄로 → {entry['folded_into']}" if entry.get("folded_into") else ""))
+            if entry.get("folded_into") and adv:
+                return step("3", False, f"목록에만 — 같은 패키지 보안 공지로 접힘(제목 · 링크는 그 공지 detect 입력에) → {entry['folded_into']}")
             if entry.get("folded_into") and entry.get("alarm"):
                 return step("3", False, f"목록에만 — 「항상」 같은 기술 경보의 더 인기 있는 글로 접힘(제목 · 링크는 그 글 detect 입력에) → {entry['folded_into']}")
             if entry.get("folded_into"):

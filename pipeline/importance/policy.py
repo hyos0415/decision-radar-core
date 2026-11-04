@@ -193,11 +193,21 @@ def release_of(entry):
     return pkg.lower(), tuple(int(x) for x in found[-1].split("."))
 
 
+def quiet_advisory(entry):
+    """우리 버전이 해당 안 되는 OSV 공지(악성 기록 MAL- 빼고) — 목록에만, detect로는 안 보낸다 (리뷰 2026-11-04, 사용자 나안).
+    이미 고쳐진 버전 · 다른 줄이라 결정할 게 없다. 악성 기록은 `^` 범위가 다음 설치에 끌어올 수 있어 버전과 상관없이 detect로.
+    해당 여부를 모르면(None — 버전 모름 · 묻기 실패) detect로 (안전 쪽)."""
+    a = entry.get("advisory")
+    return bool(a) and a.get("affects_ours") is False and not a.get("malicious")
+
+
 def fold_key(entry):
     """「항상」 접기 열쇠 = (패키지, 줄). 줄은 관문이 기록한 우리 줄 / 다른 줄(scope.release_line, entry["release_line"]) —
     없으면 제목 버전의 주 버전(0.x는 부 버전까지). 릴리스가 아니면 접지 않는다 (항목마다 따로)."""
     if entry.get("alarm"):          # 경보 그물(HYO-170)로 온 글 — 같은 사고의 글 여러 개(LiteLLM 백도어 HN · Reddit 4건)는 관문이 붙인 기술로 묶는다
         return ("alarm",) + tuple(sorted(entry.get("technologies") or []))
+    if entry.get("advisory"):       # OSV 공지(HYO-170 다) — 같은 패키지 공지는 하나로 (vite 7.x 공지 5건 = 「vite를 올린다」 결정 하나)
+        return ("advisory", str(entry["advisory"].get("package") or "").lower())
     r = release_of(entry)
     if r is None:
         return ("item", entry["id"])
@@ -211,25 +221,32 @@ def fold_key(entry):
 def apply_topk(entries, k=None):
     """남긴 후보 → 질의별 top-k (§4 변경 2026-11-04). entries는 {"id", "kept_by", ...} (+ 접기에 쓰는 "title" · "release_line").
     「항상」(보안 · 우리 버전 EOL · 모델 은퇴)은 몫 밖에서 전부 목록, detect로는 fold_key마다 가장 새 버전 1건(경보 글은 가장 인기 있는 글 — "popularity", 같으면 정렬 순서 앞).
+    OSV 공지는 패키지마다 1건(악성 기록 먼저), 우리 버전 해당 없는 공지(quiet_advisory)는 목록에만.
     나머지는 기술(cap_technology)마다 정렬 순서로 k개까지 목록 · DETECT_TOPK개까지 detect.
     → {"always", "listed"(항상 포함, 정렬 순서), "detect", "cut", "rank": {id: 기술 안 순위}, "query": {id: 기술}, "folded": {접힌 id: 대표 id}}"""
     k = TOPK if k is None else k
     dk = k if DETECT_TOPK is None else DETECT_TOPK
     ordered = sorted(entries, key=rank_key)
     always = [e for e in ordered if is_always(e)]
-    reps = {}
+    reps, quiet_reps = {}, {}
     for e in always:
+        if quiet_advisory(e):        # 우리 버전 해당 없는 공지 — 목록에만 (목록에서도 패키지마다 한 줄로 접는다 — W44 electron 9건)
+            quiet_reps.setdefault(fold_key(e), e)
+            continue
         key, cur = fold_key(e), reps.get(fold_key(e))
         if cur is None:
             better = True
         elif e.get("alarm"):     # 경보 글은 인기 순 (alarm.popularity, 2026-11-04 — 제목의 버전 번호는 안 본다) · 같으면 정렬 순서 앞
             better = tuple(e.get("popularity") or (9,)) < tuple(cur.get("popularity") or (9,))
+        elif e.get("advisory"):      # 악성 기록(MAL-)이 대표 · 같으면 정렬 순서 앞
+            better = bool(e["advisory"].get("malicious") and not cur["advisory"].get("malicious"))
         else:
             new, old = release_of(e), release_of(cur)
             better = bool(new and old and new[1] > old[1])
         if better:
             reps[key] = e
-    folded = {e["id"]: reps[fold_key(e)]["id"] for e in always if reps[fold_key(e)]["id"] != e["id"]}
+    rep_of = {e["id"]: (quiet_reps if quiet_advisory(e) else reps)[fold_key(e)]["id"] for e in always}
+    folded = {i: r for i, r in rep_of.items() if r != i}
     used, rank, query, listed_ids, detect_ids = {}, {}, {}, {e["id"] for e in always}, {e["id"] for e in reps.values()}
     for e in ordered:
         t = cap_technology(e)

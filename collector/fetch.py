@@ -28,12 +28,15 @@ class Fetcher:
         self._last[host] = self._now()
 
     def get(self, url, headers=None):
+        return self._request(url, headers)
+
+    def _request(self, url, headers=None, data=None):
         host = urllib.parse.urlparse(url).netloc
         attempt = 0
         while True:
             attempt += 1
             self._wait(host)
-            req = urllib.request.Request(url, headers={"User-Agent": UA, **(headers or {})})
+            req = urllib.request.Request(url, data=data, headers={"User-Agent": UA, **(headers or {})})
             try:
                 with urllib.request.urlopen(req, timeout=60) as r:
                     body = r.read()
@@ -55,6 +58,13 @@ class Fetcher:
 
     def get_json(self, url, headers=None):
         st, body = self.get(url, headers)
+        if st != 200:
+            raise FetchError(url, st, body[:300])
+        return json.loads(body)
+
+    def post_json(self, url, payload, headers=None):
+        """JSON 본문 POST (OSV querybatch). 재시도·간격·log는 get과 같다."""
+        st, body = self._request(url, {"Content-Type": "application/json", **(headers or {})}, json.dumps(payload).encode("utf-8"))
         if st != 200:
             raise FetchError(url, st, body[:300])
         return json.loads(body)

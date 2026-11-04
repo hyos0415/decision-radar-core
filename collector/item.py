@@ -19,7 +19,7 @@ _SKIP_LINK = re.compile(r"(reddit\.com/(user|u)/|reddit\.com/r/[^/]+/comments/|r
 @dataclass
 class Item:
     id: str                      # "<source>:<원래 id>" — 출처 안에서 유일
-    source: str                  # reddit · hn · github · huggingface · vendor
+    source: str                  # reddit · hn · github · huggingface · vendor · osv · python · nodejs (공식 보안 채널)
     channels: list               # 이 항목을 가져온 통로들 (중복 제거 때 합친다)
     title: str
     url: str

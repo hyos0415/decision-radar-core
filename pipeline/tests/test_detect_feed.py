@@ -112,6 +112,14 @@ def test_feed_fields():
     assert "x" * 3000 in radar(out, "fetch", rel["url"])["body"]   # 전문은 자르지 않는다
 
 
+def test_feed_entry_security_advisory():
+    # 공식 보안 채널 (HYO-170 다): OSV 공지는 의존성 이름을 달고 공식 문서(R2 통과)로 — 릴리스 노트가 아니다
+    e = detect_feed.feed_entry({"id": "osv:MAL-2026-2144@2026-10-29", "title": "litellm (PyPI) security advisory MAL-2026-2144: Malicious code",
+                                "url": "https://osv.dev/vulnerability/MAL-2026-2144", "text": "litellm 1.107.0 … backdoor",
+                                "meta": {"kind": "advisory", "dependency": "litellm", "ecosystem": "PyPI"}})
+    assert (e["kind"], e["source_type"], e["package"]) == ("security_advisory", "official_doc", "litellm") and "version" not in e, e
+
+
 def test_gate_why_and_funnel_line():
     out, f = built()
     why = json.loads((out / "gate.json").read_text(encoding="utf-8"))
@@ -161,12 +169,60 @@ def test_basis_moves_with_feed():
     assert not (out / "basis.json").exists()
 
 
+def _adv(i, pkg, affects, malicious=False):
+    item = {"id": i, "source": "osv", "channels": ["security-advisories"], "title": f"{pkg} (npm) security advisory {i}: issue",
+            "url": f"https://osv.dev/vulnerability/{i}", "text": "details", "meta": {"kind": "advisory", "dependency": pkg, "osv_id": i}}
+    g = {"keep": True, "status": "ok", "technologies": [pkg], "kept_by": [{"tier": "L1", "change": "security", "technology": pkg}],
+         "reason": f"{pkg} L1 × security", "advisory": {"package": pkg, "affects_ours": affects, "malicious": malicious}}
+    return item, {"id": i, "title": item["title"], "url": item["url"], "gate": g}
+
+
+def test_advisories_quiet_when_not_ours_and_folded_per_package():
+    # W44 창 모양 (리뷰 2026-11-04, 사용자 나안): OSV 공지 중 우리 버전 해당 없는 것은 목록에만 · 해당분은 패키지마다 1건 ·
+    # 악성 기록은 버전과 상관없이 · 해당 여부를 모르면 detect로 (안전 쪽)
+    from pipeline.importance import gate as gate_mod
+    pairs = [_adv("GHSA-e1", "electron", False), _adv("GHSA-e2", "electron", False),
+             _adv("GHSA-v1", "vite", True), _adv("GHSA-v2", "vite", True), _adv("GHSA-v3", "vite", False),
+             _adv("MAL-2026-1", "litellm", False, malicious=True), _adv("GHSA-l1", "litellm", True), _adv("GHSA-m1", "mcp", None)]
+    lane_a = [e for _, e in pairs]
+    gate_mod.cap_lane_a(lane_a)
+    tmp = Path(tempfile.mkdtemp(prefix="detect-feed-adv-"))
+    run, snap, out = tmp / "run", tmp / "snap", tmp / "out"
+    run.mkdir(), snap.mkdir()
+    (snap / "items.jsonl").write_text("".join(json.dumps(it) + "\n" for it, _ in pairs), encoding="utf-8")
+    (run / "run.json").write_text(json.dumps({"snapshot": str(snap), "counts": {"items": 8, "lane_a": 8},
+                                               "lane_a_gate": {"model": "stub", "label": "x", "total_kept": 8}}), encoding="utf-8")
+    (run / "lane_a.json").write_text(json.dumps(lane_a), encoding="utf-8")
+    detect_feed.build(run, out)
+    feed = {e["id"]: e for e in json.loads((out / "feed.json").read_text(encoding="utf-8"))}
+    assert set(feed) == {"GHSA-v1", "MAL-2026-1", "GHSA-m1"}, sorted(feed)          # electron 2 · vite 6.x분은 detect 안 감 · litellm은 악성 기록이 대표
+    assert "GHSA-v2" in feed["GHSA-v1"]["summary"] and "GHSA-v3" not in feed["GHSA-v1"]["summary"]   # 접힌 해당분만 대표 입력에
+    assert "GHSA-l1" in feed["MAL-2026-1"]["summary"]
+    files = json.loads((out / "index.json").read_text(encoding="utf-8"))
+    assert "GHSA-v2" in (out / files[detect_feed.url_key(feed["GHSA-v1"]["url"])]["file"]).read_text(encoding="utf-8")
+    lst = {x["id"]: x for x in json.loads((out / "list.json").read_text(encoding="utf-8"))["always"]}
+    assert set(lst) == {e["id"] for e in lane_a}, sorted(lst)                         # 목록에는 전부
+    assert not lst["GHSA-e1"]["to_detect"] and "우리 버전 해당 없음" in lst["GHSA-e1"]["reason"] and lst["GHSA-e1"]["folded_into"] is None
+    assert lst["GHSA-e2"]["folded_into"] == "GHSA-e1" and not lst["GHSA-e2"]["to_detect"]   # 해당 없는 공지도 목록에선 패키지마다 한 줄
+    assert lst["GHSA-v3"]["folded_into"] is None                                           # 해당분 대표(v1)와 섞지 않는다
+    assert lst["GHSA-v2"]["folded_into"] == "GHSA-v1" and lst["GHSA-l1"]["folded_into"] == "MAL-2026-1"
+    assert "우리 버전 해당 없음" not in lst["MAL-2026-1"]["reason"] and "우리 버전 해당 없음" not in lst["GHSA-m1"]["reason"]
+
+
 TESTS = [(n, f) for n, f in globals().items() if n.startswith("test_")]
 
 
 def mutations():
+    from pipeline.importance import policy
     orig_key, orig_select = detect_feed.url_key, detect_feed.select
+    orig_quiet, orig_note = policy.quiet_advisory, detect_feed.folded_note
     return [
+        ("공지 해당 여부 무시", lambda: setattr(policy, "quiet_advisory", lambda e: False), lambda: setattr(policy, "quiet_advisory", orig_quiet)),
+        ("악성 기록도 해당 없으면 뺌", lambda: setattr(policy, "quiet_advisory", lambda e: bool(e.get("advisory")) and e["advisory"].get("affects_ours") is False),
+         lambda: setattr(policy, "quiet_advisory", orig_quiet)),
+        ("모르면 뺌", lambda: setattr(policy, "quiet_advisory", lambda e: bool(e.get("advisory")) and not e["advisory"].get("affects_ours") and not e["advisory"].get("malicious")),
+         lambda: setattr(policy, "quiet_advisory", orig_quiet)),
+        ("접힌 공지를 detect 입력에 안 붙임", lambda: setattr(detect_feed, "folded_note", lambda items, heading: ""), lambda: setattr(detect_feed, "folded_note", orig_note)),
         ("url 정규화 안 함 (fetch 404)", lambda: setattr(detect_feed, "url_key", lambda u: u), lambda: setattr(detect_feed, "url_key", orig_key)),
         ("상한 무시 (keep 전부)", lambda: setattr(detect_feed, "select", lambda la, all_kept=False: orig_select(la, True)),
          lambda: setattr(detect_feed, "select", orig_select)),
