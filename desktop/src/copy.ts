@@ -10,6 +10,7 @@ const term = {
   runs: 'log',
   capture: 'capture',
   topics: '화제',
+  weekList: '이번 주',
   demo: '데모',
   scheduled: '정기',
   loading: '불러오는 중…',
@@ -174,6 +175,30 @@ export const COPY = {
       cancel: '취소',
       rank: (n: number) => `${n}위`
     }
+  },
+
+  // 이번 주 목록 (components/WeekListView.tsx, HYO-168) — 훑어보기 화면, 버튼 없음
+  weekList: {
+    week: '주차',
+    sections: {
+      always: '항상 — 보안 · EOL · 모델 은퇴',
+      alarm: '경보 — 관문이 모르는 기술의 사고',
+      tech: '기술 질의',
+      slots: '자리 질의'
+    },
+    toDetect: (n: number) => `초안 후보 ${n}건`,
+    empty: '아직 목록이 없어요. 주간 수집이 끝나면 여기에 나와요',
+    emptyWeek: '이 주차에 보여 줄 항목이 없어요',
+    badge: { toDetect: '초안 후보', alarm: '경보', security: '보안' },
+    folded: (n: number) => `외 ${n}건`,
+    foldedHide: '접기',
+    alarmTitle: (names: string[]) => `걸린 이름: ${names.join(', ')}`,
+    current: (models: string[]) => `지금: ${models.length > 0 ? models.join(', ') : '없음'}`,
+    fit: (n: number) => `적합도 ${n}/3`,
+    none: '없음',
+    notOursToggle: (n: number) => `이번 주 큰 사고 중 우리 스택 아님 ${n}건`,
+    points: (n: number) => `${n}점`,
+    open: '새 창에서 열기'
   },
 
   // 지난 알림 패널 (components/NotificationsPanel.tsx)

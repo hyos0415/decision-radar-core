@@ -54,6 +54,10 @@ export type TopicParentCandidate = S['TopicParentCandidate']
 export type TopicParentResult = S['TopicParentResult']
 export type TopicParentVerdict = S['TopicParentFeedbackRequest']['verdict']
 
+/** 이번 주 목록 (HYO-168 · HYO-170) — 수집 PC가 만든 list.json을 읽기만 한다 */
+export type WeekList = S['WeekList']
+export type WeekListItem = S['WeekListItem']
+
 export type Health = S['Health']
 export type Mode = Health['mode']
 
@@ -143,6 +147,9 @@ export const api = {
         params: { query: { ...(week ? { week } : {}), ...(limit ? { limit } : {}) } }
       })
     ),
+  /** 이번 주 목록 — week를 안 주면 가장 새 주차. 목록 파일이 없으면 week가 null */
+  weekList: (week?: string) =>
+    unwrap(client.GET('/week-list', { params: { query: week ? { week } : {} } })),
   savedTopics: () => unwrap(client.GET('/topics/saved')).then((r) => r.items),
   saveTopic: (id: string, week: string) =>
     unwrap(
