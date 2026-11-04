@@ -188,7 +188,8 @@ def funnel_line(f):
     kept = f"관문 남김 {f.get('kept')}"
     gc = f.get("gate_counts")
     if gc:
-        kept += f" (모르는 기술 {gc['unknown']} · 분류 불가 {gc['unresolved']} · 팀원 스택 {gc['other_stack']}" + (f" · 오류 {gc['error']}" if gc.get("error") else "") + ")"
+        kept += (f" (모르는 기술 {gc['unknown']} · 분류 불가 {gc['unresolved']} · 팀원 스택 {gc['other_stack']}"
+                 + (f" · 스택에서 뺌 {gc['retired']}" if gc.get("retired") else "") + (f" · 오류 {gc['error']}" if gc.get("error") else "") + ")")
     line = f"수집 {f.get('items')} → 레인 A {f.get('lane_a')} → {kept} → detect 입력 {f.get('to_detect')}{cap}"
     if f.get("slots"):
         s = f["slots"]
