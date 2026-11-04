@@ -12,6 +12,7 @@ Claude Code 확장 백도어가 레인 B에 묻혔고, 같은 주 PHP2Shell은 �
 """
 import datetime
 import json
+import re
 import sys
 import tempfile
 import traceback
@@ -38,15 +39,19 @@ def _it(i, source, title, points=None, rank=None):
 ITEMS = [
     _it("hn:litellm", "hn", "Compromised LiteLLM 1.107.0 on PyPI Installs a Credential Stealer and Backdoor", 596),
     _it("reddit:litellm", "reddit", "PSA: litellm 1.107.0 on PyPI and Docker shipped an infostealer and backdoor", rank=11),
+    # W44 실제 id 순서: 본문 없는 트윗(186점)이 id로 앞 — id 순 대표면 이게 detect로 가고 400점 글이 접혔다
+    _it("hn:50216791", "hn", "Evolving Threat: http2shell is an RCE in Node, Python, and more", 186),
     _it("hn:broccoli", "hn", "Broccoli2Shell: Brotli decoder RCE in Node.js, Python and more", 400),
     _it("reddit:llamacve", "reddit", "PSA: llama.cpp CVE-2026-116096", rank=19),
+    _it("hn:50000001", "hn", "Claude Code CVE-2026-0001: prompt file path traversal", 90),
     _it("hn:cc", "hn", "Backdoors in official Claude Code extensions", 662),
+    _it("hn:k8s", "hn", "Attackers compromised a Kubernetes node via kubelet", 40),
     _it("hn:php", "hn", "Tell HN: I unknowingly broke the PHP RCE embargo. I am sorry", 751),
     _it("reddit:proxy", "reddit", "Reverse proxy for LLMs which can shut down your inference server in response to requests", rank=25),
     _it("hn:feature", "hn", "LiteLLM 1.108 adds streaming for every provider", 150),
     _it("hn:kernel", "hn", "Wanted to download an ISO, ended up writing a kernel exploit", 50),
 ]
-NET_IDS = {"hn:litellm", "reddit:litellm", "hn:broccoli", "reddit:llamacve", "hn:cc"}
+NET_IDS = {"hn:litellm", "reddit:litellm", "hn:50216791", "hn:broccoli", "reddit:llamacve", "hn:50000001", "hn:cc"}
 
 
 def _store():
@@ -73,6 +78,9 @@ def test_net_catches_incidents_and_skips_noise():
     hits = {it["id"]: m for it, m in alarm.net(ITEMS, STACK)}
     assert set(hits) == NET_IDS, sorted(hits)
     assert "Node.js" in hits["hn:broccoli"] and "Claude Code" in hits["hn:cc"]        # 런타임 · 도구 이름
+    assert hits["hn:50216791"] == ["Python", "Node.js"], hits["hn:50216791"]           # 줄임 이름 Node → Node.js (한 번만)
+    assert hits["hn:broccoli"].count("Node.js") == 1                                    # 「Node.js」에 줄임 이름이 또 붙지 않는다
+                                                                                         # 「Kubernetes node」(소문자)는 안 걸린다 — NET_IDS 밖
     no = alarm.not_ours(ITEMS, set(hits))
     assert [x["id"] for x in no] == ["hn:php"], no                                       # 인기 문턱 아래(kernel 50점) · 사고 낱말 없음(feature)은 빠진다
 
@@ -81,12 +89,12 @@ def test_run_filter_gates_net_items_with_name_hint():
     res = _run()
     a = {e["id"]: e for e in res["lane_a"]}
     assert set(a) == NET_IDS and all(e["alarm"] for e in a.values())                   # 레인 A가 아니라 그물에서 온 것만
-    assert res["counts"]["lane_a"] == 0 and res["counts"]["alarm_net"] == 5
+    assert res["counts"]["lane_a"] == 0 and res["counts"]["alarm_net"] == 7
     assert a["reddit:llamacve"]["gate"]["technologies"] == ["llama-cpp"] and a["reddit:llamacve"]["gate"]["keep"]   # 힌트: llama.cpp ↔ llama-cpp
     assert a["hn:broccoli"]["gate"]["keep"] and "python" in a["hn:broccoli"]["gate"]["technologies"]
     assert a["hn:cc"]["gate"]["status"] == "unclassified" and not a["hn:cc"]["gate"]["keep"]                        # 등급 파일에 없는 도구
     s = res["gate_summary"]
-    assert s["folded"] == {"reddit:litellm": "hn:litellm"}, s["folded"]                 # 같은 사고 글은 하나로
+    assert s["folded"] == {"reddit:litellm": "hn:litellm", "hn:50216791": "hn:broccoli"}, s["folded"]   # 같은 기술 경보는 하나로 · 대표는 인기 순
     assert {x["id"] for x in s["shown"]} == {"hn:litellm", "hn:broccoli", "reddit:llamacve"}, s["shown"]
     assert s["status_counts"]["lane_a"] == 0                                             # 판정 못 한 비율 경고는 레인 A만
     assert [x["id"] for x in res["alarm"]["not_ours"]] == ["hn:php"]
@@ -103,15 +111,25 @@ def test_detect_feed_lists_alarm_unknown_and_not_ours():
         (run / "run.json").write_text(json.dumps({"snapshot": str(snap), "counts": res["counts"],
                                                   "lane_a_gate": {"model": "stub", **res["gate_summary"]}}, ensure_ascii=False), encoding="utf-8")
         f = detect_feed.build(run, out)
-        feed = {e["id"]: (e["kind"], e["source_type"]) for e in json.loads((out / "feed.json").read_text(encoding="utf-8"))}
+        rows = json.loads((out / "feed.json").read_text(encoding="utf-8"))
+        feed = {e["id"]: (e["kind"], e["source_type"]) for e in rows}
         assert feed == {i: ("security_alert", "community") for i in ("hn:litellm", "hn:broccoli", "reddit:llamacve", "hn:cc")}, feed
+        # 접힌 글은 대표의 detect 입력(요약 · 전문 파일)에 제목 · 링크로 붙는다 — 다른 사고여도 detect가 본다
+        files = {k: v["file"] for k, v in json.loads((out / "index.json").read_text(encoding="utf-8")).items()}
+        broccoli = next(e for e in rows if e["id"] == "hn:broccoli")
+        body = (out / files[detect_feed.url_key(broccoli["url"])]).read_text(encoding="utf-8")
+        assert "http2shell" in broccoli["summary"] and "https://example.com/hn:50216791" in body, body
+        cc = next(e for e in rows if e["id"] == "hn:cc")
+        assert "CVE-2026-0001" in cc["summary"]                                         # 관문이 모르는 기술 묶음도 같다
+        assert "같은 기술의 다른 경보" not in next(e for e in rows if e["id"] == "reddit:llamacve")["summary"]
         lst = json.loads((out / "list.json").read_text(encoding="utf-8"))
-        assert [(x["id"], x["to_detect"]) for x in lst["alarm"]] == [("hn:cc", True)], lst["alarm"]
+        assert [(x["id"], x["to_detect"], x["folded_into"]) for x in lst["alarm"]] == [("hn:50000001", False, "hn:cc"), ("hn:cc", True, None)], lst["alarm"]
         assert [x["id"] for x in lst["not_ours"]] == ["hn:php"]
         always = {x["id"]: x for x in lst["always"]}
         assert always["reddit:litellm"]["folded_into"] == "hn:litellm" and always["hn:litellm"]["alarm"]
-        assert f["alarm"] == {"net": 5, "kept": 4, "unknown": 1, "not_ours": 1}, f["alarm"]
-        assert "경보 그물 5" in detect_feed.funnel_line(f)
+        assert always["hn:50216791"]["folded_into"] == "hn:broccoli"
+        assert f["alarm"] == {"net": 7, "kept": 5, "unknown": 2, "not_ours": 1}, f["alarm"]
+        assert "경보 그물 7" in detect_feed.funnel_line(f)
 
 
 def test_retired_technology_stays_quiet():
@@ -123,7 +141,7 @@ def test_retired_technology_stays_quiet():
     a = {e["id"]: e for e in res["lane_a"]}
     assert a["hn:litellm"]["gate"]["status"] == "retired" and not a["hn:litellm"]["gate"]["keep"], a["hn:litellm"]["gate"]
     assert "hn:litellm" not in {x["id"] for x in res["gate_summary"]["shown"]}
-    assert [e["id"] for e, _ in detect_feed.alarm_unknown(res["lane_a"])] == ["hn:cc"]        # 경보 칸은 Claude Code만
+    assert [e["id"] for e, _ in detect_feed.alarm_unknown(res["lane_a"])] == ["hn:50000001", "hn:cc"]   # 경보 칸은 Claude Code만
     assert res["gate_summary"]["status_counts"]["lane_a"] == 0                                  # 그물 글은 레인 A 비율에 안 든다
 
 
@@ -144,10 +162,14 @@ def mutations():
         ("관문이 모르는 기술은 버림", lambda: setattr(detect_feed, "alarm_unknown", lambda la: []), lambda: setattr(detect_feed, "alarm_unknown", orig_unknown)),
         ("같은 사고 글을 접지 않음", lambda: setattr(policy, "fold_key", lambda e: ("item", e["id"])), lambda: setattr(policy, "fold_key", orig_fold)),
         ("「우리 스택 아님」 인기 문턱 없음", lambda: setattr(alarm, "NOT_OURS_HN_POINTS", 0), lambda: setattr(alarm, "NOT_OURS_HN_POINTS", 100)),
+        ("경보 대표를 id 순으로", lambda: setattr(alarm, "popularity", lambda it: (0,)), lambda: setattr(alarm, "popularity", orig_popularity)),
+        ("접힌 경보를 detect 입력에 안 붙임", lambda: setattr(detect_feed, "kin_note", lambda items: ""), lambda: setattr(detect_feed, "kin_note", orig_kin_note)),
+        ("줄임 이름(Node) 없음", lambda: setattr(alarm, "CASED_ALIASES", {}), lambda: setattr(alarm, "CASED_ALIASES", {"Node": "Node.js"})),
+        ("줄임 이름을 대소문자 무시로", lambda: setattr(alarm, "ALIAS_FLAGS", re.I), lambda: setattr(alarm, "ALIAS_FLAGS", 0)),
     ]
 
 
-orig_runtime = alarm.RUNTIME_TERMS
+orig_runtime, orig_popularity, orig_kin_note = alarm.RUNTIME_TERMS, alarm.popularity, detect_feed.kin_note
 
 
 def run_mutations():

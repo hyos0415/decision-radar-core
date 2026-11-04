@@ -160,6 +160,10 @@ excludes:
 - 오프라인(W41~W45 얼린 스냅숏, 모델 없이): 그물 주 2 · 1 · 0 · 8 · 5건, 위 사고 전부 걸림. 흔한 영어 낱말인 스택 이름(`requests`)은 제목에서 이름으로 보지 않는다(W43 「… in response to requests」). 낱말 · 문턱은 첫 값 — 바꾸면 여기에 변경으로
 - 커뮤니티 출처는 늦다(HN 2일 지연 — §4-2). 주 그물은 공식 보안 채널(OSV · Python · Node.js 공지 — HYO-170 다, 수집기)이어야 하고 이 그물은 보조다
 
+변경 (2026-11-04, 사용자 — HYO-170 리뷰): 같은 기술 경보 글 묶음의 **대표를 인기 순**으로 고르고(HN 점수 → Reddit 피드 순위 — `alarm.popularity`, 이전엔 id 순), **접힌 글의 제목 · 링크를 대표의 detect 입력**(요약 · 전문 파일)에 「같은 기술의 다른 경보」로 붙인다. detect 건수는 그대로(기술당 1건). 줄임 이름 `Node` → `Node.js`를 더한다(대소문자 구분 — 「Kubernetes node」는 안 걸린다).
+- 왜: W44 python 묶음에서 id 순 대표가 본문 없는 트윗 미러 링크(http2shell 186점)가 되고, 전용 사이트 · CVE 블로그가 붙은 Broccoli2Shell(400점)이 접혔다 — 둘은 같은 Aikido 발표 계열이라 접기는 맞고 대표가 틀렸다. 다른 사고가 같은 기술에 겹치는 주도 있을 수 있어 접힌 글을 detect가 보게 한다(사용자: 아니다 싶으면 경보 글은 접지 않는 쪽으로 튼다). http2shell 제목의 「Node」가 `Node.js`에 안 걸렸다
+- 오프라인(W41~W45, 모델 없이): `Node`로 그물에 새로 걸린 글 0건(http2shell에 `Node.js` 표시만 더해짐) · 대표가 바뀐 묶음은 W44 python 하나
+
 ### 2-4. 주간 스냅숏 (HYO-72, 2026-10-06)
 
 - **저장 위치 = 새 private data repo `hyos0415/radar-snapshots`** (사용자 결정 2026-10-06). 기각: decision-radar(나중에 공개한다 — Reddit·HN 본문을 재배포하게 되고 git 이력에서 빼기 어렵다) · ADR repo(설정은 필요 없지만 사람이 쓴 결정 기록과 스킬 배포 대상 사이에 매주 기계 커밋이 섞인다). 대가: 클라우드 skill v2(HYO-75)가 읽으려면 GitHub App과 routine sources에 이 repo를 붙여야 한다

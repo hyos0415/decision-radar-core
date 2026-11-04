@@ -210,7 +210,7 @@ def fold_key(entry):
 
 def apply_topk(entries, k=None):
     """남긴 후보 → 질의별 top-k (§4 변경 2026-11-04). entries는 {"id", "kept_by", ...} (+ 접기에 쓰는 "title" · "release_line").
-    「항상」(보안 · 우리 버전 EOL · 모델 은퇴)은 몫 밖에서 전부 목록, detect로는 fold_key마다 가장 새 버전 1건(같으면 정렬 순서 앞).
+    「항상」(보안 · 우리 버전 EOL · 모델 은퇴)은 몫 밖에서 전부 목록, detect로는 fold_key마다 가장 새 버전 1건(경보 글은 가장 인기 있는 글 — "popularity", 같으면 정렬 순서 앞).
     나머지는 기술(cap_technology)마다 정렬 순서로 k개까지 목록 · DETECT_TOPK개까지 detect.
     → {"always", "listed"(항상 포함, 정렬 순서), "detect", "cut", "rank": {id: 기술 안 순위}, "query": {id: 기술}, "folded": {접힌 id: 대표 id}}"""
     k = TOPK if k is None else k
@@ -220,8 +220,14 @@ def apply_topk(entries, k=None):
     reps = {}
     for e in always:
         key, cur = fold_key(e), reps.get(fold_key(e))
-        new, old = release_of(e), release_of(cur) if cur else None
-        if cur is None or (new and old and new[1] > old[1]):      # 버전이 없으면(경보 글) 정렬 순서 앞이 대표
+        if cur is None:
+            better = True
+        elif e.get("alarm"):     # 경보 글은 인기 순 (alarm.popularity, 2026-11-04 — 제목의 버전 번호는 안 본다) · 같으면 정렬 순서 앞
+            better = tuple(e.get("popularity") or (9,)) < tuple(cur.get("popularity") or (9,))
+        else:
+            new, old = release_of(e), release_of(cur)
+            better = bool(new and old and new[1] > old[1])
+        if better:
             reps[key] = e
     folded = {e["id"]: reps[fold_key(e)]["id"] for e in always if reps[fold_key(e)]["id"] != e["id"]}
     used, rank, query, listed_ids, detect_ids = {}, {}, {}, {e["id"] for e in always}, {e["id"] for e in reps.values()}

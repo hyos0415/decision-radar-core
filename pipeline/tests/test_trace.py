@@ -148,26 +148,28 @@ def test_litellm_backdoor():
     assert n["end"] == "out" and n["stops"][0]["stage"] == "2a"
 
 
-def test_http2shell():
+# 변경 (2026-11-04, 사용자 나안 — #266): 경보 묶음 대표를 인기 순으로 · 줄임 이름 Node → Node.js. 그 전 정답은 「Broccoli2Shell(400점)이
+# http2shell(186점, 본문 없는 트윗)로 접힌다」였다 — 이 추적이 찾은 문제(docs/decisions/2026-11-04-missed-items.md 찾은 것 1)를 고친 결과로 바꾼다
+def test_http2shell_folds_into_broccoli2shell():
     t = then("2026-W44")[HTTP2SHELL]
     expect(t, "net", False, "경보 그물이 없었다")
     n = now("2026-W44")[HTTP2SHELL]
-    expect(n, "net", True, "python")                              # 제목 「Node」는 Node.js 이름에 안 걸린다 — Python으로만
+    expect(n, "net", True, "Python", "Node.js")                   # 제목 「Node」 → Node.js (#266)
     expect(n, "2a", True, "python L0")
     expect(n, "2c", True, "python L0 × security")
-    expect(n, "3", True, "「항상」")
-    expect(n, "5", True, "security_alert")
-    assert n["end"] == "detect"
+    expect(n, "3", False, "더 인기 있는 글로 접힘", BROCCOLI)       # 같은 기술 경보 — 대표는 400점 Broccoli2Shell
+    assert n["end"] == "list"
 
 
-def test_broccoli2shell_folds_into_http2shell():
+def test_broccoli2shell_is_alarm_representative():
     t = then("2026-W44")[BROCCOLI]
     expect(t, "net", False, "경보 그물이 없었다", "Node.js")
     n = now("2026-W44")[BROCCOLI]
     expect(n, "net", True, "Node.js")
     expect(n, "2c", True, "security")
-    expect(n, "3", False, "접힘", HTTP2SHELL)                     # 경보 접기 열쇠가 (alarm, 기술) — 다른 사고라도 python이면 한 건
-    assert n["end"] == "list"
+    expect(n, "3", True, "「항상」")
+    expect(n, "5", True, "security_alert")
+    assert n["end"] == "detect"
 
 
 # ---------------------------------------------------------------------------- 배관

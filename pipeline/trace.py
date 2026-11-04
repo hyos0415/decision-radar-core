@@ -123,6 +123,8 @@ def cap_step(entry, cap):
         if entry.get("shown"):
             return step("3", True, "「항상」 칸 — detect로" if entry.get("always") else f"기술 질의 {q} {entry.get('rank')}위 — detect로")
         if entry.get("listed"):
+            if entry.get("folded_into") and entry.get("alarm"):
+                return step("3", False, f"목록에만 — 「항상」 같은 기술 경보의 더 인기 있는 글로 접힘(제목 · 링크는 그 글 detect 입력에) → {entry['folded_into']}")
             if entry.get("folded_into"):
                 return step("3", False, f"목록에만 — 「항상」 같은 패키지 · 줄의 더 새 항목으로 접힘 → {entry['folded_into']}")
             return step("3", False, f"목록에만 — 기술 질의 {q} {entry.get('rank')}위 (detect 몫 밖)")
