@@ -1,0 +1,54 @@
+{
+ "structured_output": {
+  "judgments": [
+   {
+    "id": "hn:50181114",
+    "release": false,
+    "matches": []
+   },
+   {
+    "id": "vendor-diff:openai:https://platform.openai.com/docs/changelog@2026-W44#oct-22",
+    "release": true,
+    "matches": [
+     {
+      "slot": "gate-classifier",
+      "fit": 2,
+      "reason": "gpt-6-luna 기반 Decisions API가 정식 출시되어 구조화 데이터 입력·다수 질문 일괄 처리를 지원하므로 소식 분류에 gpt-6.1-sol과 비교할 만하나 단가는 글에서 확인되지 않는다."
+     }
+    ]
+   },
+   {
+    "id": "vendor-diff:openai:https://platform.openai.com/docs/changelog@2026-W44#oct-26",
+    "release": true,
+    "matches": [
+     {
+      "slot": "gate-classifier",
+      "fit": 2,
+      "reason": "빠르고 효율적인 GPT-6.1 Terra를 gpt-6.1-sol과 단가·속도로 비교해 볼 만하며 Responses API 제공이라 구조화 출력도 기대된다."
+     },
+     {
+      "slot": "fineprint-extraction",
+      "fit": 1,
+      "reason": "Haiku 4.5 대비 추출 품질·단가를 비교할 수 있으나 한국어와 구조화 출력 지원은 글에서 확인되지 않는다."
+     },
+     {
+      "slot": "finance-decomposition",
+      "fit": 1,
+      "reason": "claude-sonnet-5 대비 단가 비교 후보이나 한국어 주장 분해 성능은 확인되지 않는다."
+     }
+    ]
+   },
+   {
+    "id": "vendor:aws-bedrock:0c5c946db9a84a5a290bb7e1c3b4577820eb630a",
+    "release": true,
+    "matches": [
+     {
+      "slot": "medical-ops-llm",
+      "fit": 1,
+      "reason": "Bedrock에서 GPT-6.1 Terra가 GA되어 Nova Pro와 비교 후보이나 서울 또는 apac 추론 프로파일 제공 여부가 글에서 확인되지 않는다."
+     }
+    ]
+   }
+  ]
+ }
+}

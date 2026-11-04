@@ -1,0 +1,227 @@
+{
+ "version": 1,
+ "technologies": {
+  "openai": {
+   "technology": "openai",
+   "tiers": [
+    "L5"
+   ],
+   "unresolved": false,
+   "path": "prod",
+   "pin": "range",
+   "sensitive": false,
+   "local": false,
+   "model": "claude-sonnet-5-5",
+   "model_tiers": [
+    "L5"
+   ],
+   "model_unsure": false,
+   "reason": "openai는 NVIDIA API와 로컬 llama-server 등 모델·서비스를 호출하는 공급자 SDK 클라이언트로 쓰이므로 예 칸의 기본인 L5에 해당한다.",
+   "mismatch": null,
+   "signals": {
+    "manifest": "pyproject.toml",
+    "group": "main",
+    "pin": "range",
+    "image": false
+   },
+   "usage": "pyproject.toml 직접 의존성 (main) · finance_verifier CLAUDE.md 「의존성 → component」: openai (NVIDIA API 호출용) → eval · medical-mate-ai CLAUDE.md 「의존성 → component」: anthropic · openai · google-genai → eval (비교 모델 어댑터. 운영 이미지에 설치되지만 운영 경로는 부르지 않음. openai는 로컬 llama-server 호출에도 씀) · decision-radar CLAUDE.md 「의존성 → component」: openai-agents · openai → product (`spike/agents_sdk` — 최적화 모드, ADR 0008)",
+   "fingerprint": "53fc11d9234f",
+   "classified_at": "2026-10-20T16:14:42+0900"
+  },
+  "openai-agents": {
+   "technology": "openai-agents",
+   "tiers": [
+    "L4"
+   ],
+   "unresolved": false,
+   "path": "prod",
+   "pin": "pinned",
+   "sensitive": false,
+   "local": false,
+   "model": "claude-sonnet-5-5",
+   "model_tiers": [
+    "L4"
+   ],
+   "model_unsure": false,
+   "reason": "openai-agents는 에이전트 실행 구조(spike/agents_sdk, 최적화 모드)의 뼈대를 이루는 프레임워크로 쓰여 바꾸면 코드 전반이 바뀌므로 앱 프레임워크(L4)에 해당한다.",
+   "mismatch": null,
+   "signals": {
+    "manifest": "requirements.txt",
+    "group": "main",
+    "pin": "pinned",
+    "image": false
+   },
+   "usage": "requirements.txt 직접 의존성 (main) · decision-radar CLAUDE.md 「의존성 → component」: openai-agents · openai → product (`spike/agents_sdk` — 최적화 모드, ADR 0008)",
+   "fingerprint": "bb7c44a4de26",
+   "classified_at": "2026-10-15T18:56:43+0900"
+  },
+  "gpt-6-luna": {
+   "technology": "gpt-6-luna",
+   "tiers": [
+    "L2"
+   ],
+   "unresolved": false,
+   "path": "prod",
+   "pin": null,
+   "sensitive": false,
+   "local": false,
+   "model": "claude-sonnet-5-5",
+   "model_tiers": [
+    "L2"
+   ],
+   "model_unsure": false,
+   "reason": "gpt-6-luna는 OpenAI API로 호출하는 외부 호스팅 모델이므로 L2(모델)에 해당한다.",
+   "mismatch": null,
+   "signals": {},
+   "usage": "가벼운 태스크에 OpenAI API로 부르는 모델 (tier-screen · 레인 A 분류기)",
+   "fingerprint": "258c6201443f",
+   "classified_at": "2026-10-20T16:16:52+0900"
+  },
+  "gpt-6-sol": {
+   "technology": "gpt-6-sol",
+   "tiers": [
+    "L2"
+   ],
+   "unresolved": false,
+   "path": "prod",
+   "pin": null,
+   "sensitive": false,
+   "local": false,
+   "model": "claude-sonnet-5-5",
+   "model_tiers": [
+    "L2"
+   ],
+   "model_unsure": false,
+   "reason": "gpt-6-sol은 codex exec로 호출하는 외부 호스팅 LLM judge 모델이므로 개발 중에만 쓰이더라도 L2(모델)로 분류한다.",
+   "mismatch": null,
+   "signals": {},
+   "usage": "codex exec로 부르는 LLM judge 모델 (개발 중에만)",
+   "fingerprint": "d9bedcaece7d",
+   "classified_at": "2026-10-20T16:16:54+0900"
+  },
+  "python": {
+   "technology": "python",
+   "tiers": [
+    "L0",
+    "L1"
+   ],
+   "unresolved": false,
+   "path": "prod",
+   "pin": null,
+   "sensitive": false,
+   "local": false,
+   "model": "claude-sonnet-5-5",
+   "model_tiers": [
+    "L0",
+    "L1"
+   ],
+   "model_unsure": false,
+   "reason": "Python은 언어 런타임(L0)이면서 Dockerfile의 `python:3.12-slim` 베이스 이미지로 api 컴포넌트의 실행 기반(L1)도 겸하므로 두 등급에 걸친다.",
+   "mismatch": null,
+   "signals": {},
+   "usage": "medical-mate-ai CLAUDE.md 「의존성 → component」: python (Dockerfile `python:3.12-slim`) → api",
+   "fingerprint": "502c7f50d6e6",
+   "classified_at": "2026-10-15T18:56:58+0900"
+  },
+  "litellm": {
+   "technology": "litellm",
+   "tiers": [
+    "L5"
+   ],
+   "unresolved": false,
+   "path": "prod",
+   "pin": null,
+   "sensitive": false,
+   "local": false,
+   "model": "claude-sonnet-5-5",
+   "model_tiers": [
+    "L5"
+   ],
+   "model_unsure": false,
+   "reason": "litellm은 Claude 등 여러 모델 공급자 API를 하나의 인터페이스로 호출하는 클라이언트 라이브러리이므로 usage상 Claude 경로 호출에 쓰여 L5(공급자 SDK)로 본다.",
+   "mismatch": null,
+   "signals": {},
+   "usage": "decision-radar CLAUDE.md 「의존성 → component」: litellm (별도 venv) → product (`spike/agents_sdk`의 Claude 경로)",
+   "fingerprint": "baf1e3889d5f",
+   "classified_at": "2026-10-20T16:16:45+0900"
+  },
+  "amazon bedrock": {
+   "technology": "Amazon Bedrock",
+   "tiers": [
+    "L2",
+    "L3"
+   ],
+   "unresolved": false,
+   "path": "prod",
+   "pin": null,
+   "sensitive": false,
+   "local": false,
+   "model": "claude-sonnet-5-5",
+   "model_tiers": [
+    "L2",
+    "L3"
+   ],
+   "model_unsure": false,
+   "reason": "Bedrock은 usage상 nova-pro·nova-lite·Claude 같은 외부 API 모델 호출(L2)과 Guardrails PII 탐지라는 호스팅 서비스(L3)에 모두 쓰이며, Guardrails를 따로 분류하지 않으므로 두 등급에 걸친다.",
+   "mismatch": null,
+   "signals": {},
+   "usage": "medical-mate-ai 운영 기본 LLM 호출 서비스 (apac.amazon.nova-pro-v1:0, 서울 apac 추론 프로파일, 환자 데이터 경로) · Bedrock Guardrails로 트레이스 식별자(PII) 탐지 (운영) · 비교용 nova-lite · Claude 모델 (eval)",
+   "fingerprint": "38fbb1f0cab7",
+   "classified_at": "2026-10-20T16:16:56+0900"
+  },
+  "amazon bedrock guardrails": {
+   "technology": "Amazon Bedrock Guardrails",
+   "tiers": [
+    "L3"
+   ],
+   "unresolved": false,
+   "path": "prod",
+   "pin": null,
+   "sensitive": false,
+   "local": false,
+   "model": "claude-sonnet-5-5",
+   "model_tiers": [
+    "L3"
+   ],
+   "model_unsure": false,
+   "reason": "Amazon Bedrock Guardrails는 모델이 아니라 AWS가 운영하는 외부 관리형 서비스이고, 이 프로젝트에서는 환자 데이터 경로의 PII 탐지 필터로 호출하므로 L3(호스팅 서비스)에 해당한다.",
+   "mismatch": null,
+   "signals": {},
+   "usage": "medical-mate-ai 운영 — 트레이스 식별자(PII) 탐지 필터 medimate-trace-pii (서울, 환자 데이터 경로)",
+   "fingerprint": "71dd4bce8eae",
+   "classified_at": "2026-10-15T18:57:12+0900"
+  }
+ },
+ "overrides": {
+  "amazon bedrock": {
+   "technology": "Amazon Bedrock",
+   "note": "등급 검토표 2026-10-16 (사람 확인 — Claude 제안 + 사용자 판정)",
+   "sensitive": true
+  },
+  "gpt-6-sol": {
+   "technology": "gpt-6-sol",
+   "note": "등급 검토표 2026-10-16 (사람 확인 — Claude 제안 + 사용자 판정)",
+   "path": "dev"
+  },
+  "litellm": {
+   "technology": "litellm",
+   "note": "등급 검토표 2026-10-16 (사람 확인 — Claude 제안 + 사용자 판정)",
+   "path": "dev",
+   "retired": "2026-11-04 기각 — 런타임 스파이크(Agents SDK + Claude) 어댑터 잔재, ADR 0006 (HYO-170)"
+  },
+  "python": {
+   "technology": "python",
+   "note": "등급 검토표 2026-10-16 (사람 확인 — Claude 제안 + 사용자 판정)",
+   "tiers": [
+    "L0"
+   ]
+  },
+  "openai-agents": {
+   "technology": "openai-agents",
+   "tiers": [
+    "L4"
+   ],
+   "note": "HYO-128 채택 전 고정 2026-10-16 — 검토본 값 유지 (등급 프롬프트 v2 재분류가 덮지 않게, tier-examples §4-4)"
+  }
+ }
+}

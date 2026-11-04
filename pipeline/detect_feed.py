@@ -14,6 +14,7 @@
   basis.json   관문의 판정 기준 — 대상 레포별 커밋·우리 버전 (pipeline.basis, HYO-162). run 폴더에 있으면 그대로 옮긴다.
                detect가 지금 기준과 대조해 이미 반영된 릴리스를 뺀다 (모델에는 안 보인다)
   list.json    이번 주 목록 — 「항상」 · 기술 질의 top-k · 자리 질의 top-k (HYO-168, docs/design/query-topk.md). 화면이 읽는다
+  trace.jsonl  탈락 추적 — 항목마다 지나간 단계와 빠진 곳 · 이유 (pipeline.trace, HYO-171). `python -m pipeline.trace <검색어> --week <주>`가 읽는다
 
 무엇을 넣나: 관문이 남기고(keep) detect로 고른 것(shown — 「항상」을 (패키지 × 줄)마다 1건으로 접은 것 + 기술마다 top-k, 2026-11-04 전에는 5/N 상한 안)
 + run 폴더에 slots.json(pipeline.slots)이 있으면 자리마다 top-k 전부 (kind model_release). `--all-kept`면 관문이 남긴 것 전부.
@@ -25,6 +26,7 @@ import re
 import sys
 from pathlib import Path
 
+from . import trace
 from .basis import BASIS
 from .importance import policy
 from .profile_filter import read_items, write_json
@@ -206,6 +208,21 @@ def funnel_line(f):
     return line
 
 
+def choose(lane_a, slots, all_kept=False):
+    """detect로 갈 항목 — 관문 몫(select) + 자리 질의 top-k + 경보 그물의 관문이 모르는 기술. 탈락 추적의 재생(pipeline.trace --now)도 이 함수를 쓴다."""
+    chosen = select(lane_a, all_kept)
+    taken = {e["id"] for e in chosen}
+    for sid, (slot, x) in slot_picks(slots).items():   # 자리 질의 top-k (HYO-168) — 관문이 이미 넣은 항목이면 한 번만
+        if sid not in taken:
+            chosen.append({"id": sid, "slot": slot, "slot_hit": x})
+            taken.add(sid)
+    for e, rep in alarm_unknown(lane_a):               # 경보 그물 · 관문이 모르는 기술 (HYO-170) — 이름 묶음마다 하나
+        if e["id"] == rep and e["id"] not in taken:
+            chosen.append({**e, "alarm_unknown": True})
+            taken.add(e["id"])
+    return chosen
+
+
 def build(run_dir, out_dir, snapshot=None, all_kept=False):
     run_dir, out = Path(run_dir), Path(out_dir)
     manifest = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
@@ -216,17 +233,8 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
     snap = Path(snapshot or manifest["snapshot"])
     from . import union  # 합집합(HYO-167 D6) — 관문 · 자리 질의가 읽은 스킬만 항목. 꺼져 있으면 빈 목록
     by_id = {it["id"]: it for it in read_items(snap) + union.extra_items(run_dir)}
-    chosen = select(lane_a, all_kept)
-    taken = {e["id"] for e in chosen}
-    for sid, (slot, x) in slot_picks(slots).items():   # 자리 질의 top-k (HYO-168) — 관문이 이미 넣은 항목이면 한 번만
-        if sid not in taken:
-            chosen.append({"id": sid, "slot": slot, "slot_hit": x})
-            taken.add(sid)
+    chosen = choose(lane_a, slots, all_kept)
     alarm_info = json.loads((run_dir / ALARM).read_text(encoding="utf-8")) if (run_dir / ALARM).exists() else None
-    for e, rep in alarm_unknown(lane_a):               # 경보 그물 · 관문이 모르는 기술 (HYO-170) — 이름 묶음마다 하나
-        if e["id"] == rep and e["id"] not in taken:
-            chosen.append({**e, "alarm_unknown": True})
-            taken.add(e["id"])
     missing = [e["id"] for e in chosen if e["id"] not in by_id]
     if missing:
         raise SystemExit(f"스냅숏 {snap}에 없는 항목 {len(missing)}개 (다른 주의 run인가?): {missing[:3]}")
@@ -259,7 +267,17 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
     write_json(out / "search.json", [])
     write_json(out / "funnel.json", f)
     write_json(out / "gate.json", why)
-    write_json(out / LIST, week_list(lane_a, slots, {e["id"] for e in chosen}, alarm_info))
+    wl = week_list(lane_a, slots, {e["id"] for e in chosen}, alarm_info)
+    write_json(out / LIST, wl)
+    try:   # 탈락 추적 (HYO-171) — 보조 기록이다. 실패해도 detect 입력 · 게시는 그대로 (리뷰 11/4: 사슬을 멈추지 않게)
+        lane_b = {p.name[len("lane_b."):-len(".json")]: json.loads(p.read_text(encoding="utf-8")) for p in sorted(run_dir.glob("lane_b.*.json"))}
+        slots_raw = json.loads((run_dir / "slots-raw.json").read_text(encoding="utf-8")) if (run_dir / "slots-raw.json").exists() else None
+        trace.write(out / trace.TRACE, trace.build(list(by_id.values()), lane_a=lane_a, lane_b=lane_b, manifest=manifest, alarm_info=alarm_info,
+                                                   slots=slots, slots_raw=slots_raw, feed=feed, week_list=wl))
+    except Exception as e:  # noqa: BLE001
+        f["trace_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        write_json(out / "funnel.json", f)
+        print(f"  주의: 탈락 추적 파일을 못 썼다 — detect 입력은 그대로 ({f['trace_error']})", file=sys.stderr)
     if (run_dir / BASIS).exists():
         (out / BASIS).write_bytes((run_dir / BASIS).read_bytes())
     return f
