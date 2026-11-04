@@ -203,6 +203,8 @@ def test_advisories_quiet_when_not_ours_and_folded_per_package():
     lst = {x["id"]: x for x in json.loads((out / "list.json").read_text(encoding="utf-8"))["always"]}
     assert set(lst) == {e["id"] for e in lane_a}, sorted(lst)                         # 목록에는 전부
     assert not lst["GHSA-e1"]["to_detect"] and "우리 버전 해당 없음" in lst["GHSA-e1"]["reason"] and lst["GHSA-e1"]["folded_into"] is None
+    assert lst["GHSA-e2"]["folded_into"] == "GHSA-e1" and not lst["GHSA-e2"]["to_detect"]   # 해당 없는 공지도 목록에선 패키지마다 한 줄
+    assert lst["GHSA-v3"]["folded_into"] is None                                           # 해당분 대표(v1)와 섞지 않는다
     assert lst["GHSA-v2"]["folded_into"] == "GHSA-v1" and lst["GHSA-l1"]["folded_into"] == "MAL-2026-1"
     assert "우리 버전 해당 없음" not in lst["MAL-2026-1"]["reason"] and "우리 버전 해당 없음" not in lst["GHSA-m1"]["reason"]
 

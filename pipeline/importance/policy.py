@@ -228,9 +228,10 @@ def apply_topk(entries, k=None):
     dk = k if DETECT_TOPK is None else DETECT_TOPK
     ordered = sorted(entries, key=rank_key)
     always = [e for e in ordered if is_always(e)]
-    reps = {}
+    reps, quiet_reps = {}, {}
     for e in always:
-        if quiet_advisory(e):        # 우리 버전 해당 없는 공지 — 목록에만
+        if quiet_advisory(e):        # 우리 버전 해당 없는 공지 — 목록에만 (목록에서도 패키지마다 한 줄로 접는다 — W44 electron 9건)
+            quiet_reps.setdefault(fold_key(e), e)
             continue
         key, cur = fold_key(e), reps.get(fold_key(e))
         if cur is None:
@@ -242,8 +243,8 @@ def apply_topk(entries, k=None):
             better = bool(new and old and new[1] > old[1])          # 버전이 없으면(경보 글) 정렬 순서 앞이 대표
         if better:
             reps[key] = e
-    folded = {e["id"]: reps[fold_key(e)]["id"] for e in always
-              if not quiet_advisory(e) and reps[fold_key(e)]["id"] != e["id"]}
+    rep_of = {e["id"]: (quiet_reps if quiet_advisory(e) else reps)[fold_key(e)]["id"] for e in always}
+    folded = {i: r for i, r in rep_of.items() if r != i}
     used, rank, query, listed_ids, detect_ids = {}, {}, {}, {e["id"] for e in always}, {e["id"] for e in reps.values()}
     for e in ordered:
         t = cap_technology(e)
