@@ -408,7 +408,8 @@ function App(): React.JSX.Element {
           />
         )}
       </main>
-      <Toaster theme="system" position="bottom-right" />
+      {/* HYO-140: 하단 우측은 상세 처리 버튼(action-bar)·대화상자 버튼 자리라 위쪽 가운데로 둔다 */}
+      <Toaster theme="system" position="top-center" />
     </div>
   )
 }
