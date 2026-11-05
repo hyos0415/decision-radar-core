@@ -5187,6 +5187,133 @@
         ],
         "title": "ScheduleFlow"
       },
+      "SourceHealth": {
+        "properties": {
+          "week": {
+            "type": "string",
+            "title": "Week"
+          },
+          "line": {
+            "type": "string",
+            "title": "Line",
+            "description": "한 줄 요약 — 이상이 없으면 「출처 이상 없음 (N곳)」"
+          },
+          "checked": {
+            "type": "integer",
+            "title": "Checked",
+            "description": "검사한 출처 수"
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/SourceHealthProblem"
+            },
+            "type": "array",
+            "title": "Problems"
+          }
+        },
+        "type": "object",
+        "required": [
+          "week",
+          "line",
+          "checked",
+          "problems"
+        ],
+        "title": "SourceHealth"
+      },
+      "SourceHealthProblem": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "source",
+              "page",
+              "feed",
+              "url"
+            ],
+            "title": "Kind"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "출처 이름"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "reasons": {
+            "items": {
+              "$ref": "#/components/schemas/SourceHealthReason"
+            },
+            "type": "array",
+            "title": "Reasons"
+          },
+          "streak": {
+            "type": "integer",
+            "title": "Streak",
+            "description": "몇 주째 이상인가"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since",
+            "description": "처음 이상이 보인 주차"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "kind",
+          "name",
+          "reasons",
+          "streak"
+        ],
+        "title": "SourceHealthProblem"
+      },
+      "SourceHealthReason": {
+        "properties": {
+          "rule": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "zero",
+              "half",
+              "moved",
+              "stale"
+            ],
+            "title": "Rule",
+            "description": "걸린 규칙"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "description": "사람이 읽는 근거 한 줄"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rule",
+          "detail"
+        ],
+        "title": "SourceHealthReason"
+      },
       "Target": {
         "properties": {
           "repo": {
@@ -5947,6 +6074,17 @@
               }
             ],
             "description": "이 주 입력으로 끝까지 돈 마지막 detect (이 기기 기록). 없으면 null — 줄의 detect도 null"
+          },
+          "source_health": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceHealth"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "출처 건강 검사 (HYO-172) — 수집 PC가 얼릴 때 쓴 `<주차>/source-health.json`. 그 주 파일이 없거나 못 읽으면 null"
           }
         },
         "type": "object",

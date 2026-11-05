@@ -1602,6 +1602,32 @@ def scenario_hyo168(tmp):
     check("실사용: radar-snapshots/detect의 주차", j["week"] == "2026-W46" and j["weeks"] == ["2026-W46"], j["weeks"])
     check("실사용: 예전 파일은 경보 · 우리 스택 아님을 빈 칸으로", j["alarm"] == [] and j["not_ours"] == [] and j["tech"][0]["items"][0]["folded_into"] is None, j)
 
+    # 출처 건강 검사 (HYO-172) — 실사용은 <snapshot_repo>/<주차>/source-health.json (detect/ 옆)
+    check("출처 건강: 파일 없으면 null", j["source_health"] is None, j.get("source_health"))
+    sh_path = os.path.join(snaps, "2026-W46", "source-health.json")
+    os.makedirs(os.path.dirname(sh_path))
+    sh = {"version": 1, "week": "2026-W46", "checked": 23, "line": "출처 고장 1 — google-gemini (2주째)",
+          "problems": [{"key": "page:https://ai.google.dev/x", "kind": "page", "name": "google-gemini", "url": "https://ai.google.dev/x",
+                        "reasons": [{"rule": "failed", "detail": "page text too short"}, {"rule": "half", "detail": "본문 45자"}],
+                        "streak": 2, "since": "2026-W45", "evidence": {"chars": 45}, "later_key": 1}],
+          "known": []}
+    json.dump(sh, open(sh_path, "w", encoding="utf-8"), ensure_ascii=False)
+    h = c.get("/week-list").json()["source_health"]
+    p0 = h["problems"][0]
+    check("출처 건강: 필드가 그대로 나온다 (evidence · 모르는 키는 뺀다)",
+          h["line"] == sh["line"] and h["checked"] == 23 and p0["name"] == "google-gemini" and p0["kind"] == "page" and p0["streak"] == 2
+          and p0["since"] == "2026-W45" and [r["rule"] for r in p0["reasons"]] == ["failed", "half"] and "evidence" not in p0, h)
+    open(sh_path, "w", encoding="utf-8").write("{ broken")
+    r = c.get("/week-list")
+    check("출처 건강: 깨진 JSON → null · 목록은 그대로", r.status_code == 200 and r.json()["source_health"] is None and r.json()["week"] == "2026-W46", r.text)
+    os.remove(sh_path)
+    svc.mode, svc.snapshot_repo = "stub", os.path.join(tmp, "nowhere168")
+    dev_dir = os.path.join(data, "lists", devdata.LIST_FIXTURE_WEEK)
+    json.dump({**sh, "week": devdata.LIST_FIXTURE_WEEK}, open(os.path.join(dev_dir, "source-health.json"), "w", encoding="utf-8"), ensure_ascii=False)
+    check("출처 건강: 개발 예시는 list.json 옆 파일", c.get("/week-list").json()["source_health"]["checked"] == 23)
+    os.remove(os.path.join(dev_dir, "source-health.json"))
+    svc.mode, svc.snapshot_repo = "real", snaps
+
     # detect 판정 되돌려 붙이기 (HYO-171 나안) — list.json은 그대로, 이 기기의 detect 실행 기록에서 읽을 때 붙인다
     check("detect 전: 실행 없음 · 줄 판정 null", j["detect_run"] is None and j["tech"][0]["items"][0]["detect"] is None, j)
     old["tech"][0]["items"].append({"id": "f", "title": "electron v45.0.2", "url": "u2", "rank": 2, "to_detect": False})

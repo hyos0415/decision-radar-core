@@ -57,3 +57,5 @@ GPT-6.1 Terra(10/26 출시)를 제품이 네 번 받아 놓고 한 번도 보여
 백엔드가 주마다 목록(세 칸 · 질의별 묶음)을 내보낸다 — 계약은 `desktop/backend/schemas.py`. 화면은 별도 세션이 병렬로 만든다 (사용자 11/4).
 
 **detect 판정 붙이기 (2026-11-05, 사용자 나안 · HYO-171)**: `list.json`은 수집 PC가 만들고 detect는 맥이 돌린다 — 파일에 되돌려 쓰지 않는다. `GET /week-list`가 읽을 때 이 기기의 detect 실행 기록(`runs.jsonl`) 중 **그 주 입력으로 끝까지 돈 마지막 실행**을 찾아 `to_detect` 줄마다 `detect`(초안 · 기존 결정 · 버림 · 대상 밖 · 초안 실패 · 판정 없음)를 붙이고, 그 실행을 `detect_run`으로 알린다. 아직 안 돌았으면 둘 다 null(화면은 「초안 후보」). 판정 칸이 겹치면 초안 > 기존 결정 > 대상 밖 > 초안 실패 > 버림 (`service._detect_verdicts`).
+
+**출처 건강 한 줄 (2026-11-05, HYO-172)**: 수집 PC가 얼릴 때 주차 폴더에 `source-health.json`을 쓴다 — 실사용 `<radar-snapshots>/<주차>/source-health.json`(`detect/` 옆), 개발 예시 `<data>/lists/<주차>/source-health.json`(list.json 옆). `GET /week-list`가 읽어 `source_health`로 싣고, 이상(`problems`)이 하나라도 있으면 「이번 주」 머리말 아래에 `line` 한 줄을 경고색으로 보인다(마우스를 올리면 출처별 이유 · N주째). 파일이 없거나(옛 주차) 못 읽으면 null이고 한 줄도 없다 — 목록은 막지 않는다. 모르는 키는 무시한다.

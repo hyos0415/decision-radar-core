@@ -205,6 +205,16 @@ export const COPY = {
       unjudged: 'detect가 돌았지만 이 줄을 언급하지 않았어요',
       old: '판정을 줄마다 남기기 전 실행이라 버린 소식만 알 수 있어요'
     },
+    // 출처 건강 검사 (HYO-172) — 이상이 있을 때만 머리말 아래 한 줄. 자세한 건 마우스를 올리면
+    healthTitle: (
+      ps: { name: string; url?: string | null; reasons: { detail: string }[]; streak: number }[]
+    ) =>
+      ps
+        .map(
+          (p) =>
+            `${p.name}${p.url ? ` · ${p.url}` : ''} — ${p.reasons.map((r) => r.detail).join(' · ')} (${p.streak}주째)`
+        )
+        .join('\n'),
     detectRun: (time: string) => `detect ${time}`,
     detectNotYet: 'detect 아직',
     folded: (n: number) => `외 ${n}건`,
