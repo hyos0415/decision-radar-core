@@ -1,4 +1,4 @@
-// Whether an Inbox single-key shortcut (j/k · a/e/r · 1/2/3) may fire; returns the key ('j', '1', …) or null.
+// Whether an Inbox single-key shortcut (j/k · a/e/r/c · 1/2/3) may fire; returns the key ('j', '1', …) or null.
 // Off with a modifier held (OS shortcuts), with focus in a text field, or while a dialog is open.
 // Reads e.code, not e.key, so the same physical key works with the Korean IME on.
 export function shortcutKey(e: KeyboardEvent): string | null {

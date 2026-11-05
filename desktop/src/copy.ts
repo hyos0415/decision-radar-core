@@ -18,7 +18,8 @@ const term = {
   close: '닫기',
   approve: '승인',
   edit: '고쳐서 승인',
-  reject: '거부'
+  reject: '거부',
+  ack: '확인함'
 }
 
 export const COPY = {
@@ -75,6 +76,8 @@ export const COPY = {
     close: '상세 닫기',
     numberNote: '번호는 저장할 때 정해져요',
     changes: '기다리는 동안 바뀐 점',
+    revisitMet: '재검토 조건을 충족했어요',
+    openAdr: 'ADR 열기',
     done: '처리했어요',
     blocked: '지금은 처리할 수 없어요',
     error: '처리하지 못했어요',
