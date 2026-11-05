@@ -51,13 +51,25 @@ python collector/tests/test_snapshot.py                # 오프라인 테스트
 - first-seen 원장(`first_seen.jsonl`)으로 다시 나온 항목에 `new: false` — 지우지 않는다
 - 벤더 페이지는 전문을 `pages/`에 두고 지난 주와 줄 단위로 비교해 `page-diff` 항목을 만든다. 그래서 수집기는 페이지만 `TEXT_MAX`에서 자르지 않고 블록마다 줄을 바꾼다
 - 얼린 주는 고치지 않는다 (같은 주를 다른 실행으로 다시 얼리면 거부). 놓친 주는 다음 manifest의 `missing_weeks`
+- 주소를 옮긴 페이지(`vendors.yaml`의 `replaces`)는 옛 페이지를 한 주 `replaced`로 두고, 옛 주소의 마지막 정상 주 이후 날짜 블록을 page-diff로 메운다 (HYO-172)
+
+### 출처 건강 검사 (HYO-172)
+
+얼릴 때 출처마다 지난 4주와 비교해 이상(실패 · 0건 · 절반 미만 · 다른 도메인 · 3주째 그대로)만 `<주>/source-health.json`에 쓴다. 규칙은 doc-pipeline §4-7. 주간 사슬 `health` 단계가 `.env`의 `LINEAR_API_KEY`로 Linear 이슈를 만든다(없으면 건너뜀 — 앱 「이번 주」 머리 한 줄은 보인다). 일부러 둘 이상은 `source-health.yaml`에 예외로.
+
+```bash
+python -m collector.health check --week 2026-W45     # 얼린 주를 다시 검사해 출력만
+python -m collector.health alert --week 2026-W46 --dry-run
+python collector/tests/test_health.py
+```
 
 ## 기준은 설정 파일에 있다
 
 | 파일 | 무엇 |
 |---|---|
 | `pool.yaml` | 서브레딧·flair, HN 점수·지연, GitHub 두 통로·의존성 repo 덮어쓰기, HF 태스크 — doc-pipeline §4 결정 그대로 |
-| `vendors.yaml` | 벤더 → 경로 매핑 (손으로 관리) · 일부러 뺀 것 · 벤더가 아닌 것 |
+| `vendors.yaml` | 벤더 → 경로 매핑 (손으로 관리) · 일부러 뺀 것 · 벤더가 아닌 것 · 옮긴 주소(`replaces`) |
+| `source-health.yaml` | 출처 건강 검사의 알려진 예외 (HYO-172) |
 
 기준을 바꾸면 파일의 `version`을 올린다. `run.json`에 버전이 남는다.
 
