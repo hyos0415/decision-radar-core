@@ -635,6 +635,10 @@ kbd {
 .page-header label {
   -webkit-app-region: no-drag;
 }
+/* 토스트는 드래그 영역에 걸쳐도 마우스를 받는다 (HYO-140 — 위쪽 가운데로 옮겼다) */
+[data-sonner-toaster] {
+  -webkit-app-region: no-drag;
+}
 .page-title {
   min-width: 0;
   display: flex;
