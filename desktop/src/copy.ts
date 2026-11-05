@@ -233,7 +233,18 @@ export const COPY = {
     title: '지난 알림',
     empty: '지난 알림이 없어요',
     gone: '이 항목은 더 이상 열 수 없어요',
-    fallbackTitle: '알림'
+    fallbackTitle: '알림',
+    // 예전 기록(title 없음)의 kind → 제목 (HYO-141)
+    kindTitle: {
+      capture: '승인할 초안이 있어요',
+      detect: '검토할 detect 초안이 있어요',
+      pending: 'capture를 접수했어요',
+      revisit: '재검토 조건을 충족했어요',
+      mixed: 'Inbox에 새 항목이 있어요',
+      inbox_new: 'Inbox에 새 항목이 있어요',
+      run_drafts: '새 초안이 나왔어요',
+      run_alerts: '재검토 알림이 나왔어요'
+    } as Record<string, string>
   },
 
   // 사이드바 — 영어로 쓴다
