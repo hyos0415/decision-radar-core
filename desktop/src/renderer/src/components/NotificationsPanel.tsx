@@ -121,9 +121,13 @@ export function NotificationsPanel({
               }}
             >
               <span className="notif-title">
-                {n.title ?? n.kind ?? COPY.notifications.fallbackTitle}
+                {n.title ||
+                  (n.kind && Object.hasOwn(COPY.notifications.kindTitle, n.kind)
+                    ? COPY.notifications.kindTitle[n.kind]
+                    : COPY.notifications.fallbackTitle)}
               </span>
-              <span className="notif-body" title={n.body ?? undefined}>
+              {/* body가 없어도 칸은 남긴다 — 3열 그리드라 빼면 시각이 가운데 칸으로 밀린다 */}
+              <span className="notif-body" title={n.body || undefined}>
                 {n.body}
               </span>
               <span className="row-meta notif-at">
