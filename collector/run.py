@@ -217,7 +217,8 @@ def main(argv=None):
     run["finished"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     run["items"] = len(all_items)
     run["http"] = {"requests": len(fetcher.log),
-                   "non_200": [{"url": u, "status": s, "attempts": n} for u, s, n in fetcher.log if s != 200]}
+                   "non_200": [{"url": u, "status": s, "attempts": n} for u, s, n in fetcher.log if s != 200],
+                   "redirects": [{"url": u, "final": f} for u, f in dict(fetcher.redirects).items()]}
     (out / "run.json").write_text(json.dumps(run, ensure_ascii=False, indent=1), encoding="utf-8", newline="\n")
     print(f"-> {out} ({len(all_items)} items)")
     return 0 if not any("crash" in r for r in run["sources"].values()) else 1

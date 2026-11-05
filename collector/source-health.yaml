@@ -1,0 +1,7 @@
+# 출처 건강 검사의 알려진 예외 (HYO-172, collector/health.py) — 이상으로 잡히지만 일부러 두는 것.
+# key는 source-health.json 문제의 key 그대로. 등록하면 알림 · 앱 한 줄에서 빠지고 파일의 known에만 남는다.
+version: 1
+known:
+  - key: "url:https://pypi.org/pypi/python/json"
+    why: "python은 PyPI 패키지가 아니다 — 대상 repo 의존성에 python이 있어 매주 404 (W42부터, 해 없음)"
+    since: 2026-11-05

@@ -115,6 +115,40 @@ def test_page_diff_baseline_changed_unchanged_missing():
     assert all(r["text"] == "" for r in rows if r["meta"].get("kind") == "page")   # items.jsonl에는 경로만
 
 
+def test_moved_page_replaced_and_backfilled():
+    """HYO-172 — 주소를 옮긴 페이지(vendors.yaml replaces): 옛 페이지는 한 주만 「replaced」, 새 페이지는 기준이지만
+    옛 주소가 마지막으로 정상이던 주(W41)의 가장 늦은 날짜 뒤 블록만 page-diff로 메운다. 고장 난 W42(본문 급감)는 기준으로 안 쓴다."""
+    repo, out = env()
+    old, new = "https://ai.google.dev/gemini-api/docs/changelog", "https://aistudio.google.com/docs/changelog.md"
+    make_run(out, "20261006-0700-weekly", "2026-10-06T07:00:00Z",
+             [page("google-gemini", old, "Gemini API\nOctober 13, 2026\nReleased 3.6 Flash\nOctober 6, 2026\nReleased 3.5 Pro")])
+    assert freeze(repo, out) == 0
+    make_run(out, "20261013-0700-weekly", "2026-10-13T07:00:00Z", [page("google-gemini", old, "Gemini")])   # JS 페이지 — 본문 급감
+    assert freeze(repo, out) == 0
+    md = '## November 4, 2026  {% id="11-04-2026" %}\nVoice remixing\n## October 20, 2026  {% id="10-20-2026" %}\n2.5 Pro deprecation\n' \
+         '## October 13, 2026  {% id="10-13-2026" %}\nReleased 3.6 Flash'
+    moved = page("google-gemini", new, md)
+    moved["meta"].update(format="markdown", replaces=old)
+    make_run(out, "20261020-0700-weekly", "2026-10-20T07:00:00Z", [moved])
+    assert freeze(repo, out) == 0
+    m = snapshot.read_manifest(repo, "2026-W43")
+    rows = {p["url"]: p for p in m["pages"]}
+    assert rows[old]["status"] == "replaced" and rows[old]["replaced_by"] == new, rows
+    assert rows[new]["status"] == "baseline" and rows[new]["backfill"] == {"replaces": old, "from_week": "2026-W41", "after": "2026-10-13"}, rows[new]
+    items = [json.loads(l) for l in (repo / "2026-W43" / "items.jsonl").read_text(encoding="utf-8").splitlines()]
+    d = next(i for i in items if i["meta"].get("kind") == "page-diff")
+    assert "Voice remixing" in d["text"] and "2.5 Pro deprecation" in d["text"] and "3.6 Flash" not in d["text"], d["text"]
+    assert m["counts"]["page_diffs"] == 1   # 메우기 항목도 페이지 변경으로 센다
+    h = json.loads((repo / "2026-W43" / "source-health.json").read_text(encoding="utf-8"))
+    assert h["week"] == "2026-W43" and not any(p["url"] == old for p in h["problems"]), h   # 옮긴 옛 주소는 고장이 아니다
+    h42 = json.loads((repo / "2026-W42" / "source-health.json").read_text(encoding="utf-8"))
+    assert any(p["url"] == old and any(r["rule"] == "half" for r in p["reasons"]) for p in h42["problems"]), h42   # W42에는 잡혔어야 한다
+    make_run(out, "20261027-0700-weekly", "2026-10-27T07:00:00Z", [moved])
+    assert freeze(repo, out) == 0
+    rows = {p["url"]: p for p in snapshot.read_manifest(repo, "2026-W44")["pages"]}
+    assert old not in rows and rows[new]["status"] == "unchanged", rows   # replaced는 한 주만 남는다
+
+
 def test_frozen_week_is_not_rewritten():
     repo, out = env()
     make_run(out, "20261006-0700-weekly", "2026-10-06T07:00:00Z", [item("hn:1")])

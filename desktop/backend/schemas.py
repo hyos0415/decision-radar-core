@@ -494,6 +494,28 @@ class WeekListSlot(BaseModel):
     items: list[WeekListItem] = Field(description="새 후보 top-k (적합도 문턱 이상) — 없으면 빈 목록 = 「없음」")
 
 
+class SourceHealthReason(BaseModel):
+    rule: Literal["failed", "zero", "half", "moved", "stale"] = Field(description="걸린 규칙")
+    detail: str = Field(description="사람이 읽는 근거 한 줄")
+
+
+class SourceHealthProblem(BaseModel):
+    key: str
+    kind: Literal["source", "page", "feed", "url"]
+    name: str = Field(description="출처 이름")
+    url: Optional[str] = None
+    reasons: list[SourceHealthReason]
+    streak: int = Field(description="몇 주째 이상인가")
+    since: Optional[str] = Field(default=None, description="처음 이상이 보인 주차")
+
+
+class SourceHealth(BaseModel):
+    week: str
+    line: str = Field(description="한 줄 요약 — 이상이 없으면 「출처 이상 없음 (N곳)」")
+    checked: int = Field(description="검사한 출처 수")
+    problems: list[SourceHealthProblem]
+
+
 class WeekList(BaseModel):
     """이번 주 목록 — 수집 PC가 만든 `detect/<주차>/list.json` (pipeline.detect_feed). 화면은 칸마다 묶어 한 줄씩 보인다."""
     week: Optional[str] = Field(description="보여 주는 주차. 목록 파일이 하나도 없으면 null")
@@ -505,6 +527,7 @@ class WeekList(BaseModel):
     not_ours: list[WeekListItem] = Field(description="우리 스택 아님 — 그 주 큰 사고 중 우리 스택에 안 걸린 것 (보고 넘겼다는 표시)")
     counts: dict[str, int] = Field(description="칸별 건수 + to_detect")
     detect_run: Optional[WeekListRun] = Field(default=None, description="이 주 입력으로 끝까지 돈 마지막 detect (이 기기 기록). 없으면 null — 줄의 detect도 null")
+    source_health: Optional[SourceHealth] = Field(default=None, description="출처 건강 검사 (HYO-172) — 수집 PC가 얼릴 때 쓴 `<주차>/source-health.json`. 그 주 파일이 없거나 못 읽으면 null")
 
 
 class SavedTopic(BaseModel):

@@ -7,16 +7,19 @@
 
 얼린 코퍼스는 그대로 두고 읽을 때 쪼갠다 — 지난 주 스냅숏에도 같은 코드가 바로 걸린다 (재생 HYO-164).
 - 대상: URL에 changelog · release-notes가 든 페이지만. deprecations 표는 행마다 날짜가 있어 쪼개지 않는다
-- 날짜 줄(「Oct 26」 · 「October 23, 2026」 · 「2026-10-26」, 앞의 # · 뒤의 아이콘 글자는 무시)에서 블록을 나눈다.
+- 날짜 줄(「Oct 26」 · 「October 23, 2026」 · 「2026-10-26」, 앞의 # · 뒤의 아이콘 글자 · `{% … %}` 앵커 꼬리는 무시)에서 블록을 나눈다.
   내용 없는 블록(목차의 날짜 줄)은 버리고, 같은 날짜 블록은 합친다
 - 블록 항목: id · url에 `#<날짜>`를 붙인다(detect 입력의 index가 url로 찾는다). 첫 날짜 앞의 줄(메뉴 등)과 빠진 줄은
   원래 항목(원래 id)에 남긴다 — 둘 다 없으면 원래 항목은 없어진다
 - 날짜 줄이 없으면 그대로 둔다
 """
+import datetime as dt
 import re
 
 SPLIT_URL = re.compile(r"(?i)changelog|release-notes|release_notes")
-_MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+_MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+_MONTH = r"(?:" + "|".join(_MONTHS) + r")[a-z]*\.?"
+_TAG = re.compile(r"\{%.*?%\}")  # 마크다운 원문의 앵커 꼬리 — Gemini 「## November 4, 2026  {% id="11-04-2026" %}」 (HYO-172)
 DATE_LINE = re.compile(r"(?i)^(?:" + _MONTH + r"\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{4}-\d{2}-\d{2})$")
 TITLE_CHARS = 140
 
@@ -24,7 +27,49 @@ TITLE_CHARS = 140
 def date_of(line):
     """날짜만 있는 줄이면 그 날짜 문구, 아니면 None. 앞의 #과 공백, 끝의 아이콘 글자(사용자 영역 U+E000~U+F8FF)는 뗀다."""
     s = re.sub(r"[-]", "", line).strip().lstrip("#").strip()
+    s = _TAG.sub("", s).strip()
     return s if DATE_LINE.match(s) else None
+
+
+def parse_date(s, year=None):
+    """date_of가 돌려준 문구 → datetime.date. 연도 없는 「Oct 26」은 year로 채운다(없으면 None). 못 읽으면 None."""
+    s = s.strip()
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", s)
+    if m:
+        y, mo, d = map(int, m.groups())
+    else:
+        m = re.match(r"(?i)^([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,\s*(\d{4}))?$", s)
+        if not m or m.group(1).lower() not in _MONTHS:
+            return None
+        mo, d = _MONTHS.index(m.group(1).lower()) + 1, int(m.group(2))
+        y = int(m.group(3)) if m.group(3) else year
+        if y is None:
+            return None
+    try:
+        return dt.date(y, mo, d)
+    except ValueError:
+        return None
+
+
+def blocks_after(text, after, year=None):
+    """페이지 전문에서 날짜가 after(date)보다 뒤인 날짜 블록만 — 날짜 줄을 포함한 줄 목록 (HYO-172 빈 주 메우기).
+    snapshot이 이 줄들로 page-diff 항목을 만들면 split_item이 다시 날짜마다 쪼갠다."""
+    out, keep = [], False
+    for line in _lines(text):
+        d = date_of(line)
+        if d:
+            when = parse_date(d, year)
+            keep = bool(when and when > after)
+        if keep:
+            out.append(line)
+    return out
+
+
+def latest_date(text, year=None):
+    """페이지 전문의 날짜 줄 중 가장 늦은 날짜. 없으면 None."""
+    ds = [parse_date(d, year) for d in (date_of(l) for l in _lines(text)) if d]
+    ds = [d for d in ds if d]
+    return max(ds) if ds else None
 
 
 def slug(date):

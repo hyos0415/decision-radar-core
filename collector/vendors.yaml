@@ -3,7 +3,7 @@
 # 규칙이 뽑은 이름이 아래 어느 벤더의 match에도 안 걸리면 「경로 없음」으로 보고한다.
 #
 # 경로 종류: github_releases (REST API — releases.atom은 최근 10건뿐이라 쓰지 않는다) · atom · rss (include로 거른다) · page (본문 텍스트를 받아 해시 — 비교는 스냅숏 단계)
-version: 1
+version: 2  # 2: Gemini 마크다운 원문 · replaces (HYO-172)
 vendors:
   anthropic:
     match: [anthropic, claude]
@@ -35,7 +35,10 @@ vendors:
   google-gemini:
     match: [gemini, google-genai]
     feeds:
-      - {kind: page, url: "https://ai.google.dev/gemini-api/docs/changelog"}
+      # 2026-11-03(W45)부터 HTML 페이지가 aistudio.google.com으로 301 → JS로 그리는 페이지(본문 45자). 마크다운 원문으로 바꾼다 (HYO-172).
+      # ai.google.dev/…/changelog.md.txt도 여기로 301이라 최종 주소를 바로 쓴다 — 리다이렉트가 매주 「도메인 바뀜」으로 울리지 않게.
+      # replaces: 옛 주소 — 얼릴 때 옛 페이지를 「바뀜(replaced)」으로 두고, 마지막 정상 주 이후 날짜 블록만 page-diff로 메운다
+      - {kind: page, format: markdown, url: "https://aistudio.google.com/docs/changelog.md", replaces: "https://ai.google.dev/gemini-api/docs/changelog"}
   typesafe:
     match: [jev, typesafe]
     feeds:
