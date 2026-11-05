@@ -408,8 +408,13 @@ function App(): React.JSX.Element {
           />
         )}
       </main>
-      {/* HYO-140: 하단 우측은 상세 처리 버튼(action-bar)·대화상자 버튼 자리라 위쪽 가운데로 둔다 */}
-      <Toaster theme="system" position="top-center" />
+      {/* HYO-140: 하단 우측은 상세 처리 버튼(action-bar)·대화상자 버튼 자리라 위쪽 가운데로 둔다.
+          위쪽 머리말 줄은 창 드래그 영역이라 그 아래로 내린다 (design.css [data-sonner-toaster] no-drag) */}
+      <Toaster
+        theme="system"
+        position="top-center"
+        offset={{ top: 'calc(var(--header-h) + 8px)' }}
+      />
     </div>
   )
 }
