@@ -83,6 +83,7 @@ WEEK_NAME = re.compile(r"^\d{4}-W\d{2}$")  # 화제 주차 파일 이름 (pipeli
 CAPTURE_SEED_POSTS = 5  # capture 창에 미리 채우는 글 수
 LISTS_DIR = "lists"     # 스텁 · 데모의 이번 주 목록 `<data>/lists/<주차>/list.json` (실사용은 radar-snapshots/detect/<주차>/list.json, HYO-168)
 LIST_FILE = "list.json"
+SOURCE_HEALTH_FILE = "source-health.json"  # 출처 건강 검사 (HYO-172)
 LIST_KEYS = ("always", "tech", "slots", "alarm", "not_ours")
 TOPICS_MORE_MAX = 120  # 화제 탭 「더 보기」 상한 (HYO-154) — 부모 제안 규칙을 오프라인에서 잰 범위 (gold-w42·w43 상위 120)
 ALERTS_FILE = "alerts.json"  # revisit 충족 알림 — Inbox 항목 (화면 설계 ③). 앱 데이터에만, ADR repo에는 안 쓴다
@@ -915,7 +916,7 @@ class RadarService:
         weeks = self._list_weeks()
         empty = {k: [] for k in LIST_KEYS}
         if not weeks:
-            return {"week": None, "weeks": [], **empty, "counts": {}}
+            return {"week": None, "weeks": [], **empty, "counts": {}, "source_health": None}
         week = week or weeks[0]
         if week not in weeks:
             raise ServiceError(404, f"목록 주차 {week!r}가 없다 — {weeks}")
@@ -924,12 +925,28 @@ class RadarService:
         except (OSError, ValueError) as e:
             raise ServiceError(500, f"목록 파일 {week}/{LIST_FILE}을 못 읽었다: {e}")
         out = {"week": week, "weeks": weeks, **empty, **{k: f.get(k) or [] for k in LIST_KEYS}, "counts": f.get("counts") or {}}
+        out["source_health"] = self._source_health(week)
         out["detect_run"], verdicts = self._week_detect(week)
         rows = out["always"] + out["alarm"] + out["not_ours"] + [x for g in out["tech"] + out["slots"] for x in g.get("items") or []]
         for x in rows:  # 파일은 그대로 두고 읽을 때 붙인다 — list.json은 수집 PC, detect는 이 기기 (나안, 11/5)
             if x.get("to_detect") and out["detect_run"]:
                 x["detect"] = verdicts.get(x.get("url")) or {"verdict": "unjudged", "reason": None, "adr": None}
         return out
+
+    def _source_health(self, week):
+        """출처 건강 검사 결과 (HYO-172) — 수집 PC가 얼린 `<주차>/source-health.json`. 실사용은 radar-snapshots의 주차 폴더,
+        개발 예시는 list.json 옆. 없거나 못 읽으면 None (목록 전체를 막지 않는다)."""
+        base = self.snapshot_repo if self.mode == "real" else self._list_root()
+        try:
+            f = json.load(open(os.path.join(base, week, SOURCE_HEALTH_FILE), encoding="utf-8"))
+            if not isinstance(f, dict) or not isinstance(f.get("problems"), list):
+                return None
+            return {"week": f.get("week") or week, "line": f.get("line") or "", "checked": int(f.get("checked") or 0),
+                    "problems": [{"key": p["key"], "kind": p["kind"], "name": p["name"], "url": p.get("url"),
+                                  "reasons": [{"rule": r["rule"], "detail": r.get("detail") or ""} for r in p.get("reasons") or []],
+                                  "streak": int(p.get("streak") or 1), "since": p.get("since")} for p in f["problems"]]}
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
 
     def _week_detect(self, week):
         """그 주 입력으로 끝까지 돈 마지막 detect — (실행 요약, {url: 판정}). 없으면 (None, {}).

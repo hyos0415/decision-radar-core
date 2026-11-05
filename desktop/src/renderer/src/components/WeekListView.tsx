@@ -233,6 +233,7 @@ export function WeekListView({ refreshKey }: { refreshKey: number }): React.JSX.
     ? data.always.length + data.alarm.length + techCount + slotCount + data.not_ours.length
     : 0
   const toDetect = data?.counts.to_detect
+  const health = data?.source_health ?? null
   const run = data?.detect_run ?? null
   const runNote = run ? T.detectRun(run.at.slice(5, 16).replace('T', ' ')) : T.detectNotYet
 
@@ -259,6 +260,15 @@ export function WeekListView({ refreshKey }: { refreshKey: number }): React.JSX.
           </label>
         )}
       </PageHeader>
+
+      {health && health.problems.length > 0 && (
+        <div
+          className="tone-warning cursor-default border-b px-(--gutter) py-1.5 text-xs"
+          title={T.healthTitle(health.problems)}
+        >
+          {health.line}
+        </div>
+      )}
 
       {error && !data && <div className="empty-state">{error}</div>}
       {error && data && <div className="px-(--gutter) py-2 text-xs">{error}</div>}

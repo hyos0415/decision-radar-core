@@ -1607,6 +1607,66 @@ export interface components {
       /** Due */
       due: boolean
     }
+    /** SourceHealth */
+    SourceHealth: {
+      /** Week */
+      week: string
+      /**
+       * Line
+       * @description 한 줄 요약 — 이상이 없으면 「출처 이상 없음 (N곳)」
+       */
+      line: string
+      /**
+       * Checked
+       * @description 검사한 출처 수
+       */
+      checked: number
+      /** Problems */
+      problems: components['schemas']['SourceHealthProblem'][]
+    }
+    /** SourceHealthProblem */
+    SourceHealthProblem: {
+      /** Key */
+      key: string
+      /**
+       * Kind
+       * @enum {string}
+       */
+      kind: 'source' | 'page' | 'feed' | 'url'
+      /**
+       * Name
+       * @description 출처 이름
+       */
+      name: string
+      /** Url */
+      url?: string | null
+      /** Reasons */
+      reasons: components['schemas']['SourceHealthReason'][]
+      /**
+       * Streak
+       * @description 몇 주째 이상인가
+       */
+      streak: number
+      /**
+       * Since
+       * @description 처음 이상이 보인 주차
+       */
+      since?: string | null
+    }
+    /** SourceHealthReason */
+    SourceHealthReason: {
+      /**
+       * Rule
+       * @description 걸린 규칙
+       * @enum {string}
+       */
+      rule: 'failed' | 'zero' | 'half' | 'moved' | 'stale'
+      /**
+       * Detail
+       * @description 사람이 읽는 근거 한 줄
+       */
+      detail: string
+    }
     /** Target */
     Target: {
       /** Repo */
@@ -2005,6 +2065,8 @@ export interface components {
       }
       /** @description 이 주 입력으로 끝까지 돈 마지막 detect (이 기기 기록). 없으면 null — 줄의 detect도 null */
       detect_run?: components['schemas']['WeekListRun'] | null
+      /** @description 출처 건강 검사 (HYO-172) — 수집 PC가 얼릴 때 쓴 `<주차>/source-health.json`. 그 주 파일이 없거나 못 읽으면 null */
+      source_health?: components['schemas']['SourceHealth'] | null
     }
     /**
      * WeekListDetect
