@@ -919,6 +919,12 @@ kbd {
   font-size: 13px;
   font-weight: 500;
 }
+.callout p {
+  margin: 6px 0 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.6;
+}
 .callout ul {
   margin: 6px 0 0;
   padding-left: 18px;

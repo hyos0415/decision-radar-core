@@ -364,6 +364,10 @@ function App(): React.JSX.Element {
                 onClose={closeItem}
                 onPrev={step(-1)}
                 onNext={step(1)}
+                onOpenDecision={(id) => {
+                  setDecisionId(id)
+                  setView('decisions')
+                }}
                 active={!loading}
               />
             ) : (

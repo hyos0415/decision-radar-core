@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useState } from 'react'
-import { AlertTriangle, ChevronDown, ChevronUp, X } from 'lucide-react'
+import { AlertTriangle, BellRing, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   api,
@@ -44,6 +44,7 @@ export function ItemDetail({
   onClose,
   onPrev,
   onNext,
+  onOpenDecision,
   active
 }: {
   detail: InboxDetail
@@ -51,6 +52,7 @@ export function ItemDetail({
   onClose: () => void
   onPrev: (() => void) | null
   onNext: (() => void) | null
+  onOpenDecision: (adr: string) => void
   // false while the next item loads — the old detail stays visible but must not take keys
   active: boolean
 }): React.JSX.Element {
@@ -61,13 +63,13 @@ export function ItemDetail({
   const [editOpen, setEditOpen] = useState(false)
   const [rejectOpen, setRejectOpen] = useState(false)
 
-  const has = (a: 'approve' | 'edit' | 'reject'): boolean => detail.actions.includes(a)
+  const has = (a: 'approve' | 'edit' | 'reject' | 'ack'): boolean => detail.actions.includes(a)
   const stateLabel = STATE_LABEL[detail.state]
 
   // Returns the result so the edit dialog can show edit_errors.
   // Outside the dialog (plain approve — R18 affected, or after a stale answer) they go in the action bar.
   async function run(
-    kind: 'approve' | 'edit' | 'reject',
+    kind: 'approve' | 'edit' | 'reject' | 'ack',
     draft?: AdrDraft,
     answer: StaleAnswer | null = null
   ): Promise<ActionResult | null> {
@@ -80,7 +82,9 @@ export function ItemDetail({
           ? await api.approve(detail.id, answer)
           : kind === 'edit'
             ? await api.edit(detail.id, draft as AdrDraft, answer)
-            : await api.reject(detail.id)
+            : kind === 'reject'
+              ? await api.reject(detail.id)
+              : await api.ack(detail.id)
       if (SUCCESS_OUTCOMES.includes(res.outcome)) {
         toast(res.message ?? COPY.item.done)
         setEditOpen(false)
@@ -106,7 +110,7 @@ export function ItemDetail({
     }
   }
 
-  // a approve · e edit dialog · r reject confirm; while stale is up, 1 continue · 2 rejudge · 3 discard.
+  // a approve · e edit dialog · r reject confirm · c ack (revisit · pending); while stale is up, 1 continue · 2 rejudge · 3 discard.
   // No button, no key (R8). Nothing while busy.
   const onKey = useEffectEvent((e: KeyboardEvent): void => {
     const k = shortcutKey(e)
@@ -121,6 +125,8 @@ export function ItemDetail({
       act = () => setEditOpen(true)
     } else if (k === 'r' && has('reject')) {
       act = () => setRejectOpen(true)
+    } else if (k === 'c' && has('ack')) {
+      act = () => void run('ack')
     }
     if (!act) return
     e.preventDefault()
@@ -193,6 +199,16 @@ export function ItemDetail({
           </div>
         )}
 
+        {detail.kind === 'revisit' && detail.message && (
+          <div className="callout">
+            <BellRing size={16} />
+            <div>
+              <strong>{COPY.item.revisitMet}</strong>
+              <p>{detail.message}</p>
+            </div>
+          </div>
+        )}
+
         <Markdown>{detail.markdown}</Markdown>
       </div>
 
@@ -258,6 +274,23 @@ export function ItemDetail({
                 {COPY.term.edit}
                 <kbd className="key-hint" aria-hidden>
                   E
+                </kbd>
+              </Button>
+            )}
+            {detail.kind === 'revisit' && detail.adr && (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() => onOpenDecision(detail.adr as string)}
+              >
+                {COPY.item.openAdr}
+              </Button>
+            )}
+            {has('ack') && (
+              <Button disabled={busy} onClick={() => run('ack')}>
+                {COPY.term.ack}
+                <kbd className="key-hint" aria-hidden>
+                  C
                 </kbd>
               </Button>
             )}
