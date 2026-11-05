@@ -114,7 +114,7 @@ with tempfile.TemporaryDirectory() as td:
     cand = lambda u: {"technology": "vLLM", "dependency": True, "affected": [{"repo": "fv", "component": "serving"}], "source_urls": [u]}
     kept, skipped, _ = detect_ops.screen(sc, [cand("u32"), cand("u31")], feed)
     check("R14 대응형: 다음 릴리스는 초안 · 같은 릴리스는 건너뜀", [k["candidate"]["source_urls"] for k in kept] == [["u32"]]
-          and skipped == [{"technology": "vLLM", "adr": "0012"}], (kept, skipped))
+          and skipped == [{"technology": "vLLM", "adr": "0012", "source_urls": ["u31"]}], (kept, skipped))
     check("R14 대응형: 이전 대응 ADR이 related로 초안에 간다", [r["id"] for r in kept[0]["related"]] == ["0012"] if kept else False)
 
 # HYO-162: 관문 판정 뒤 이미 반영된 릴리스는 모델에 넘기기 전에 코드가 뺀다 — 입력 폴더의 basis.json(관문 기준) × RADAR_BASIS_NOW(지금 기준)

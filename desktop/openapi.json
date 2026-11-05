@@ -5936,6 +5936,17 @@
             "type": "object",
             "title": "Counts",
             "description": "칸별 건수 + to_detect"
+          },
+          "detect_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WeekListRun"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "이 주 입력으로 끝까지 돈 마지막 detect (이 기기 기록). 없으면 null — 줄의 detect도 null"
           }
         },
         "type": "object",
@@ -5951,6 +5962,53 @@
         ],
         "title": "WeekList",
         "description": "이번 주 목록 — 수집 PC가 만든 `detect/<주차>/list.json` (pipeline.detect_feed). 화면은 칸마다 묶어 한 줄씩 보인다."
+      },
+      "WeekListDetect": {
+        "properties": {
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "existing",
+              "excluded",
+              "dropped",
+              "failed",
+              "unjudged"
+            ],
+            "title": "Verdict",
+            "description": "draft 초안 씀 · existing 이미 있는 결정과 겹쳐 건너뜀(R14) · excluded 버림(모델 · 이미 반영됨 · 이전에 거부한 소식) · dropped 대상 repo가 안 맞아 버림(R10) · failed 초안 쓰다 실패 · unjudged detect가 돌았는데 이 줄을 언급하지 않았다"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "버린 · 실패한 이유. draft · existing · unjudged는 null"
+          },
+          "adr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adr",
+            "description": "draft면 쓴 초안, existing이면 겹친 ADR 번호 (예 0017)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "verdict"
+        ],
+        "title": "WeekListDetect",
+        "description": "detect가 이 줄을 어떻게 했나 (HYO-171) — 이 기기의 detect 실행 기록에서 읽을 때 붙인다. list.json에는 없다."
       },
       "WeekListItem": {
         "properties": {
@@ -6097,6 +6155,17 @@
             ],
             "title": "Points",
             "description": "HN 점수 (우리 스택 아님만, Reddit은 null)"
+          },
+          "detect": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WeekListDetect"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "to_detect인 줄만 — 그 주 입력으로 돈 detect가 있으면 판정. 아직 안 돌았으면 null"
           }
         },
         "type": "object",
@@ -6105,6 +6174,37 @@
         ],
         "title": "WeekListItem",
         "description": "이번 주 목록의 한 줄 (HYO-168 · HYO-170 — docs/design/query-topk.md). 칸마다 쓰는 필드가 다르다 — 안 쓰면 null."
+      },
+      "WeekListRun": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "detect 실행 id (GET /runs)"
+          },
+          "at": {
+            "type": "string",
+            "title": "At"
+          },
+          "trigger": {
+            "type": "string",
+            "title": "Trigger",
+            "description": "manual · schedule · job"
+          },
+          "recorded": {
+            "type": "boolean",
+            "title": "Recorded",
+            "description": "false면 url별 판정을 남기기 전(11/5)의 실행 — 버린 소식만 붙고 초안 · 겹침은 unjudged로 보인다"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "at",
+          "trigger",
+          "recorded"
+        ],
+        "title": "WeekListRun"
       },
       "WeekListSlot": {
         "properties": {

@@ -94,8 +94,8 @@ def detect_graph(ctx, model):
         try:
             r = await agent("detect-draft", DRAFT_INSTRUCTIONS, DraftBody, draft_prompt(inp["now"], cand, inp["item"], related))
         except Exception as e:
-            return {"p3": [{"kind": "model_error", "stage": "draft", "technology": cand["technology"], "type": type(e).__name__,
-                            "message": str(e)[:300]}]}
+            return {"p3": [{"kind": "model_error", "stage": "draft", "technology": cand["technology"], "source_urls": cand.get("source_urls") or [],
+                            "type": type(e).__name__, "message": str(e)[:300]}]}
         return {"drafts": [{"w": w, "draft": r.structured.model_dump()}]}
 
     def write_node(state):

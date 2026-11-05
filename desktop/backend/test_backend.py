@@ -907,6 +907,11 @@ def scenario_m2(data):
     check("detect: 버린 소식마다 이유·제목, 건수는 요약과 같다 (HYO-97)", r["excluded"] and all(e["reason"] and e["title"] for e in r["excluded"])
           and f"제외 {len(r['excluded'])}건" in r["summary"][0] and all(e["why"] is None for e in r["excluded"]), r["excluded"])
     check("detect 실행 기록에도 버린 이유 (runs.jsonl)", c.get("/runs").json()["items"][0]["excluded"] == r["excluded"])
+    vd = svc.runs(limit=1)[0]["verdicts"]  # 목록 줄에 되돌려 붙일 url별 판정 (HYO-171) — 초안 · 겹침 · 버림이 다 url로 남는다
+    check("detect 실행 기록에 url별 판정: 초안마다 adr · 겹침(LEANN) · 버림마다 이유",
+          {v["adr"] for v in vd.values() if v["verdict"] == "draft"} == {x["adr"] for x in r["drafts"]}
+          and sum(v["verdict"] == "existing" for v in vd.values()) == 1
+          and all(vd[e["url"]]["verdict"] == "excluded" and vd[e["url"]]["reason"] == e["reason"] for e in r["excluded"]), vd)
     check("detect 실행 사용량 — 스텁 추정 · 비용 0", r["usage"] and r["usage"]["estimated"] and r["usage"]["cost_usd"] == 0, r["usage"])
     ds2 = {d["id"]: d for d in c.get("/decisions").json()["items"]}
     check("detect 초안은 proposed", all(ds2[x["adr"]]["status"] == "proposed" for x in r["drafts"]))
@@ -1596,6 +1601,35 @@ def scenario_hyo168(tmp):
     j = c.get("/week-list").json()
     check("실사용: radar-snapshots/detect의 주차", j["week"] == "2026-W46" and j["weeks"] == ["2026-W46"], j["weeks"])
     check("실사용: 예전 파일은 경보 · 우리 스택 아님을 빈 칸으로", j["alarm"] == [] and j["not_ours"] == [] and j["tech"][0]["items"][0]["folded_into"] is None, j)
+
+    # detect 판정 되돌려 붙이기 (HYO-171 나안) — list.json은 그대로, 이 기기의 detect 실행 기록에서 읽을 때 붙인다
+    check("detect 전: 실행 없음 · 줄 판정 null", j["detect_run"] is None and j["tech"][0]["items"][0]["detect"] is None, j)
+    old["tech"][0]["items"].append({"id": "f", "title": "electron v45.0.2", "url": "u2", "rank": 2, "to_detect": False})
+    old["always"] = [{"id": "s", "title": "electron GHSA", "url": "us", "to_detect": True}]
+    json.dump(old, open(os.path.join(snaps, "detect", "2026-W46", "list.json"), "w", encoding="utf-8"))
+
+    def add_run(**kw):
+        with open(svc.runs_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"flow": "detect", "ok": True, "trigger": "schedule", "summary": [], "drafts": [], "alerts": [], **kw}, ensure_ascii=False) + "\n")
+    add_run(id="r-old", at="2026-11-10T18:00", input="2026-W46", excluded=[{"url": "us", "reason": "이미 반영됨: electron 45.0.1"}])
+    j = c.get("/week-list").json()
+    tech, alw = j["tech"][0]["items"], j["always"][0]
+    check("예전 실행(url별 판정 전): 버린 소식만 붙고 나머지는 unjudged · recorded false",
+          j["detect_run"]["id"] == "r-old" and not j["detect_run"]["recorded"] and alw["detect"]["verdict"] == "excluded"
+          and alw["detect"]["reason"].startswith("이미 반영됨") and tech[0]["detect"]["verdict"] == "unjudged", j)
+    add_run(id="r-new", at="2026-11-10T19:00", input="2026-W46", excluded=[],
+            verdicts=service._detect_verdicts({"candidates": [{"adr": "0018", "source_urls": ["u"]}], "excluded": [{"url": "u", "reason": "x"}]}))
+    add_run(id="r-fail", at="2026-11-10T20:00", input="2026-W46", ok=False, verdicts={})
+    add_run(id="r-w45", at="2026-11-10T21:00", input="2026-W45", verdicts={"us": {"verdict": "draft", "reason": None, "adr": "0019"}})
+    j = c.get("/week-list").json()
+    tech, alw = j["tech"][0]["items"], j["always"][0]
+    check("같은 주 입력으로 끝까지 돈 마지막 실행 (실패 · 다른 주는 안 본다)", j["detect_run"]["id"] == "r-new" and j["detect_run"]["recorded"], j["detect_run"])
+    check("초안이 버림을 이긴다 · adr", tech[0]["detect"] == {"verdict": "draft", "reason": None, "adr": "0018"}, tech[0])
+    check("detect로 안 간 줄은 null · 갔는데 언급 없으면 unjudged", tech[1]["detect"] is None and alw["detect"]["verdict"] == "unjudged", (tech[1], alw))
+    vd = service._detect_verdicts({"skipped_existing": [{"adr": "0016", "source_urls": ["a"]}], "dropped": [{"reason": "R10: x", "source_urls": ["b"]}],
+                                   "draft_failed": [{"type": "E", "message": "m", "source_urls": ["c"]}], "excluded": [{"url": "a", "reason": "y"}]})
+    check("판정 칸: 겹침 · R10 · 실패 · 앞 칸이 이긴다",
+          [vd[k]["verdict"] for k in "abc"] == ["existing", "dropped", "failed"] and vd["a"]["adr"] == "0016" and vd["c"]["reason"] == "E: m", vd)
 
 
 def scenario_hyo127(tmp):

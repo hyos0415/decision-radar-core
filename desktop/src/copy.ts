@@ -190,6 +190,23 @@ export const COPY = {
     empty: '아직 목록이 없어요. 주간 수집이 끝나면 여기에 나와요',
     emptyWeek: '이 주차에 보여 줄 항목이 없어요',
     badge: { toDetect: '초안 후보', alarm: '경보', security: '보안' },
+    // detect가 이 줄을 어떻게 했나 (HYO-171) — 「초안 후보」 자리에 대신 보인다. 이유는 마우스를 올리면
+    verdict: {
+      draft: (adr: string | null) => (adr ? `초안 ${adr}` : '초안'),
+      existing: (adr: string | null) => (adr ? `기존 결정 ${adr}` : '기존 결정'),
+      excluded: '버림',
+      applied: '이미 반영됨',
+      dropped: '대상 밖',
+      failed: '초안 실패',
+      unjudged: '판정 없음'
+    },
+    verdictTitle: {
+      existing: '이미 있는 결정과 겹쳐 새 초안을 쓰지 않았어요',
+      unjudged: 'detect가 돌았지만 이 줄을 언급하지 않았어요',
+      old: '판정을 줄마다 남기기 전 실행이라 버린 소식만 알 수 있어요'
+    },
+    detectRun: (time: string) => `detect ${time}`,
+    detectNotYet: 'detect 아직',
     folded: (n: number) => `외 ${n}건`,
     foldedHide: '접기',
     alarmTitle: (names: string[]) => `걸린 이름: ${names.join(', ')}`,

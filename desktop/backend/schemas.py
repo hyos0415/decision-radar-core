@@ -448,6 +448,22 @@ class TopicList(BaseModel):
     items: list[TopicRow] = Field(description="상위 limit개 (없으면 k개), 순위대로")
 
 
+class WeekListDetect(BaseModel):
+    """detect가 이 줄을 어떻게 했나 (HYO-171) — 이 기기의 detect 실행 기록에서 읽을 때 붙인다. list.json에는 없다."""
+    verdict: Literal["draft", "existing", "excluded", "dropped", "failed", "unjudged"] = Field(
+        description="draft 초안 씀 · existing 이미 있는 결정과 겹쳐 건너뜀(R14) · excluded 버림(모델 · 이미 반영됨 · 이전에 거부한 소식) · "
+                    "dropped 대상 repo가 안 맞아 버림(R10) · failed 초안 쓰다 실패 · unjudged detect가 돌았는데 이 줄을 언급하지 않았다")
+    reason: Optional[str] = Field(default=None, description="버린 · 실패한 이유. draft · existing · unjudged는 null")
+    adr: Optional[str] = Field(default=None, description="draft면 쓴 초안, existing이면 겹친 ADR 번호 (예 0017)")
+
+
+class WeekListRun(BaseModel):
+    id: str = Field(description="detect 실행 id (GET /runs)")
+    at: str
+    trigger: str = Field(description="manual · schedule · job")
+    recorded: bool = Field(description="false면 url별 판정을 남기기 전(11/5)의 실행 — 버린 소식만 붙고 초안 · 겹침은 unjudged로 보인다")
+
+
 class WeekListItem(BaseModel):
     """이번 주 목록의 한 줄 (HYO-168 · HYO-170 — docs/design/query-topk.md). 칸마다 쓰는 필드가 다르다 — 안 쓰면 null."""
     id: str = Field(description="수집 항목 id (스냅숏 items.jsonl의 id)")
@@ -463,6 +479,7 @@ class WeekListItem(BaseModel):
     source: Optional[str] = Field(default=None, description="출처 (vendor · hn · reddit · huggingface …) — 자리 질의 · 우리 스택 아님")
     fit: Optional[int] = Field(default=None, description="자리 적합도 0~3 (자리 질의만)")
     points: Optional[int] = Field(default=None, description="HN 점수 (우리 스택 아님만, Reddit은 null)")
+    detect: Optional[WeekListDetect] = Field(default=None, description="to_detect인 줄만 — 그 주 입력으로 돈 detect가 있으면 판정. 아직 안 돌았으면 null")
 
 
 class WeekListTech(BaseModel):
@@ -487,6 +504,7 @@ class WeekList(BaseModel):
     alarm: list[WeekListItem] = Field(description="경보 — 관문이 모르는 런타임 · 도구의 사고 글 (HYO-170)")
     not_ours: list[WeekListItem] = Field(description="우리 스택 아님 — 그 주 큰 사고 중 우리 스택에 안 걸린 것 (보고 넘겼다는 표시)")
     counts: dict[str, int] = Field(description="칸별 건수 + to_detect")
+    detect_run: Optional[WeekListRun] = Field(default=None, description="이 주 입력으로 끝까지 돈 마지막 detect (이 기기 기록). 없으면 null — 줄의 detect도 null")
 
 
 class SavedTopic(BaseModel):

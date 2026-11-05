@@ -2003,6 +2003,30 @@ export interface components {
       counts: {
         [key: string]: number
       }
+      /** @description 이 주 입력으로 끝까지 돈 마지막 detect (이 기기 기록). 없으면 null — 줄의 detect도 null */
+      detect_run?: components['schemas']['WeekListRun'] | null
+    }
+    /**
+     * WeekListDetect
+     * @description detect가 이 줄을 어떻게 했나 (HYO-171) — 이 기기의 detect 실행 기록에서 읽을 때 붙인다. list.json에는 없다.
+     */
+    WeekListDetect: {
+      /**
+       * Verdict
+       * @description draft 초안 씀 · existing 이미 있는 결정과 겹쳐 건너뜀(R14) · excluded 버림(모델 · 이미 반영됨 · 이전에 거부한 소식) · dropped 대상 repo가 안 맞아 버림(R10) · failed 초안 쓰다 실패 · unjudged detect가 돌았는데 이 줄을 언급하지 않았다
+       * @enum {string}
+       */
+      verdict: 'draft' | 'existing' | 'excluded' | 'dropped' | 'failed' | 'unjudged'
+      /**
+       * Reason
+       * @description 버린 · 실패한 이유. draft · existing · unjudged는 null
+       */
+      reason?: string | null
+      /**
+       * Adr
+       * @description draft면 쓴 초안, existing이면 겹친 ADR 번호 (예 0017)
+       */
+      adr?: string | null
     }
     /**
      * WeekListItem
@@ -2069,6 +2093,28 @@ export interface components {
        * @description HN 점수 (우리 스택 아님만, Reddit은 null)
        */
       points?: number | null
+      /** @description to_detect인 줄만 — 그 주 입력으로 돈 detect가 있으면 판정. 아직 안 돌았으면 null */
+      detect?: components['schemas']['WeekListDetect'] | null
+    }
+    /** WeekListRun */
+    WeekListRun: {
+      /**
+       * Id
+       * @description detect 실행 id (GET /runs)
+       */
+      id: string
+      /** At */
+      at: string
+      /**
+       * Trigger
+       * @description manual · schedule · job
+       */
+      trigger: string
+      /**
+       * Recorded
+       * @description false면 url별 판정을 남기기 전(11/5)의 실행 — 버린 소식만 붙고 초안 · 겹침은 unjudged로 보인다
+       */
+      recorded: boolean
     }
     /** WeekListSlot */
     WeekListSlot: {

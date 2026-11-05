@@ -89,7 +89,7 @@ def screen(c, candidates, feed=None):
         aff = cand["affected"]
         bad = [a for a in aff if a["repo"] not in c.targets]
         if not aff or bad:
-            dropped.append({"technology": cand["technology"],
+            dropped.append({"technology": cand["technology"], "source_urls": cand.get("source_urls") or [],
                             "reason": "R10: affected가 비었다" if not aff else f"R10: 대상 repo에 없는 repo {sorted({a['repo'] for a in bad})}"})
             continue
         overlap, related = [], {}
@@ -101,7 +101,7 @@ def screen(c, candidates, feed=None):
             for r in m["related"]:
                 related.setdefault(r["id"], r)
         if overlap:
-            skipped += [{"technology": cand["technology"], "adr": x} for x in overlap]
+            skipped += [{"technology": cand["technology"], "adr": x, "source_urls": cand.get("source_urls") or []} for x in overlap]
             continue
         kept.append({"idx": i, "candidate": cand, "related": sorted(related.values(), key=lambda r: r["id"])})
     return kept, skipped, dropped

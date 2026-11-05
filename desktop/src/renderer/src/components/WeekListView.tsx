@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { api, type WeekList, type WeekListItem } from '@renderer/lib/api'
 import { cn } from '@renderer/lib/utils'
@@ -53,6 +53,31 @@ function Title({ item }: { item: WeekListItem }): React.JSX.Element {
   )
 }
 
+// 이 주 detect가 줄마다 판정을 남기기 전 실행이면 true — 「판정 없음」 설명이 달라진다
+const OldRun = createContext(false)
+
+/** detect 판정 배지 — 판정이 없으면(아직 안 돌았으면) 「초안 후보」 */
+function Verdict({ item }: { item: WeekListItem }): React.JSX.Element | null {
+  const old = useContext(OldRun)
+  if (!item.to_detect) return null
+  const d = item.detect
+  if (!d) return <span className="tag tag-strong">{T.badge.toDetect}</span>
+  const V = T.verdict
+  const [label, cls, title] = {
+    draft: [V.draft(d.adr ?? null), 'tag-strong', undefined],
+    existing: [V.existing(d.adr ?? null), '', T.verdictTitle.existing],
+    excluded: [d.reason?.startsWith('이미 반영됨') ? V.applied : V.excluded, '', d.reason],
+    dropped: [V.dropped, '', d.reason],
+    failed: [V.failed, 'tag-warning', d.reason],
+    unjudged: [V.unjudged, '', old ? T.verdictTitle.old : T.verdictTitle.unjudged]
+  }[d.verdict] as [string, string, string | null | undefined]
+  return (
+    <span className={cn('tag', cls)} title={title ?? undefined}>
+      {label}
+    </span>
+  )
+}
+
 function Badges({ item }: { item: WeekListItem }): React.JSX.Element {
   return (
     <span className="flex shrink-0 items-center gap-1">
@@ -62,7 +87,7 @@ function Badges({ item }: { item: WeekListItem }): React.JSX.Element {
           {T.badge.alarm}
         </span>
       )}
-      {item.to_detect && <span className="tag tag-strong">{T.badge.toDetect}</span>}
+      <Verdict item={item} />
       {item.tier && <span className="tag mono">{item.tier}</span>}
       {item.fit != null && <span className="tag">{T.fit(item.fit)}</span>}
       {item.source && <span className="tag mono">{item.source}</span>}
@@ -208,12 +233,14 @@ export function WeekListView({ refreshKey }: { refreshKey: number }): React.JSX.
     ? data.always.length + data.alarm.length + techCount + slotCount + data.not_ours.length
     : 0
   const toDetect = data?.counts.to_detect
+  const run = data?.detect_run ?? null
+  const runNote = run ? T.detectRun(run.at.slice(5, 16).replace('T', ' ')) : T.detectNotYet
 
   return (
     <div className="page">
       <PageHeader
         title={COPY.term.weekList}
-        subtitle={toDetect !== undefined ? T.toDetect(toDetect) : undefined}
+        subtitle={toDetect !== undefined ? `${T.toDetect(toDetect)} · ${runNote}` : undefined}
       >
         {data && data.weeks.length > 0 && (
           <label className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -240,68 +267,70 @@ export function WeekListView({ refreshKey }: { refreshKey: number }): React.JSX.
       {data && current !== null && total === 0 && <div className="empty-state">{T.emptyWeek}</div>}
 
       {data && current !== null && total > 0 && (
-        <div className="feed">
-          <Section title={T.sections.always} count={data.always.length}>
-            <FoldedRows items={data.always} />
-          </Section>
-
-          {data.alarm.length > 0 && (
-            <Section title={T.sections.alarm} count={data.alarm.length}>
-              <FoldedRows items={data.alarm} />
+        <OldRun.Provider value={run !== null && !run.recorded}>
+          <div className="feed">
+            <Section title={T.sections.always} count={data.always.length}>
+              <FoldedRows items={data.always} />
             </Section>
-          )}
 
-          <Section title={T.sections.tech} count={techCount}>
-            {data.tech.map((t) => (
-              <div key={t.query}>
-                <SubHead>
-                  <span className="mono font-medium text-foreground">{t.query}</span>
-                </SubHead>
-                <FoldedRows items={t.items} />
-              </div>
-            ))}
-          </Section>
+            {data.alarm.length > 0 && (
+              <Section title={T.sections.alarm} count={data.alarm.length}>
+                <FoldedRows items={data.alarm} />
+              </Section>
+            )}
 
-          <Section title={T.sections.slots} count={slotCount}>
-            {data.slots.map((s) => (
-              <div key={s.slot}>
-                <SubHead>
-                  <span className="font-medium text-foreground">{s.name ?? s.slot}</span>
-                  {s.name && <span className="mono text-muted-foreground">{s.slot}</span>}
-                  <span className="min-w-0 truncate text-muted-foreground">
-                    {T.current(s.current ?? [])}
-                  </span>
-                </SubHead>
-                {s.items.length > 0 ? (
-                  <FoldedRows items={s.items} />
-                ) : (
-                  <div className="border-b px-(--gutter) py-2 pl-[calc(var(--gutter)+28px)] text-xs text-muted-foreground">
-                    {T.none}
-                  </div>
-                )}
-              </div>
-            ))}
-          </Section>
+            <Section title={T.sections.tech} count={techCount}>
+              {data.tech.map((t) => (
+                <div key={t.query}>
+                  <SubHead>
+                    <span className="mono font-medium text-foreground">{t.query}</span>
+                  </SubHead>
+                  <FoldedRows items={t.items} />
+                </div>
+              ))}
+            </Section>
 
-          {data.not_ours.length > 0 && (
-            <section className="feed-group">
-              <h2>
-                <button
-                  className="flex items-center gap-1.5"
-                  aria-expanded={notOursOpen}
-                  onClick={() => setNotOursOpen((o) => !o)}
-                >
-                  <ChevronRight
-                    size={13}
-                    className={cn('transition-transform', notOursOpen && 'rotate-90')}
-                  />
-                  {T.notOursToggle(data.not_ours.length)}
-                </button>
-              </h2>
-              {notOursOpen && <FoldedRows items={data.not_ours} />}
-            </section>
-          )}
-        </div>
+            <Section title={T.sections.slots} count={slotCount}>
+              {data.slots.map((s) => (
+                <div key={s.slot}>
+                  <SubHead>
+                    <span className="font-medium text-foreground">{s.name ?? s.slot}</span>
+                    {s.name && <span className="mono text-muted-foreground">{s.slot}</span>}
+                    <span className="min-w-0 truncate text-muted-foreground">
+                      {T.current(s.current ?? [])}
+                    </span>
+                  </SubHead>
+                  {s.items.length > 0 ? (
+                    <FoldedRows items={s.items} />
+                  ) : (
+                    <div className="border-b px-(--gutter) py-2 pl-[calc(var(--gutter)+28px)] text-xs text-muted-foreground">
+                      {T.none}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </Section>
+
+            {data.not_ours.length > 0 && (
+              <section className="feed-group">
+                <h2>
+                  <button
+                    className="flex items-center gap-1.5"
+                    aria-expanded={notOursOpen}
+                    onClick={() => setNotOursOpen((o) => !o)}
+                  >
+                    <ChevronRight
+                      size={13}
+                      className={cn('transition-transform', notOursOpen && 'rotate-90')}
+                    />
+                    {T.notOursToggle(data.not_ours.length)}
+                  </button>
+                </h2>
+                {notOursOpen && <FoldedRows items={data.not_ours} />}
+              </section>
+            )}
+          </div>
+        </OldRun.Provider>
       )}
     </div>
   )
