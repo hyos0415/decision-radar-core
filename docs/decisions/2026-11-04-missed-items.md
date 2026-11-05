@@ -54,4 +54,5 @@ python -m pipeline.trace terra --week 2026-W45 --slots <slots.json 폴더> --rep
 ## 하지 않은 것 (지금)
 
 - detect 2차 판정(초안 · 버림 + 이유 · 이미 반영됨)을 `list.json` · `desktop/backend/schemas.py`에 되돌려 붙이기 — 화면(HYO-168)이 같은 계약을 건드리고 있다. `trace`는 `--report`로 report.json을 받아 5단계 결과를 붙일 수 있게만 해 뒀다. 계약 변경은 화면 PR merge 뒤 사용자에게 묻는다
+  - 변경 (2026-11-05, 사용자 나안): 파일(`list.json`)은 그대로 두고 앱이 읽을 때 그 주 detect 실행 기록에서 줄마다 판정을 붙인다 — `WeekListItem.detect` · `WeekList.detect_run`. 실행 기록에 url별 판정(`verdicts`)을 남기는 건 W46 detect부터 — 그 전 실행은 버린 소식만 붙는다
 - 실행 요약 한 줄(`detect_feed.funnel_line`)에 단계별 건수 — 화면을 보고 사용자와 정한다

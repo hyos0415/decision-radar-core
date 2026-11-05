@@ -923,7 +923,23 @@ class RadarService:
             f = json.load(open(os.path.join(self._list_root(), week, LIST_FILE), encoding="utf-8"))
         except (OSError, ValueError) as e:
             raise ServiceError(500, f"목록 파일 {week}/{LIST_FILE}을 못 읽었다: {e}")
-        return {"week": week, "weeks": weeks, **empty, **{k: f.get(k) or [] for k in LIST_KEYS}, "counts": f.get("counts") or {}}
+        out = {"week": week, "weeks": weeks, **empty, **{k: f.get(k) or [] for k in LIST_KEYS}, "counts": f.get("counts") or {}}
+        out["detect_run"], verdicts = self._week_detect(week)
+        rows = out["always"] + out["alarm"] + out["not_ours"] + [x for g in out["tech"] + out["slots"] for x in g.get("items") or []]
+        for x in rows:  # 파일은 그대로 두고 읽을 때 붙인다 — list.json은 수집 PC, detect는 이 기기 (나안, 11/5)
+            if x.get("to_detect") and out["detect_run"]:
+                x["detect"] = verdicts.get(x.get("url")) or {"verdict": "unjudged", "reason": None, "adr": None}
+        return out
+
+    def _week_detect(self, week):
+        """그 주 입력으로 끝까지 돈 마지막 detect — (실행 요약, {url: 판정}). 없으면 (None, {}).
+        url별 판정을 남기기 전(11/5)의 실행은 버린 소식만 안다 — recorded: false로 알린다."""
+        for r in self.runs(limit=500):  # 새 것 먼저
+            if r.get("flow") == "detect" and r.get("ok") and r.get("input") == week:
+                recorded = "verdicts" in r
+                verdicts = r["verdicts"] if recorded else _detect_verdicts({"excluded": r.get("excluded")})
+                return {"id": r["id"], "at": r["at"], "trigger": r.get("trigger") or "", "recorded": recorded}, verdicts
+        return None, {}
 
     def topics(self, week=None, limit=None):
         """주차의 상위 토픽 — 기본 k개 (k는 파일이 정한다). limit은 「더 보기」: k 아래를 파일 순위 그대로 이어 보이고,
@@ -1580,7 +1596,7 @@ class RadarService:
             summary.append(f"초안 {len(drafts)}건 작성 (proposed)" + (f" — validate 실패 {bad}건" if bad else ""))
         else:
             summary.append("새 초안 없음")
-        return {"summary": summary, "drafts": drafts, "excluded": excluded}
+        return {"summary": summary, "drafts": drafts, "excluded": excluded, "verdicts": _detect_verdicts(rep)}
 
     def _summarize_revisit(self, rep):
         results = rep.get("results") or []
@@ -1638,6 +1654,30 @@ def _overlaps(a, b):
         return os.path.commonpath([a, b]) in (a, b)
     except ValueError:  # 다른 드라이브 (C: / D:)
         return False
+
+
+def _detect_verdicts(rep):
+    """detect 보고서 → {소식 url: 판정} (HYO-171 — 목록 줄에 되돌려 붙인다). 한 url이 여러 칸에 있으면 앞 칸이 이긴다:
+    초안 > 이미 있는 결정 > R10 버림 > 초안 실패 > 거르기 버림(모델 · 이미 반영됨 · 이전에 거부한 소식)."""
+    out = {}
+
+    def put(urls, verdict, reason=None, adr=None):
+        for u in urls or []:
+            if u:
+                out.setdefault(u, {"verdict": verdict, "reason": reason, "adr": adr})
+
+    for c in rep.get("candidates") or []:
+        if c.get("adr"):
+            put(c.get("source_urls"), "draft", adr=c["adr"])
+    for s in rep.get("skipped_existing") or []:
+        put(s.get("source_urls"), "existing", adr=s.get("adr"))
+    for d in rep.get("dropped") or []:
+        put(d.get("source_urls"), "dropped", reason=d.get("reason"))
+    for f in rep.get("draft_failed") or []:
+        put(f.get("source_urls"), "failed", reason=f"{f.get('type')}: {f.get('message')}")
+    for e in rep.get("excluded") or []:
+        put([e.get("url")], "excluded", reason=e.get("reason") or "")
+    return out
 
 
 def _latest_feed(snapshot_repo):
