@@ -23,6 +23,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from pipeline import page_entries  # 빈 주 메우기가 날짜 블록을 읽는다 (HYO-172)
+
+from . import health as health_mod
 from .item import TEXT_MAX
 
 HERE = Path(__file__).resolve().parent
@@ -148,7 +151,7 @@ def build(repo, target, extra):
     previous = weeks[-1] if weeks else None
     prev_pages = {p["id"]: p for p in read_manifest(repo, previous)["pages"]} if previous else {}
 
-    pages, page_rows, diffs = {}, [], []
+    pages, page_rows, diffs, replaced = {}, [], [], {}
     for it in items:
         it["first_seen"] = seen.get(it["id"], week)
         it["new"] = it["id"] not in seen
@@ -163,6 +166,13 @@ def build(repo, target, extra):
                "text_hash": it["meta"]["text_hash"], "text_chars": it["meta"]["text_chars"]}
         if old is None:
             row["status"] = "baseline"
+            rep = it["meta"].get("replaces")
+            if rep:  # 주소를 옮긴 첫 주 — 옛 페이지는 「바뀜」, 마지막 정상 주 이후 날짜 블록을 메운다 (HYO-172)
+                replaced[f"vendor-page:{it['meta']['vendor']}:{rep}"] = it["url"]
+                fill = backfill(repo, weeks, f"vendor-page:{it['meta']['vendor']}:{rep}", it, text, week)
+                if fill:
+                    diffs.append(fill)
+                    row["backfill"] = fill["meta"]["backfill"]
         elif old["text_hash"] == row["text_hash"]:
             row["status"] = "unchanged"
         else:
@@ -179,7 +189,8 @@ def build(repo, target, extra):
                 "first_seen": week, "new": True})
         page_rows.append(row)
     here = {r["id"] for r in page_rows}
-    page_rows += [dict(p, status="missing") for i, p in prev_pages.items() if i not in here]   # 이번 주에 못 받은 페이지
+    page_rows += [dict(p, status="replaced", replaced_by=replaced[i]) if i in replaced else dict(p, status="missing")   # 이번 주에 못 받은 페이지
+                  for i, p in prev_pages.items() if i not in here and p.get("status") != "replaced"]                # 옮긴 옛 주소는 한 주만 남긴다
     items = sorted(items + diffs, key=lambda x: x["id"])
 
     by_source = {}
@@ -205,6 +216,32 @@ def build(repo, target, extra):
     return week, items, pages, manifest, runs
 
 
+def backfill(repo, weeks, old_id, it, text, week):
+    """주소를 옮긴 페이지의 빈 주 메우기 (HYO-172) — 옛 주소가 마지막으로 정상이던 주(본문이 그 페이지 최대의 절반 이상)의
+    가장 늦은 날짜보다 뒤인 날짜 블록만 page-diff 항목 하나로. 새 주소는 「기준」이라 비교할 지난 본문이 없다 — 고장 난 동안
+    올라온 소식이 영영 안 보이는 것을 막는다. 정상 주가 없거나 날짜를 못 읽으면 None."""
+    hist = []
+    for w in weeks:
+        row = next((p for p in read_manifest(repo, w)["pages"] if p["id"] == old_id and p.get("status") not in ("missing", "replaced")), None)
+        if row:
+            hist.append((w, row))
+    if not hist:
+        return None
+    top = max(r["text_chars"] for _, r in hist)
+    good_week, good = [(w, r) for w, r in hist if r["text_chars"] * 2 >= top][-1]
+    after = page_entries.latest_date((Path(repo) / good_week / good["file"]).read_text(encoding="utf-8"), int(good_week[:4]))
+    lines = page_entries.blocks_after(text, after, int(week[:4])) if after else []
+    if not lines:
+        return None
+    vendor = it["meta"]["vendor"]
+    return {"id": f"vendor-diff:{vendor}:{it['url']}@{week}", "source": "vendor", "channels": list(it["channels"]),
+            "title": f"[{vendor}] {it['url']} 메우기 ({good_week} 이후 → {week})", "url": it["url"], "created_at": it["created_at"],
+            "text": "\n".join(lines)[:TEXT_MAX], "signals": {"added_lines": len(lines), "removed_lines": 0}, "links": [],
+            "meta": {"vendor": vendor, "kind": "page-diff", "previous": good_week, "removed": "",
+                     "backfill": {"replaces": good["url"], "from_week": good_week, "after": after.isoformat()}},
+            "first_seen": week, "new": True}
+
+
 def missing_weeks(previous, week):
     """지난 스냅숏과 이번 주 사이에 비어 있는 주 — Reddit·HF trending·벤더 페이지는 그 주가 영구 손실이다 (§3-1)."""
     if not previous:
@@ -227,7 +264,7 @@ def git_head(path):
     return p.stdout.strip() + ("+dirty" if dirty else "")
 
 
-def write(repo, week, items, pages, manifest, runs):
+def write(repo, week, items, pages, manifest, runs, health=None):
     root = Path(repo) / week
     tmp = Path(repo) / f".{week}.tmp"
     if tmp.exists():
@@ -243,6 +280,8 @@ def write(repo, week, items, pages, manifest, runs):
     for r, run, _ in runs:
         (tmp / "runs" / f"{r['name']}.json").write_text(json.dumps(run, ensure_ascii=False, indent=1), encoding="utf-8", newline="\n")
     (tmp / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
+    if health is not None:   # 출처 건강 검사 (HYO-172) — 같은 주와 함께 얼린다
+        (tmp / health_mod.FILE).write_text(json.dumps(health, ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
     tmp.rename(root)                                       # 다 쓴 뒤에 이름을 바꾼다 — 반쯤 쓴 주가 얼린 주로 보이지 않게
     seen = load_ledger(repo)
     with open(Path(repo) / "first_seen.jsonl", "a", encoding="utf-8", newline="\n") as f:
@@ -275,11 +314,19 @@ def cmd_freeze(a):
         print(f"거부: corpus@{week}는 이미 {names}로 얼렸다 — 얼린 주는 고치지 않는다", file=sys.stderr)
         return 1
     week, items, pages, manifest, runs = build(a.repo, target, extra)
-    write(a.repo, week, items, pages, manifest, runs)
+    try:   # 검사가 죽어도 얼림은 한다 — 파일이 없으면 주간 사슬 health 단계가 「파일 없음」으로 남긴다
+        health = health_mod.check_build(a.repo, week, items, pages, manifest, runs)
+        manifest["source_health"] = health["line"]
+    except Exception as e:  # noqa: BLE001
+        health = None
+        print(f"출처 건강 검사 실패 (얼림은 계속): {type(e).__name__}: {e}", file=sys.stderr)
+    write(a.repo, week, items, pages, manifest, runs, health)
     c = manifest["counts"]
     print(f"corpus@{week}: {c['items']}건 · 새 항목 {c['new']} · 페이지 변경 {c['page_diffs']} · 실행 {[r['name'] for r in manifest['runs']]}")
     if manifest["missing_weeks"]:
         print(f"빠진 주: {manifest['missing_weeks']}")
+    if health:
+        print(health["line"])
     if not a.no_commit:
         print(git_commit(a.repo, week, manifest, a.push))
     return 0

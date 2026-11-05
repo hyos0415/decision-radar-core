@@ -107,6 +107,8 @@ def collect(cfg, fetcher, now=None, names=None, only=None):
             if f["kind"] == "page":
                 fmt = f.get("format", "html")
                 it = parse_page(body, vendor, f["url"], now, fmt)
+                if f.get("replaces"):  # 주소를 옮긴 페이지 — 얼릴 때 옛 페이지를 바뀜으로 두고 빈 주를 메운다 (HYO-172)
+                    it.meta["replaces"] = f["replaces"]
                 # 자바스크립트로 그리는 HTML 페이지는 본문이 거의 없다 → 비교 불가. markdown 원문은 짧아도 정상
                 if fmt == "html" and it.meta["text_chars"] < 2000:
                     report["failed"].append({"vendor": vendor, "url": f["url"], "status": "page text too short"})

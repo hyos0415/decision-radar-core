@@ -92,6 +92,7 @@ def test_non_diff_untouched():
 
 def test_date_line_shapes():
     for s in ["Oct 26", "October 23, 2026", "## September 22, 2026", "Sep 18, 2026", "2026-10-26", "Oct 3rd, 2026",
+              '## November 4, 2026  {% id="11-04-2026" %}',
               "October 23, 2026 "]:
         assert page_entries.date_of(s), s
     for s in ["v1/decisions", "May 2026", "Last updated 2026-10-26 UTC.", "Decisions API Oct 26 launch", "Feature"]:
@@ -122,11 +123,45 @@ def test_read_items_and_detect_feed_roundtrip():
         assert "Released GPT-6.1 Terra" in body and "Decisions API" not in body, body
 
 
+GEMINI_MD = """# Release notes
+
+## November 4, 2026  {% id="11-04-2026" %}
+
+*   **Voice remixing for Gemini 3.8 TTS**
+
+## November 2, 2026  {% id="11-02-2026" %}
+
+*   **Gemini 2.5 Pro deprecation**: shut down on 2026-12-01
+
+## October 26, 2026  {% id="10-26-2026" %}
+
+*   Released gemini-3.6-flash"""
+
+
+def test_gemini_markdown_anchor_dates_split():
+    """HYO-172 — Gemini 마크다운 원문은 날짜 머리글 뒤에 `{% id %}` 꼬리가 붙는다. 떼지 않으면 날짜 줄이 하나도 안 잡혀 통째 한 항목이다."""
+    url = "https://aistudio.google.com/docs/changelog.md"
+    out = page_entries.split_item(diff(url, GEMINI_MD, vendor="google-gemini"))
+    assert [o["meta"].get("entry_date") for o in out] == [None, "November 4, 2026", "November 2, 2026", "October 26, 2026"], out
+    assert out[2]["url"] == url + "#november-2-2026" and "2.5 Pro deprecation" in out[2]["text"]
+
+
+def test_parse_date_and_blocks_after():
+    import datetime as dt
+    P = page_entries.parse_date
+    assert P("October 26, 2026") == dt.date(2026, 10, 26) and P("Oct. 3rd, 2026") == dt.date(2026, 10, 3) and P("2026-10-26") == dt.date(2026, 10, 26)
+    assert P("Oct 26") is None and P("Oct 26", 2026) == dt.date(2026, 10, 26) and P("Feb 30, 2026") is None
+    assert page_entries.latest_date(GEMINI_MD) == dt.date(2026, 11, 4)
+    after = page_entries.blocks_after(GEMINI_MD, dt.date(2026, 10, 26))   # 10/26은 이미 본 날 — 그 뒤만
+    assert after[0].startswith("## November 4") and not any("3.6-flash" in l for l in after) and any("2.5 Pro" in l for l in after), after
+    assert page_entries.blocks_after(GEMINI_MD, dt.date(2026, 11, 4)) == []
+
+
 TESTS = [(n, f) for n, f in globals().items() if n.startswith("test_")]
 
 
 def mutations():
-    orig_split, orig_url, orig_date_of = page_entries.split_item, page_entries.SPLIT_URL, page_entries.date_of
+    orig_split, orig_url, orig_date_of, orig_tag = page_entries.split_item, page_entries.SPLIT_URL, page_entries.date_of, page_entries._TAG
     import re
 
     def keep_empty(item):          # 목차 날짜 줄도 항목으로 — 빈 블록이 관문을 탄다
@@ -145,6 +180,8 @@ def mutations():
         ("아이콘 글자를 안 뗌", lambda: setattr(page_entries, "date_of",
                                           lambda line: (line.strip().lstrip("#").strip() if page_entries.DATE_LINE.match(line.strip().lstrip("#").strip()) else None)),
          lambda: setattr(page_entries, "date_of", orig_date_of)),
+        ("앵커 꼬리를 안 뗌", lambda: setattr(page_entries, "_TAG", re.compile(r"(?!x)x")),
+         lambda: setattr(page_entries, "_TAG", orig_tag)),
     ]
 
 

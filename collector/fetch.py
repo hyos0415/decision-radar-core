@@ -17,6 +17,7 @@ class Fetcher:
         self._sleep = sleep
         self._now = now
         self.log = []                                    # (url, status, 시도 횟수) — run.json에 남긴다
+        self.redirects = []                              # (요청 url, 최종 url) — 따라간 리다이렉트. 출처 건강 검사가 도메인 이동을 본다 (HYO-172)
 
     def _wait(self, host):
         gap = self.min_interval.get(host, self.default_interval)
@@ -41,6 +42,9 @@ class Fetcher:
                 with urllib.request.urlopen(req, timeout=60) as r:
                     body = r.read()
                     self.log.append((url, r.status, attempt))
+                    final = getattr(r, "url", None) or url   # HTTPResponse.url = 따라간 뒤의 최종 주소
+                    if final != url:
+                        self.redirects.append((url, final))
                     return r.status, body
             except urllib.error.HTTPError as e:
                 if e.code == 429 and attempt <= self.retries:

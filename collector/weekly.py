@@ -1,8 +1,9 @@
-"""주간 사슬 한 줄 — 수집 → 얼림 → 등급 → 관문 → detect 입력 → revisit 출처 → 게시 (HYO-99 3단계 · HYO-159). Windows·macOS 같은 코드다.
+"""주간 사슬 한 줄 — 수집 → 얼림 → 출처 건강 알림 → 등급 → 관문 → detect 입력 → revisit 출처 → 게시 (HYO-99 3단계 · HYO-159). Windows·macOS 같은 코드다.
 
-  python -m collector.weekly [--from {collect,freeze,tiers,skill,gate,slots,feed,revisit,publish}] [--week YYYY-Www] [--gate 백엔드] [--no-push] [--dry-run]
+  python -m collector.weekly [--from {collect,freeze,health,tiers,skill,gate,slots,feed,revisit,publish}] [--week YYYY-Www] [--gate 백엔드] [--no-push] [--dry-run]
 
 실패 규칙: 수집 실패 → 그래도 얼린다(죽은 출처도 manifest에 남는다) · 얼림 실패 → 멈춤 · 등급 실패 → 계속 (키 없음은 weekly-tiers가 이미 건너뜀)
+          · 출처 건강(HYO-172 — 검사는 얼릴 때 <주>/source-health.json, 이 단계는 Linear 알림) 실패 · LINEAR_API_KEY 없음 → 계속
           · 관문 실패(예: OPENAI_API_KEY 없음) → 멈춤, feed·게시 없음 · feed 실패 → 멈춤
           · 자리 질의 실패(구독 claude -p · HYO-168) → 계속 — detect 입력은 관문 몫만. 자리 프로필(ADR repo radar-slots.yaml)이 없으면 건너뜀
           · 스킬 줄(합집합 HYO-167 — 기본 꺼짐, RADAR_UNION=on) → 관문 앞에서 skill@v1 라이브 detect → 원문 받기 → 합치기.
@@ -28,12 +29,12 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from collector import snapshot  # noqa: E402
+from collector import health, snapshot  # noqa: E402
 from pipeline import basis, union  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 STEP_LOG = "last-weekly-steps.log"  # 예약 작업 콘솔 로그(last-weekly.log)와 달라야 한다 — 위 머리말
-STEPS = ["collect", "freeze", "tiers", "skill", "gate", "slots", "feed", "revisit", "publish"]
+STEPS = ["collect", "freeze", "health", "tiers", "skill", "gate", "slots", "feed", "revisit", "publish"]
 PUBLISHED = {"detect": "feed.json", "revisit": "index.json"}  # 게시하는 폴더 → 다 만들어졌다는 표시 파일
 DEFAULT_GATE = "gpt-6.1-sol"
 
@@ -176,7 +177,15 @@ def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None
             run_out = Path(pipeline_out or Path(root) / "pipeline" / "out") / week
             feed_out = p["snapshots"] / "detect" / week
             revisit_out = p["snapshots"] / "revisit" / week
-            if name == "skill":
+            if name == "health":
+                f = p["snapshots"] / week / health.FILE
+                if not f.exists():
+                    record(name, True, f"{health.FILE} 없음 — 얼릴 때 검사가 안 돌았다 ({log})", skipped=True)
+                    continue
+                rc = runner("collector.health", ["--snapshots", str(p["snapshots"]), "alert", "--week", week], log)
+                line = json.loads(f.read_text(encoding="utf-8")).get("line") or ""
+                record(name, rc == 0, line if rc == 0 else f"{line} — Linear 알림 실패, 종료 코드 {rc} — 계속 ({log})", t0=t0)
+            elif name == "skill":
                 if not union.enabled(os.environ if env is None else env):
                     record(name, True, f"꺼짐 ({union.FLAG}=on으로 켠다 — 실사용 기간에는 안 켠다)", skipped=True)
                     continue
@@ -258,6 +267,7 @@ def dry_run(a, env=None, root=REPO):
     cmds = {
         "collect": f"{py} -m collector.run --label weekly",
         "freeze": f"{py} -m collector.snapshot --repo {p['snapshots']} freeze --push",
+        "health": f"{py} -m collector.health --snapshots {p['snapshots']} alert --week {wk}",
         "tiers": f"{py} -m pipeline.importance weekly-tiers --report {Path(root) / 'collector' / 'out' / 'last-tiers.json'} --tiers {p['tiers']} --targets {p['targets']}",
         "skill": (f"{py} -m pipeline.union run --week {wk} --snapshots {p['snapshots']} --adr {p['adr_dir'].parent.parent} --out {run_out / union.RUN_DIR}"
                   if union.enabled(os.environ if env is None else env) else f"(꺼짐 — {union.FLAG}=on)"),
