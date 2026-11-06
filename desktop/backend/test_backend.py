@@ -806,7 +806,7 @@ def _scenario_hyo166(tmp):
               cenv["ANTHROPIC_API_KEY"] is None and cenv["RADAR_SNAPSHOT_DIR"] is None and cenv["RADAR_DRY_RUN"] == "1" and cenv["RADAR_EXPORT"] is None
               and os.path.abspath(cenv["RADAR_ADR_DIR"]).startswith(os.path.abspath(wk)), cenv)
         check("실행 루트: 스킬만 (테스트 제외) — 레포 루트가 아니다", call["cwd_entries"] == [".claude"] and call["skill_md"] and not call["skill_tests"]
-              and os.path.abspath(call["cwd"]).startswith(os.path.abspath(wk)), call["cwd_entries"])
+              and os.path.realpath(call["cwd"]).startswith(os.path.realpath(wk)), call["cwd_entries"])  # macOS: getcwd()는 /private/var/… (HYO-173)
         check("스킬은 ref에서 꺼낸다 (HEAD = 지금 커밋의 SKILL.md)",
               call["skill_md"].strip() == _git(service.REPO, "show", "HEAD:.claude/skills/jhs-decisions/SKILL.md").strip())
         check("원격 차단: gh는 PATH 맨 앞의 가짜 → 실패", call["gh"] and os.path.abspath(call["gh"]).startswith(os.path.abspath(wk)) and call["gh_rc"] not in (0, None), call)
