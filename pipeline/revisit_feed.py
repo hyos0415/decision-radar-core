@@ -72,8 +72,8 @@ def _copy_week(snapshots, week, out, index):
     det = Path(snapshots) / "detect" / week
     if (det / "index.json").exists():
         for key, ent in json.loads((det / "index.json").read_text(encoding="utf-8")).items():
-            src = det / ent["file"]
-            if src.exists():
+            src = det / ent["file"] if ent.get("file") else None   # 못 받은 1차 출처 링크는 상태만 있다 (HYO-174)
+            if src and src.exists():
                 dst = Path("feed") / "detect" / ent["file"]
                 (out / dst).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(src, out / dst)
