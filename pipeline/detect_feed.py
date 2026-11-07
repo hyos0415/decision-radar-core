@@ -8,6 +8,7 @@
   feed.json    소식 목록 (id · title · kind · package · version · summary · url · source_type)
   index.json   url(scheme·끝 / 뺀 것) → {source_type, file} — snapshot_fetch가 전문을 준다
   items/F01.md 항목 전문 (릴리스 노트 · 벤더 소식 본문 · 페이지 변경의 더해진/빠진 줄)
+  items/F01-L1.md  커뮤니티 항목(자리 질의 · 경보 그물)이 가리키는 1차 출처 — 그 주에 받아 얼린 것 (HYO-174). 못 받은 링크는 index에 상태만
   search.json  빈 목록 (snapshot search는 질의를 무시한다 — 알려진 병목)
   funnel.json  건수 (수집 → 레인 A → 관문 남김 → 표시). 실행 요약 한 줄의 재료
   gate.json    url → 왜 남았나(관문 kept_by). detect 입력에는 넣지 않는다 — 모델 판단을 흔들지 않게 화면(HYO-85)만 읽는다
@@ -19,6 +20,11 @@
 무엇을 넣나: 관문이 남기고(keep) detect로 고른 것(shown — 「항상」을 (패키지 × 줄)마다 1건으로 접은 것 + 기술마다 top-k, 2026-11-04 전에는 5/N 상한 안)
 + run 폴더에 slots.json(pipeline.slots)이 있으면 자리마다 top-k 전부 (kind model_release). `--all-kept`면 관문이 남긴 것 전부.
 버린 이유(결정표의 행)는 여기 옮기지 않는다 — `lane_a.json`·`gate-calls.jsonl`에 이미 있다 (깔때기 화면은 만들지 않는다, 10/8).
+
+1차 출처 링크 (HYO-174, doc-pipeline.md ④ 「글의 링크」): HN · Reddit 글은 근거가 아니라서(R2) detect가 1차 출처를 찾아야 하는데, 모델은
+스냅숏만 연다. W45 Terra 글이 가리킨 공식 모델 문서가 `404 not in snapshot index`였다. 그래서 글의 링크 중 1차 출처
+(GitHub 릴리스 · `collector/vendors.yaml` 벤더 페이지와 같은 도메인)만 여기서 받아 얼린다 — 그 밖의 링크는 받지 않는다(커뮤니티가 공식 근거로
+둔갑하지 않게). 모델은 여전히 웹에 나가지 않는다 (revisit_feed HYO-159와 같은 원칙). `--no-fetch`면 받지 않는다.
 """
 import argparse
 import json
@@ -35,6 +41,9 @@ SUMMARY_CHARS = 1500    # triage 프롬프트에 그대로 들어간다. 전문�
 SLOTS = "slots.json"    # 자리 질의 결과 (pipeline.slots, HYO-168) — run 폴더에 있으면 자리마다 top-k를 detect에 더한다
 LIST = "list.json"      # 이번 주 목록 — 「항상」 · 기술 질의 · 자리 질의 (query-topk.md) + 경보 · 우리 스택 아님 (HYO-170). 화면이 읽는다
 ALARM = "alarm.json"    # 경보 그물 · 「우리 스택 아님」 (pipeline.alarm, profile_filter가 쓴다)
+VENDORS = Path(__file__).resolve().parents[1] / "collector" / "vendors.yaml"   # 1차 출처 도메인의 기준 (HYO-174)
+LINKS_PER_ITEM = 3      # 커뮤니티 글 하나에서 받을 1차 출처 링크 수
+_GH_RELEASES = re.compile(r"^github\.com/[^/]+/[^/]+/releases(/|$)", re.I)
 
 
 def url_key(url):
@@ -243,12 +252,74 @@ def funnel_line(f):
     if f.get("alarm"):
         a = f["alarm"]
         line += f" · 경보 그물 {a['net']} (관문 남김 {a['kept']} · 관문이 모르는 기술 {a['unknown']}) · 우리 스택 아님 {a['not_ours']}"
+    if f.get("links"):
+        line += f" · 1차 출처 링크 {f['links']['fetched']}/{f['links']['total']} 받음"
     if f.get("union"):
         u = f["union"]
         line += f" · 스킬 줄 {u['found']} (겹침 {u['both']} · 스킬만 {u['skill_only']} → 관문 남김 {u['kept']} · detect {u['to_detect']})"
     if gc and gc.get("warn"):
         line += (f" — 경고: 관문이 판정 못 한 소식 {gc['ratio']:.0%} (모르는 기술+분류 불가 / 팀원 스택 뺀 레인 A — 기준 {gc['warn_ratio']:.0%}, 잠정)")
     return line
+
+
+def _domain(host):
+    return ".".join(host.lower().split(".")[-2:])
+
+
+def official_domains(path=VENDORS):
+    """벤더 페이지 주소의 등록 도메인(끝 두 마디) — 커뮤니티 글의 링크가 1차 출처인지 가르는 기준 (HYO-174)."""
+    import yaml
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    return {_domain(url_key(f["url"]).split("/")[0]) for v in (data.get("vendors") or {}).values()
+            for f in v.get("feeds") or [] if f.get("url")}
+
+
+def link_type(url, domains):
+    """링크 → release_note · official_doc · None(받지 않는다 — R2)."""
+    key = url_key(url)
+    if _GH_RELEASES.match(key):
+        return "release_note"
+    host = key.split("/")[0]
+    return "official_doc" if host and _domain(host) in domains else None
+
+
+def primary_links(item, domains):
+    """커뮤니티 항목이 가리키는 1차 출처 → [(url_key, source_type)] 최대 LINKS_PER_ITEM개. HN 글은 url이 곧 바깥 링크라 url도 본다."""
+    seen, out = set(), []
+    for u in [item.get("url"), *(item.get("links") or [])]:
+        key, st = url_key(u), link_type(u or "", domains)
+        if key and key not in seen and st:
+            seen.add(key)
+            out.append((key, st))
+    return out[:LINKS_PER_ITEM]
+
+
+def fetch_links(item, n, out, index, fetcher, domains):
+    """1차 출처를 받아 items/F{n}-L{k}.md로 얼린다 → [{url, source_type, status}]. 같은 url이면 받은 문서가 이긴다(HN 글 본문보다) ·
+    못 받으면 index에 실제 상태만 — 이미 있는 항목은 덮지 않는다 (revisit_feed와 같다)."""
+    from .revisit_feed import page_text
+    rows = []
+    for k, (key, st) in enumerate(primary_links(item, domains), 1):
+        code, body = fetcher.get("https://" + key)
+        text = page_text(body) if code == 200 else ""
+        if text:
+            name = f"items/F{n:02d}-L{k}.md"
+            (out / name).write_text(f"# {key}\n\n{text}\n", encoding="utf-8", newline="\n")
+            index[key] = {"source_type": st, "file": name}
+            status = 200
+        else:
+            status = code if isinstance(code, int) and code != 200 else "fetch_error"
+            index.setdefault(key, {"source_type": st, "status": status})
+        rows.append({"url": key, "source_type": st, "status": status})
+    return rows
+
+
+def links_note(rows):
+    if not rows:
+        return ""
+    lines = ["1차 출처 링크 (이 글이 가리킨 곳 — snapshot_fetch로 연다):"]
+    lines += [f"- https://{r['url']} ({r['source_type']}" + (")" if r["status"] == 200 else f", 받지 못함 {r['status']})") for r in rows]
+    return "\n".join(lines)
 
 
 def choose(lane_a, slots, all_kept=False):
@@ -266,7 +337,8 @@ def choose(lane_a, slots, all_kept=False):
     return chosen
 
 
-def build(run_dir, out_dir, snapshot=None, all_kept=False):
+def build(run_dir, out_dir, snapshot=None, all_kept=False, fetcher=None):
+    """fetcher가 있으면 커뮤니티 항목의 1차 출처 링크를 받는다 (HYO-174) — 없으면(테스트 · --no-fetch) 받지 않는다."""
     run_dir, out = Path(run_dir), Path(out_dir)
     manifest = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     if not isinstance(manifest.get("lane_a_gate"), dict):
@@ -285,10 +357,19 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
     (out / "items").mkdir(parents=True, exist_ok=True)
     feed, index, why = [], {}, {}
     kin, adv_kin = alarm_kin(lane_a), advisory_kin(lane_a)
+    domains = official_domains() if fetcher else set()
+    links = []
     for i, e in enumerate(chosen, 1):
         item = by_id[e["id"]]
         entry = slot_entry(item) if e.get("slot") else alarm_entry(item) if e.get("alarm") else feed_entry(item)
         body = body_of(item, snap_dir)
+        index[url_key(item["url"])] = {"source_type": entry["source_type"], "file": f"items/F{i:02d}.md"}
+        if fetcher and entry["source_type"] == "community":
+            rows = fetch_links(item, i, out, index, fetcher, domains)
+            links += rows
+            if rows:
+                entry["summary"] = (entry["summary"] + "\n\n" + links_note(rows)).strip()
+                body += "\n" + links_note(rows) + "\n"
         if e.get("alarm"):      # 경보 글 (HYO-170 나 리뷰) · OSV 공지 (HYO-170 다) — 접힌 것을 대표 입력에
             note = kin_note([by_id[k] for k in kin.get(e["id"], []) if k in by_id])
         else:
@@ -299,7 +380,6 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
         name = f"items/F{i:02d}.md"
         (out / name).write_text(body, encoding="utf-8", newline="\n")
         feed.append(entry)
-        index[url_key(item["url"])] = {"source_type": entry["source_type"], "file": name}
         if e.get("slot"):
             x = e["slot_hit"]
             why[item["url"]] = {"id": e["id"], "reason": f"자리 {slots['slot_names'].get(e['slot']) or e['slot']} · 적합도 {x['fit']}: {x['reason']}",
@@ -311,6 +391,8 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False):
             g = e["gate"]
             why[item["url"]] = {"id": e["id"], "reason": g.get("reason"), "kept_by": g.get("kept_by") or [], "shown": e.get("shown")}
     f = funnel(manifest, lane_a, chosen, slots, alarm_info)
+    if links:
+        f["links"] = {"total": len(links), "fetched": sum(1 for r in links if r["status"] == 200)}
     u = union.funnel_info(run_dir, lane_a, [e["id"] for e in chosen])
     if u:
         f["union"] = u
@@ -344,8 +426,13 @@ def main(argv=None):
     ap.add_argument("--out", required=True, help="detect가 읽을 스냅숏 폴더 (RADAR_SNAPSHOT_DIR)")
     ap.add_argument("--snapshot", help="주차 폴더 (기본: run.json에 적힌 것)")
     ap.add_argument("--all-kept", action="store_true", help="주당 상한에 잘린 것까지 넣는다")
+    ap.add_argument("--no-fetch", action="store_true", help="커뮤니티 항목의 1차 출처 링크를 받지 않는다 (HYO-174)")
     a = ap.parse_args(argv)
-    f = build(a.run, a.out, a.snapshot, a.all_kept)
+    fetcher = None
+    if not a.no_fetch:
+        from collector.fetch import Fetcher
+        fetcher = Fetcher()
+    f = build(a.run, a.out, a.snapshot, a.all_kept, fetcher)
     print(funnel_line(f))
     print(f"-> {a.out}")
     return 0

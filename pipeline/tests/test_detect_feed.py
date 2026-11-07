@@ -209,6 +209,76 @@ def test_advisories_quiet_when_not_ours_and_folded_per_package():
     assert "우리 버전 해당 없음" not in lst["MAL-2026-1"]["reason"] and "우리 버전 해당 없음" not in lst["GHSA-m1"]["reason"]
 
 
+TERRA_HTML = b"<html><body><h1>GPT-X Terra</h1><p>Context window 1M. $1 input / $5 output.</p></body></html>"
+
+
+class FakeFetcher:
+    def __init__(self, pages):
+        self.pages, self.calls = pages, []
+
+    def get(self, url, headers=None):
+        self.calls.append(url)
+        return self.pages.get(url, (None, b""))
+
+
+def slot_run(fetcher):
+    """W45 Terra 모양: 자리 질의가 HN 글을 detect로 보낸다. 글 url(공식 블로그)은 403, 링크 중 공식 모델 문서 · GitHub 릴리스 · 남의 블로그."""
+    tmp = Path(tempfile.mkdtemp(prefix="detect-feed-links-"))
+    run = make_run(tmp)
+    hn = {"id": "hn:1", "source": "hn", "channels": ["hn"], "title": "GPT-X Terra", "url": "https://openai.com/index/introducing-x-terra/",
+          "text": "Discussion: 637 points", "meta": {},
+          "links": ["https://openai.com/index/introducing-x-terra/", "https://developers.openai.com/api/docs/models/x-terra",
+                    "https://someblog.example/terra-review", "https://github.com/acme/sdk/releases/tag/v2.0.0"]}
+    with (tmp / "snap" / "items.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps(hn) + "\n")
+    (run / "slots.json").write_text(json.dumps({"per_slot": {"gate-classifier": [{"id": "hn:1", "rank": 1, "fit": 2, "reason": "새 모델", "title": hn["title"],
+                                                                                  "url": hn["url"], "source": "hn"}]},
+                                                "slot_names": {"gate-classifier": "관문 분류"}, "candidates": 3, "releases": 1,
+                                                "to_detect": ["hn:1"]}), encoding="utf-8")
+    out = tmp / "out"
+    f = detect_feed.build(run, out, fetcher=fetcher)
+    return out, f
+
+
+def test_community_item_links_fetched_and_frozen():
+    # HYO-174: Terra 글이 가리킨 공식 모델 문서가 `404 not in snapshot index`였다 — 이제 그 주에 받아 얼리고 radar.py fetch로 열린다
+    fetcher = FakeFetcher({"https://developers.openai.com/api/docs/models/x-terra": (200, TERRA_HTML),
+                           "https://openai.com/index/introducing-x-terra": (403, b""),
+                           "https://github.com/acme/sdk/releases/tag/v2.0.0": (200, b"BREAKING: drops Python 3.9")})
+    out, f = slot_run(fetcher)
+    doc = radar(out, "fetch", "https://developers.openai.com/api/docs/models/x-terra")
+    assert doc["ok"] and "$5 output" in doc["body"] and doc["source_type_hint"] == "official_doc", doc
+    blog = radar(out, "fetch", "https://someblog.example/terra-review")
+    assert not blog["ok"] and blog["status"] == 404 and not any("someblog" in u for u in fetcher.calls), fetcher.calls  # 커뮤니티 링크는 받지 않는다 (R2)
+    post = radar(out, "fetch", "https://openai.com/index/introducing-x-terra/")
+    assert post["ok"] and "637 points" in post["body"] and post["source_type_hint"] == "community", post   # 못 받은 글 url은 HN 본문 그대로
+    hn = next(e for e in json.loads((out / "feed.json").read_text(encoding="utf-8")) if e["id"] == "hn:1")
+    assert hn["source_type"] == "community" and "https://developers.openai.com/api/docs/models/x-terra (official_doc)" in hn["summary"], hn
+    assert "받지 못함 403" in hn["summary"]
+    assert f["links"] == {"total": 3, "fetched": 2} and "1차 출처 링크 2/3 받음" in detect_feed.funnel_line(f), f
+    assert sum("acme/sdk" in u for u in fetcher.calls) == 1   # 관문 항목(릴리스 노트)은 링크를 받지 않는다 — 커뮤니티 글의 링크로 한 번만
+
+
+def test_fetched_page_wins_over_post_body_and_no_fetcher_unchanged():
+    ok = FakeFetcher({"https://openai.com/index/introducing-x-terra": (200, b"<p>Introducing Terra, our new model.</p>")})
+    out, _ = slot_run(ok)
+    post = radar(out, "fetch", "https://openai.com/index/introducing-x-terra/")
+    assert "Introducing Terra" in post["body"] and post["source_type_hint"] == "official_doc", post   # 같은 url이면 받은 공식 문서가 이긴다
+    out2, f2 = slot_run(None)
+    assert "links" not in f2 and not list((out2 / "items").glob("*-L*.md"))
+    assert "1차 출처 링크" not in (out2 / "feed.json").read_text(encoding="utf-8")
+
+
+def test_link_type():
+    d = detect_feed.official_domains()
+    assert {"openai.com", "claude.com"} <= d, d
+    assert detect_feed.link_type("https://developers.openai.com/api/docs/models/x", d) == "official_doc"
+    assert detect_feed.link_type("https://github.com/acme/sdk/releases/tag/v1", d) == "release_note"
+    assert detect_feed.link_type("https://github.com/acme/sdk", d) is None
+    assert detect_feed.link_type("https://news.ycombinator.com/item?id=1", d) is None
+    assert detect_feed.link_type("https://notopenai.com/x", d) is None   # 끝 두 마디가 다르면 아니다
+
+
 TESTS = [(n, f) for n, f in globals().items() if n.startswith("test_")]
 
 
@@ -216,7 +286,11 @@ def mutations():
     from pipeline.importance import policy
     orig_key, orig_select = detect_feed.url_key, detect_feed.select
     orig_quiet, orig_note = policy.quiet_advisory, detect_feed.folded_note
+    orig_type, orig_lnote = detect_feed.link_type, detect_feed.links_note
     return [
+        ("모든 링크를 1차 출처로 (R2 깨짐)", lambda: setattr(detect_feed, "link_type", lambda u, d: "official_doc"),
+         lambda: setattr(detect_feed, "link_type", orig_type)),
+        ("받은 링크를 소식에 안 적음", lambda: setattr(detect_feed, "links_note", lambda rows: ""), lambda: setattr(detect_feed, "links_note", orig_lnote)),
         ("공지 해당 여부 무시", lambda: setattr(policy, "quiet_advisory", lambda e: False), lambda: setattr(policy, "quiet_advisory", orig_quiet)),
         ("악성 기록도 해당 없으면 뺌", lambda: setattr(policy, "quiet_advisory", lambda e: bool(e.get("advisory")) and e["advisory"].get("affects_ours") is False),
          lambda: setattr(policy, "quiet_advisory", orig_quiet)),
