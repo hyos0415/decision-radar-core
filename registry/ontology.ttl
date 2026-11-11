@@ -1,0 +1,73 @@
+# 데이터 등록부 스키마 (OWL) — docs/design/data-registry.md §3 · §5-3
+# 클래스 · 속성 · domain/range를 정의한다. 추론은 빌드 때만 (build.py, owlrl).
+#
+# 주의 — OWL은 열린 세계다:
+#   - rdfs:domain / rdfs:range는 검증이 아니라 추론이다. range가 CollectionUnit인 속성의 대상에 오타 ID를 쓰면
+#     오류가 아니라 「그 ID도 CollectionUnit이다」가 추론된다. 대상이 등록된 것인지는 shapes.ttl(SHACL)이 막는다.
+#   - 그래서 SHACL은 추론 없이(asserted 트리플 + 이 파일의 subClassOf만) 돈다 — build.py 참고.
+#   - 같은 이유로 owl:FunctionalProperty를 쓰지 않는다. 값이 둘이면 OWL은 거부하지 않고 「두 값은 같은 개체」(owl:sameAs)로 추론한다.
+#     「하나만」은 SHACL sh:maxCount가 맡는다.
+#   - 한 속성에 domain을 둘 적으면 OWL은 교집합으로 읽는다. 그래서 「→ 수집 단위」 관계를 collectedBy(항목 출처) ·
+#     channelOf(통로) 둘로 나눴다 (설계 §5-3).
+
+@prefix radar: <https://github.com/hyos0415/decision-radar/registry#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos:  <http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+<https://github.com/hyos0415/decision-radar/registry> a owl:Ontology ;
+    rdfs:label "Decision Radar 데이터 등록부"@ko ;
+    rdfs:comment "기술 · 출처 · component · 결정의 정체성과 이름 · 사람이 정한 관계. 기계가 정하는 값(tiers.json 등급 · 버전)은 넣지 않는다."@ko .
+
+# ── 출처 (첫 조각, HYO-180) ──
+
+radar:CollectionUnit a owl:Class ;
+    rdfs:subClassOf skos:Concept ;
+    rdfs:label "수집 단위"@ko ;
+    rdfs:comment "수집기가 한 번에 돌리고 run.json에 실패를 남기는 단위. collector/health.py가 출처 건강을 이 단위로 본다."@ko .
+
+radar:ItemSource a owl:Class ;
+    rdfs:subClassOf skos:Concept ;
+    rdfs:label "항목 출처"@ko ;
+    rdfs:comment "items.jsonl 항목의 source 값. 수집 단위와 이름이 같은 것(reddit 등)은 같은 개체가 두 클래스에 다 든다."@ko .
+
+radar:Channel a owl:Class ;
+    rdfs:subClassOf skos:Concept ;
+    rdfs:label "통로"@ko ;
+    rdfs:comment "items.jsonl 항목의 channels 값의 종류. 뒤에 값이 붙는 통로(r/ · vendor: · task: · runtime-security:)는 channelPrefix로 알아본다. 붙는 값(서브레딧 · 벤더 · 태스크)은 pool.yaml · vendors.yaml이 정하므로 등록하지 않는다."@ko .
+
+radar:collectedBy a owl:ObjectProperty ;
+    rdfs:domain radar:ItemSource ;
+    rdfs:range radar:CollectionUnit ;
+    rdfs:label "수집 단위"@ko ;
+    rdfs:comment "항목 출처 → 그 항목을 모은 수집 단위. 예: python · nodejs · osv → security (HYO-179)."@ko .
+
+radar:collects a owl:ObjectProperty ;
+    owl:inverseOf radar:collectedBy ;
+    rdfs:comment "collectedBy의 역관계 — 사람은 적지 않는다. 빌드가 추론해 registry.json items에 넣는다."@ko .
+
+radar:channelOf a owl:ObjectProperty ;
+    rdfs:domain radar:Channel ;
+    rdfs:range radar:CollectionUnit ;
+    rdfs:label "통로의 수집 단위"@ko ;
+    rdfs:comment "통로 → 그 통로를 만드는 수집 단위. 항목은 합쳐지면 두 단위의 통로를 함께 가질 수 있어서(의존성 릴리스 + vendor:), 항목 → 단위는 source(collectedBy)로만 정한다."@ko .
+
+radar:hasChannel a owl:ObjectProperty ;
+    owl:inverseOf radar:channelOf ;
+    rdfs:comment "channelOf의 역관계 — 빌드가 추론해 registry.json channels에 넣는다."@ko .
+
+radar:channelPrefix a owl:DatatypeProperty ;
+    rdfs:domain radar:Channel ;
+    rdfs:range xsd:string ;
+    rdfs:label "통로 접두"@ko ;
+    rdfs:comment "뒤에 값이 붙는 통로의 앞부분 (예: r/ · vendor:). 없으면 통로 이름 그대로 맞춘다."@ko .
+
+# ── 쓰는 SKOS 공리 (rdflib은 SKOS 어휘의 공리를 갖고 있지 않다) ──
+skos:Concept a owl:Class .
+skos:prefLabel a owl:AnnotationProperty ; rdfs:subPropertyOf rdfs:label .
+skos:altLabel a owl:AnnotationProperty ; rdfs:subPropertyOf rdfs:label .
+skos:hiddenLabel a owl:AnnotationProperty ; rdfs:subPropertyOf rdfs:label .
+skos:broaderTransitive a owl:ObjectProperty, owl:TransitiveProperty .
+skos:broader a owl:ObjectProperty ; rdfs:subPropertyOf skos:broaderTransitive ; owl:inverseOf skos:narrower .
+skos:narrower a owl:ObjectProperty .

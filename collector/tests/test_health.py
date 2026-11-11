@@ -6,6 +6,7 @@
 실제 radar-snapshots가 옆에 있으면 W42~W45를 다시 검사해 같은 결과인지 본다 (CI에는 없어서 건너뛴다).
 """
 import json
+import os
 import sys
 import tempfile
 import traceback
@@ -120,6 +121,40 @@ def test_security_zero_is_quiet_but_crash_is_caught():
     cur["runs"][0]["sources"]["security"]["crash"] = "URLError: osv"
     ps = health.evaluate(healthy(), cur, {})
     assert [r["rule"] for r in ps["source:security"]["reasons"]] == ["failed"], ps
+    assert ps["source:security"]["evidence"]["count"] == 4, ps   # HYO-180: python 3 · nodejs 1을 등록부로 묶어 센다 (전에는 0)
+
+
+def test_sources_grouped_by_registry():
+    """HYO-180 — 항목 source를 등록부의 수집 단위로 묶는다. security = osv + python + nodejs, checked에도 security가 든다."""
+    base = {"hn": {"items": 600}, "vendor": {"items": 40}}     # wk()의 실행 기록은 hn · vendor가 돈 주다
+    hist = [wk(f"2026-W{w}", by_source={**base, "python": {"items": 2}, "osv": {"items": 4}}) for w in (42, 43, 44, 45)]
+    cur = wk("2026-W46", by_source={**base, "python": {"items": 3}, "nodejs": {"items": 1}, "osv": {"items": 0}})
+    reg = health._registry()
+    units, unknown = health.unit_counts(cur["manifest"]["counts"]["by_source"], reg)
+    assert units["security"] == {"items": 4, "new": 0} and units["hn"]["items"] == 600 and unknown == {}, (units, unknown)
+    doc = health.check(hist, cur, {}, {})
+    assert doc["checked"] == 3 and doc["problems"] == [], doc        # 수집 단위 hn · vendor · security (페이지 · 피드 없음)
+
+
+def test_unregistered_source_and_channel_alert():
+    """HYO-180 (사용자 11/11) — 등록부에 없는 항목 source · 통로는 어느 수집 단위에도 안 세어지니 알린다. 등록된 통로는 조용하다."""
+    cur = wk("2026-W46", by_source={"hn": {"items": 600}, "vendor": {"items": 40}, "go": {"items": 2}})
+    cur["channels"] = {"stories": 600, "r/LocalLLaMA": 10, "vendor:anthropic": 5, "task:text-generation": 20,
+                       "runtime-security:go": 2, "podcast:latent-space": 3, "podcast:other": 1}
+    ps = health.evaluate(healthy(), cur, {})
+    assert sorted(k for k in ps if ps[k]["reasons"][0]["rule"] == "unregistered") == ["channel:podcast:", "source:go"], ps
+    assert ps["source:go"]["evidence"]["count"] == 2 and ps["channel:podcast:"]["evidence"]["count"] == 4, ps
+    title, body = health.issue_text({"week": "2026-W46"}, {**ps["source:go"], "streak": 1, "since": "2026-W46"})
+    assert "등록부에 없음" in title and "registry/sources.ttl" in body, (title, body)
+
+
+def test_unregistered_streak():
+    def week(w):
+        x = wk(w, by_source={"hn": {"items": 600}, "vendor": {"items": 40}, "go": {"items": 2}})
+        x["channels"] = {"stories": 600}
+        return x
+    doc = health.check([week("2026-W44"), week("2026-W45")], week("2026-W46"), {}, {})
+    assert [(p["key"], p["streak"], p["since"]) for p in doc["problems"]] == [("source:go", 3, "2026-W44")], doc
 
 
 def test_missing_page_failed_replaced_skipped_other_failures_keyed():
@@ -189,8 +224,9 @@ def test_alert_cli_without_key_skips(tmp=None):
 
 def test_real_frozen_weeks_regression():
     """옆에 radar-snapshots가 있으면 — W42~W44는 조용하고 W45는 Gemini 한 건(pypi python은 예외).
-    W46은 문서 주소 이동 4건(HYO-175~178)만 — security 0건(HYO-179)은 빠져야 한다."""
-    snaps = REPO.parent / "radar-snapshots"
+    W46은 문서 주소 이동 4건(HYO-175~178)만 — security 0건(HYO-179)은 빠져야 한다.
+    HYO-180: 등록부로 묶으면 W46 security는 4건 · checked 13 → 14, 어느 주에도 「등록부에 없음」이 없다."""
+    snaps = Path(os.environ.get("RADAR_SNAPSHOT_REPO") or REPO.parent / "radar-snapshots")
     if not (snaps / "2026-W45" / "manifest.json").exists():
         print("  (radar-snapshots 없음 — 건너뜀)")
         return
@@ -207,6 +243,8 @@ def test_real_frozen_weeks_regression():
              "https://platform.openai.com/docs/changelog", "https://platform.openai.com/docs/deprecations"]
     assert sorted(p["key"] for p in doc["problems"]) == [f"page:{u}" for u in moved], doc
     assert all([r["rule"] for r in p["reasons"]] == ["moved"] for p in doc["problems"]), doc
+    w46 = health.load_week(snaps, "2026-W46")
+    assert health.unit_counts(health._by_source(w46), health._registry())[0]["security"]["items"] == 4 and doc["checked"] == 14, doc
 
 
 def main():

@@ -7,7 +7,10 @@
 아무도 못 봤다(`non_200`은 매주 `pypi python` 404라 소음). 그래서 출처마다 「이상」만 골라 한 파일 · 한 줄로 올린다.
 
 검사 단위와 규칙 (사용자 결정 11/5):
-- source:<이름>   (reddit · hn · github · huggingface · vendor · security) — 죽음(crash) · 0건 · 항목 수가 지난 4주 중앙값의 절반 미만
+- source:<이름>   수집 단위 (reddit · hn · github · huggingface · vendor · security — 데이터 등록부 registry/sources.ttl) — 죽음(crash) ·
+                  0건 · 항목 수가 지난 4주 중앙값의 절반 미만. 항목 수는 항목 source를 등록부의 수집 단위로 묶어 센다
+                  (python · nodejs · osv → security, HYO-180). 등록부에 없는 항목 source도 source:<이름>으로 「등록부에 없음」
+- channel:<통로>  항목 channels 중 등록부에 없는 통로 종류 — 「등록부에 없음」 (HYO-180, 사용자 11/11)
 - page:<url>      벤더 페이지 — 못 받음 · 수집기가 실패로 적음 · 본문이 지난 4주 중앙값의 절반 미만 · 다른 도메인으로 넘어감 · 3주째 그대로
 - feed:<url>      벤더 RSS · Atom 피드 — 실패 · 다른 도메인 · 3주째 새 항목 없음
 - url:<url>       그 밖의 실패 · 200 아닌 응답 (GitHub · Reddit · 보안 채널 …)
@@ -39,9 +42,10 @@ ALERTS = HERE / "out" / "health-alerts.json"
 BASE_WEEKS = 4       # 비교할 지난 주 수
 STALE_WEEKS = 3      # 이만큼 연속 그대로면 「3주째 그대로」
 STREAK_DEPTH = 8     # 「N주째」를 셀 때 거슬러 볼 최대 주 수
-SOURCES = ["reddit", "hn", "github", "huggingface", "vendor", "security"]
-QUIET_SOURCES = {"security"}   # 보안 채널은 0건이 정상 (사용자 11/5, doc-pipeline §4-7) — 항목도 `osv` · `python` · `nodejs`로 세어진다
-RULES = {"failed": "실패", "zero": "0건", "half": "절반 미만", "moved": "도메인 바뀜", "stale": "3주째 그대로"}
+# 수집 단위 목록은 데이터 등록부에서 읽는다 (registry/sources.ttl → registry.json, HYO-180) — _registry()
+QUIET_SOURCES = {"security"}   # 보안 채널은 0건이 정상 (사용자 11/5, doc-pipeline §4-7)
+RULES = {"failed": "실패", "zero": "0건", "half": "절반 미만", "moved": "도메인 바뀜", "stale": "3주째 그대로",
+         "unregistered": "등록부에 없음"}
 HEAD_CHARS = 200
 
 LINEAR_API = "https://api.linear.app/graphql"
@@ -51,18 +55,49 @@ TITLE_PREFIX = "출처 고장:"
 KEY_LINE = "health-key: "
 
 
+# ── 데이터 등록부 (HYO-180) ──
+
+def _registry():
+    """registry/registry.json 조회 (표준 라이브러리만 — rdflib은 빌드 때만). 수집 단위 · 항목 출처 · 통로 이름."""
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from registry import lookup
+    return lookup.load()
+
+
+def unit_counts(by_source, reg):
+    """manifest by_source(항목 source별) → ({수집 단위: {items, new}}, {등록부에 없는 항목 source: items})."""
+    units, unknown = {}, {}
+    for s, c in (by_source or {}).items():
+        c = c or {}
+        u = reg.unit_of_source(s)
+        if u is None:
+            unknown[s] = c.get("items", 0)
+            continue
+        d = units.setdefault(u, {"items": 0, "new": 0})
+        d["items"] += c.get("items", 0)
+        d["new"] += c.get("new", 0)
+    return units, unknown
+
+
+def _by_source(week):
+    return (week["manifest"].get("counts") or {}).get("by_source") or {}
+
+
 # ── 주 자료 ──
 
 def week_data(manifest, runs, items, texts=None):
-    """검사 한 주 분량 — manifest · 그 주 실행 기록(run.json들) · 피드별 항목 수 · 페이지 전문(이번 주만, 증거 앞부분용)."""
-    feeds = {}
+    """검사 한 주 분량 — manifest · 그 주 실행 기록(run.json들) · 피드별 항목 수 · 통로별 항목 수 · 페이지 전문(이번 주만, 증거 앞부분용)."""
+    feeds, channels = {}, {}
     for it in items:
         f = (it.get("meta") or {}).get("feed")
         if f and it.get("source") == "vendor":
             c = feeds.setdefault(f, {"items": 0, "new": 0})
             c["items"] += 1
             c["new"] += bool(it.get("new"))
-    return {"week": manifest["week"], "manifest": manifest, "runs": runs, "feeds": feeds, "texts": texts or {}}
+        for ch in it.get("channels") or []:
+            channels[ch] = channels.get(ch, 0) + 1
+    return {"week": manifest["week"], "manifest": manifest, "runs": runs, "feeds": feeds, "channels": channels, "texts": texts or {}}
 
 
 def load_week(repo, week, texts=False):
@@ -125,21 +160,24 @@ def evaluate(hist, cur, feeds_cfg):
     out = {}
 
     def add(kind, name, url, rule, detail, **ev):
-        key = f"{kind}:{url}" if kind != "source" else f"source:{name}"
+        key = f"{kind}:{url}" if kind not in ("source", "channel") else f"{kind}:{name}"
         p = out.setdefault(key, {"key": key, "kind": kind, "name": name, "url": url, "reasons": [], "evidence": {}})
         if not any(r["rule"] == rule for r in p["reasons"]):
             p["reasons"].append({"rule": rule, "detail": detail})
         p["evidence"].update({k: v for k, v in ev.items() if v is not None})
 
-    # 출처 단위 — 죽음 · 0건 · 절반 미만
+    # 출처 단위 — 죽음 · 0건 · 절반 미만. 항목 source를 등록부의 수집 단위로 묶어 센다 (HYO-180 — W46 security 4건이
+    # python 3 · nodejs 1로 흩어져 0건으로 보였다, HYO-179)
+    reg = _registry()
     crashed = {s for r in m.get("runs") or [] for s in r.get("crashed") or []}
-    by_source = (m.get("counts") or {}).get("by_source") or {}
+    units, unknown = unit_counts(_by_source(cur), reg)
+    base_units = [unit_counts(_by_source(h), reg)[0] for h in base]
     ran = {s for r in cur["runs"] for s in (r.get("sources") or {})}
-    for s in SOURCES:
-        if s not in ran and s not in by_source:
+    for s in reg.collection_units():
+        if s not in ran and s not in units:
             continue   # 이 주에 돌지 않은 출처 (보안 채널은 W46부터)
-        n = (by_source.get(s) or {}).get("items", 0)
-        prev = _median([((h["manifest"].get("counts") or {}).get("by_source") or {}).get(s, {}).get("items") for h in base])
+        n = (units.get(s) or {}).get("items", 0)
+        prev = _median([(u.get(s) or {}).get("items") for u in base_units])
         if s in crashed:
             msg = next((r["sources"][s]["crash"] for r in cur["runs"] if "crash" in (r.get("sources") or {}).get(s, {})), "crash")
             add("source", s, None, "failed", f"수집기가 죽었다: {msg[:200]}", count=n, baseline_count=prev)
@@ -149,6 +187,18 @@ def evaluate(hist, cur, feeds_cfg):
             add("source", s, None, "zero", "항목 0건", count=n, baseline_count=prev)
         elif prev and n * 2 < prev:
             add("source", s, None, "half", f"항목 {n:,}건 — 지난 {len(base)}주 중앙값 {prev:,.0f}건의 절반 미만", count=n, baseline_count=prev)
+
+    # 등록부에 없는 이름 (HYO-180, 사용자 11/11) — 새 출처 · 통로를 붙이고 등록부에 안 적으면 어느 수집 단위에도 안 세어진다.
+    # 조용히 빠지지 않게 알린다. 통로는 종류(접두)로 묶는다 — 서브레딧 · 벤더 같은 뒤 값은 등록하지 않는다
+    for s, n in sorted(unknown.items()):
+        add("source", s, None, "unregistered", f"등록부에 없는 항목 출처 — {n:,}건이 어느 수집 단위에도 안 세어진다", count=n)
+    unknown_ch = {}
+    for c, n in (cur.get("channels") or {}).items():
+        if reg.channel_kind(c) is None:
+            k = c.split(":", 1)[0] + ":" if ":" in c else c
+            unknown_ch[k] = unknown_ch.get(k, 0) + n
+    for k, n in sorted(unknown_ch.items()):
+        add("channel", k, None, "unregistered", f"등록부에 없는 통로 — 항목 {n:,}건", count=n)
 
     # 페이지
     pages = {p["url"]: p for p in m.get("pages") or []}
@@ -215,8 +265,8 @@ def check(hist, cur, feeds_cfg, known):
             streak, since = streak + 1, hist[i]["week"]
         p.update(streak=streak, since=since)
     problems.sort(key=lambda p: (-p["streak"], p["kind"], p["key"]))
-    checked = (len([s for s in SOURCES if s in ((cur["manifest"].get("counts") or {}).get("by_source") or {})])
-               + len([p for p in cur["manifest"].get("pages") or [] if p.get("status") != "replaced"]) + len(feeds_cfg))
+    units = unit_counts(_by_source(cur), _registry())[0]
+    checked = (len(units) + len([p for p in cur["manifest"].get("pages") or [] if p.get("status") != "replaced"]) + len(feeds_cfg))
     return {"version": 1, "week": cur["week"], "checked": checked, "line": line(problems, checked), "problems": problems, "known": skipped}
 
 
@@ -312,8 +362,13 @@ def issue_text(doc, p):
         lines.append(f"- 넘어간 주소: {ev['final_url']}")
     if ev.get("head"):
         lines += ["", "받은 앞부분:", "```", ev["head"], "```"]
-    lines += ["", f"고치는 곳: `collector/vendors.yaml` · `collector/pool.yaml` (주소를 옮기면 `replaces`로 빈 주를 메운다). 일부러 둘 것이면 "
-              f"`collector/source-health.yaml`에 예외로 등록한다. 고치면 사람이 닫는다.",
+    if any(r["rule"] == "unregistered" for r in p["reasons"]):
+        fix = ("고치는 곳: 새로 붙인 출처 · 통로면 데이터 등록부 `registry/sources.ttl`에 적고 `python registry/build.py`로 "
+               "`registry.json`을 다시 만든다 (`registry/README.md`). 수집기가 이름을 잘못 쓴 것이면 그 출처 코드를 고친다. 고치면 사람이 닫는다.")
+    else:
+        fix = ("고치는 곳: `collector/vendors.yaml` · `collector/pool.yaml` (주소를 옮기면 `replaces`로 빈 주를 메운다). 일부러 둘 것이면 "
+               "`collector/source-health.yaml`에 예외로 등록한다. 고치면 사람이 닫는다.")
+    lines += ["", fix,
               "", f"자동 생성 — `collector/health.py` (HYO-172)", f"`{KEY_LINE}{p['key']}`"]
     return title, "\n".join(lines)
 

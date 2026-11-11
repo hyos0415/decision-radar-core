@@ -10,10 +10,10 @@ name: desktop
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-    paths: ["desktop/**", "product/**", "collector/**", "pipeline/**", "requirements.txt", ".github/workflows/desktop.yml"]
+    paths: ["desktop/**", "product/**", "collector/**", "pipeline/**", "registry/**", "requirements.txt", ".github/workflows/desktop.yml"]
   push:
     branches: [main]
-    paths: ["desktop/**", "product/**", "collector/**", "pipeline/**", "requirements.txt", ".github/workflows/desktop.yml"]
+    paths: ["desktop/**", "product/**", "collector/**", "pipeline/**", "registry/**", "requirements.txt", ".github/workflows/desktop.yml"]
   workflow_dispatch:
 
 env:
@@ -53,7 +53,11 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             product/requirements.txt
-      - run: pip install -r requirements.txt -r product/requirements.txt
+            registry/requirements.txt
+      - run: pip install -r requirements.txt -r product/requirements.txt -r registry/requirements.txt
+      - name: 등록부(registry.json)가 Turtle 원본 · SHACL 검사와 같은가 (HYO-180)
+        run: python registry/build.py --check
+      - run: python registry/tests/test_registry.py    # 등록부 빌드 · SHACL이 잡아야 할 것 · 조회 — 얼린 주 재검사는 없으면 건너뜀
       - run: python desktop/backend/test_backend.py   # 스텁 · 임시 폴더 · 네트워크 없음 (실사용 모드는 임시 git repo + 로컬 원격)
       - run: python product/radar/test_engines.py     # 구독 CLI 엔진 — 가짜 CLI · 프로세스 종료가 OS마다 갈린다
       - run: python product/radar/test_export.py      # git 내보내기 — 승인 push · revisit 기록 커밋
@@ -74,7 +78,10 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             product/requirements.txt
-      - run: pip install -r requirements.txt -r product/requirements.txt
+            registry/requirements.txt
+      - run: pip install -r requirements.txt -r product/requirements.txt -r registry/requirements.txt
+      - run: python registry/build.py --check
+      - run: python registry/tests/test_registry.py
       - run: python desktop/backend/test_backend.py
       - run: python product/radar/test_engines.py
       - run: python product/radar/test_export.py

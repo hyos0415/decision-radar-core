@@ -495,13 +495,14 @@ class WeekListSlot(BaseModel):
 
 
 class SourceHealthReason(BaseModel):
-    rule: Literal["failed", "zero", "half", "moved", "stale"] = Field(description="걸린 규칙")
+    rule: Literal["failed", "zero", "half", "moved", "stale", "unregistered"] = Field(
+        description="걸린 규칙 — unregistered: 데이터 등록부에 없는 항목 출처 · 통로 (HYO-180). collector/health.py RULES와 같은 목록")
     detail: str = Field(description="사람이 읽는 근거 한 줄")
 
 
 class SourceHealthProblem(BaseModel):
     key: str
-    kind: Literal["source", "page", "feed", "url"]
+    kind: Literal["source", "channel", "page", "feed", "url"] = Field(description="검사 단위 — channel: 등록부에 없는 통로 종류 (HYO-180)")
     name: str = Field(description="출처 이름")
     url: Optional[str] = None
     reasons: list[SourceHealthReason]

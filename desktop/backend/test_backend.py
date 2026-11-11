@@ -1617,6 +1617,24 @@ def scenario_hyo168(tmp):
     check("출처 건강: 필드가 그대로 나온다 (evidence · 모르는 키는 뺀다)",
           h["line"] == sh["line"] and h["checked"] == 23 and p0["name"] == "google-gemini" and p0["kind"] == "page" and p0["streak"] == 2
           and p0["since"] == "2026-W45" and [r["rule"] for r in p0["reasons"]] == ["failed", "half"] and "evidence" not in p0, h)
+    # HYO-180: 등록부에 없는 항목 출처 · 통로 — 새 규칙 unregistered · 새 단위 channel이 계약에 있어야 목록 전체가 500으로 죽지 않는다
+    sh2 = {**sh, "line": "출처 고장 2 — go, podcast:", "problems": [
+        {"key": "source:go", "kind": "source", "name": "go", "url": None, "reasons": [{"rule": "unregistered", "detail": "등록부에 없는 항목 출처"}],
+         "streak": 1, "since": "2026-W46"},
+        {"key": "channel:podcast:", "kind": "channel", "name": "podcast:", "url": None, "reasons": [{"rule": "unregistered", "detail": "등록부에 없는 통로"}],
+         "streak": 1, "since": "2026-W46"}]}
+    json.dump(sh2, open(sh_path, "w", encoding="utf-8"), ensure_ascii=False)
+    r = c.get("/week-list")
+    check("출처 건강: 등록부에 없음(unregistered) · 통로(channel) 단위도 그대로 (HYO-180)",
+          r.status_code == 200 and [(p["kind"], p["reasons"][0]["rule"]) for p in r.json()["source_health"]["problems"]]
+          == [("source", "unregistered"), ("channel", "unregistered")], r.text[:300])
+    # 수집기 규칙 목록과 계약이 어긋나면 그 주 목록 전체가 ResponseValidationError(500)로 죽는다 (11/11 — 규칙을 더하다 실측). 두 목록을 대조한다
+    import typing
+    sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
+    from collector import health as collector_health
+    import schemas as api_schemas
+    rules = set(typing.get_args(api_schemas.SourceHealthReason.model_fields["rule"].annotation))
+    check("출처 건강: 계약의 rule 목록 = collector/health.py RULES", rules == set(collector_health.RULES), (rules, set(collector_health.RULES)))
     open(sh_path, "w", encoding="utf-8").write("{ broken")
     r = c.get("/week-list")
     check("출처 건강: 깨진 JSON → null · 목록은 그대로", r.status_code == 200 and r.json()["source_health"] is None and r.json()["week"] == "2026-W46", r.text)
