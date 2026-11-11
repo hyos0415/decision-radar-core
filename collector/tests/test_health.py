@@ -111,6 +111,17 @@ def test_source_zero_half_crash():
     assert [r["rule"] for r in ps["source:reddit"]["reasons"]] == ["half"], ps
 
 
+def test_security_zero_is_quiet_but_crash_is_caught():
+    """HYO-179 — 보안 채널은 0건이 정상이다(§4-7). W46: 항목 4건이 `python` · `nodejs`로 세어져 `security`는 0건 → 거짓 경보였다."""
+    cur = wk("2026-W46", by_source={"hn": {"items": 600}, "vendor": {"items": 40}, "python": {"items": 3}, "nodejs": {"items": 1}})
+    cur["runs"][0]["sources"]["security"] = {"failed": [], "runtimes": {"python": {}, "nodejs": {}}}
+    assert "source:security" not in health.evaluate(healthy(), cur, {})
+    cur["manifest"]["runs"][0]["crashed"] = ["security"]
+    cur["runs"][0]["sources"]["security"]["crash"] = "URLError: osv"
+    ps = health.evaluate(healthy(), cur, {})
+    assert [r["rule"] for r in ps["source:security"]["reasons"]] == ["failed"], ps
+
+
 def test_missing_page_failed_replaced_skipped_other_failures_keyed():
     cur = wk("2026-W46", [prow(GEM, 47000, "replaced"), prow("https://docs.typesafe.ai/models.md", 8000, "missing", "typesafe")],
              failed=[{"channel": "vendor:langchain", "repo": "langchain-ai/langgraph", "error": "404"}])
@@ -177,7 +188,8 @@ def test_alert_cli_without_key_skips(tmp=None):
 
 
 def test_real_frozen_weeks_regression():
-    """옆에 radar-snapshots가 있으면 — W42~W44는 조용하고 W45는 Gemini 한 건(pypi python은 예외)."""
+    """옆에 radar-snapshots가 있으면 — W42~W44는 조용하고 W45는 Gemini 한 건(pypi python은 예외).
+    W46은 문서 주소 이동 4건(HYO-175~178)만 — security 0건(HYO-179)은 빠져야 한다."""
     snaps = REPO.parent / "radar-snapshots"
     if not (snaps / "2026-W45" / "manifest.json").exists():
         print("  (radar-snapshots 없음 — 건너뜀)")
@@ -188,6 +200,13 @@ def test_real_frozen_weeks_regression():
         assert health.check(health.history(snaps, w), health.load_week(snaps, w), cfg, health.load_known())["problems"] == [], w
     doc = health.check(health.history(snaps, "2026-W45"), health.load_week(snaps, "2026-W45", texts=True), cfg, health.load_known())
     assert [p["key"] for p in doc["problems"]] == [f"page:{GEM}"] and doc["problems"][0]["evidence"]["head"].startswith("Release notes"), doc
+    if not (snaps / "2026-W46" / "manifest.json").exists():
+        return
+    doc = health.check(health.history(snaps, "2026-W46"), health.load_week(snaps, "2026-W46"), cfg, health.load_known())
+    moved = ["https://docs.claude.com/en/docs/about-claude/model-deprecations", "https://docs.claude.com/en/release-notes/api",
+             "https://platform.openai.com/docs/changelog", "https://platform.openai.com/docs/deprecations"]
+    assert sorted(p["key"] for p in doc["problems"]) == [f"page:{u}" for u in moved], doc
+    assert all([r["rule"] for r in p["reasons"]] == ["moved"] for p in doc["problems"]), doc
 
 
 def main():

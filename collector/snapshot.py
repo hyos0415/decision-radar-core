@@ -167,7 +167,7 @@ def build(repo, target, extra):
         if old is None:
             row["status"] = "baseline"
             rep = it["meta"].get("replaces")
-            if rep:  # 주소를 옮긴 첫 주 — 옛 페이지는 「바뀜」, 마지막 정상 주 이후 날짜 블록을 메운다 (HYO-172)
+            if rep:  # 주소를 옮긴 첫 주 — 옛 페이지는 「바뀜」, 마지막 정상 주 이후 날짜 블록을 메운다 (HYO-172) · 지난주 정상이면 줄 비교 (HYO-175~178)
                 replaced[f"vendor-page:{it['meta']['vendor']}:{rep}"] = it["url"]
                 fill = backfill(repo, weeks, f"vendor-page:{it['meta']['vendor']}:{rep}", it, text, week)
                 if fill:
@@ -219,7 +219,10 @@ def build(repo, target, extra):
 def backfill(repo, weeks, old_id, it, text, week):
     """주소를 옮긴 페이지의 빈 주 메우기 (HYO-172) — 옛 주소가 마지막으로 정상이던 주(본문이 그 페이지 최대의 절반 이상)의
     가장 늦은 날짜보다 뒤인 날짜 블록만 page-diff 항목 하나로. 새 주소는 「기준」이라 비교할 지난 본문이 없다 — 고장 난 동안
-    올라온 소식이 영영 안 보이는 것을 막는다. 정상 주가 없거나 날짜를 못 읽으면 None."""
+    올라온 소식이 영영 안 보이는 것을 막는다. 정상 주가 없거나 날짜를 못 읽으면 None.
+
+    옛 주소가 **지난주까지 정상**이었으면(주소만 옮겼다 — 리다이렉트로 받아 온 본문) 날짜로 메우지 않고 지난주 본문과 줄 비교한다.
+    폐기 페이지는 날짜를 못 읽거나 앞으로의 은퇴일이 「가장 늦은 날짜」라서 날짜 메우기로는 그 주 변경이 빠진다 (HYO-175~178)."""
     hist = []
     for w in weeks:
         row = next((p for p in read_manifest(repo, w)["pages"] if p["id"] == old_id and p.get("status") not in ("missing", "replaced")), None)
@@ -229,11 +232,22 @@ def backfill(repo, weeks, old_id, it, text, week):
         return None
     top = max(r["text_chars"] for _, r in hist)
     good_week, good = [(w, r) for w, r in hist if r["text_chars"] * 2 >= top][-1]
-    after = page_entries.latest_date((Path(repo) / good_week / good["file"]).read_text(encoding="utf-8"), int(good_week[:4]))
+    old_text = (Path(repo) / good_week / good["file"]).read_text(encoding="utf-8")
+    vendor = it["meta"]["vendor"]
+    if good_week == weeks[-1]:
+        added, removed = line_diff(old_text.removesuffix("\n"), text)
+        if not added and not removed:
+            return None
+        return {"id": f"vendor-diff:{vendor}:{it['url']}@{week}", "source": "vendor", "channels": list(it["channels"]),
+                "title": f"[{vendor}] {it['url']} 변경 ({good_week} → {week}, 주소 옮김)", "url": it["url"], "created_at": it["created_at"],
+                "text": "\n".join(added)[:TEXT_MAX], "signals": {"added_lines": len(added), "removed_lines": len(removed)}, "links": [],
+                "meta": {"vendor": vendor, "kind": "page-diff", "previous": good_week, "removed": "\n".join(removed)[:TEXT_MAX],
+                         "backfill": {"replaces": good["url"], "from_week": good_week, "by": "line"}},
+                "first_seen": week, "new": True}
+    after = page_entries.latest_date(old_text, int(good_week[:4]))
     lines = page_entries.blocks_after(text, after, int(week[:4])) if after else []
     if not lines:
         return None
-    vendor = it["meta"]["vendor"]
     return {"id": f"vendor-diff:{vendor}:{it['url']}@{week}", "source": "vendor", "channels": list(it["channels"]),
             "title": f"[{vendor}] {it['url']} 메우기 ({good_week} 이후 → {week})", "url": it["url"], "created_at": it["created_at"],
             "text": "\n".join(lines)[:TEXT_MAX], "signals": {"added_lines": len(lines), "removed_lines": 0}, "links": [],
