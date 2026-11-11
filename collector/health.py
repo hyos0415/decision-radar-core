@@ -40,6 +40,7 @@ BASE_WEEKS = 4       # 비교할 지난 주 수
 STALE_WEEKS = 3      # 이만큼 연속 그대로면 「3주째 그대로」
 STREAK_DEPTH = 8     # 「N주째」를 셀 때 거슬러 볼 최대 주 수
 SOURCES = ["reddit", "hn", "github", "huggingface", "vendor", "security"]
+QUIET_SOURCES = {"security"}   # 보안 채널은 0건이 정상 (사용자 11/5, doc-pipeline §4-7) — 항목도 `osv` · `python` · `nodejs`로 세어진다
 RULES = {"failed": "실패", "zero": "0건", "half": "절반 미만", "moved": "도메인 바뀜", "stale": "3주째 그대로"}
 HEAD_CHARS = 200
 
@@ -142,6 +143,8 @@ def evaluate(hist, cur, feeds_cfg):
         if s in crashed:
             msg = next((r["sources"][s]["crash"] for r in cur["runs"] if "crash" in (r.get("sources") or {}).get(s, {})), "crash")
             add("source", s, None, "failed", f"수집기가 죽었다: {msg[:200]}", count=n, baseline_count=prev)
+        if s in QUIET_SOURCES:
+            continue   # 0건 · 적음이 정상 — 죽음 · 실패 · 리다이렉트만 본다 (W46에 「0건」으로 잘못 울렸다, HYO-179)
         if n == 0 and s in ran:
             add("source", s, None, "zero", "항목 0건", count=n, baseline_count=prev)
         elif prev and n * 2 < prev:

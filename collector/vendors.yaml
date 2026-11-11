@@ -3,19 +3,22 @@
 # 규칙이 뽑은 이름이 아래 어느 벤더의 match에도 안 걸리면 「경로 없음」으로 보고한다.
 #
 # 경로 종류: github_releases (REST API — releases.atom은 최근 10건뿐이라 쓰지 않는다) · atom · rss (include로 거른다) · page (본문 텍스트를 받아 해시 — 비교는 스냅숏 단계)
-version: 2  # 2: Gemini 마크다운 원문 · replaces (HYO-172)
+version: 3  # 2: Gemini 마크다운 원문 · replaces (HYO-172) · 3: Anthropic · OpenAI 문서 주소 이동 (HYO-175~178)
 vendors:
   anthropic:
     match: [anthropic, claude]
     feeds:
-      - {kind: page, url: "https://docs.claude.com/en/release-notes/api"}
-      - {kind: page, url: "https://docs.claude.com/en/docs/about-claude/model-deprecations"}
+      # docs.claude.com → platform.claude.com 301 (W46 건강 검사가 처음 봤다 — 리다이렉트 기록이 W46부터라 옮긴 날은 모른다).
+      # 본문은 정상이었다 — 옛 주소가 지난주까지 정상이면 옮긴 주는 지난주 본문과 줄 비교한다 (snapshot.backfill)
+      - {kind: page, url: "https://platform.claude.com/docs/en/release-notes/overview", replaces: "https://docs.claude.com/en/release-notes/api"}
+      - {kind: page, url: "https://platform.claude.com/docs/en/about-claude/model-deprecations", replaces: "https://docs.claude.com/en/docs/about-claude/model-deprecations"}
       - {kind: github_releases, repo: anthropics/claude-code}
   openai:
     match: [openai, gpt]
     feeds:
-      - {kind: page, url: "https://platform.openai.com/docs/changelog"}
-      - {kind: page, url: "https://platform.openai.com/docs/deprecations"}
+      # platform.openai.com/docs → developers.openai.com/api/docs 301 (위와 같음, HYO-177 · HYO-178)
+      - {kind: page, url: "https://developers.openai.com/api/docs/changelog", replaces: "https://platform.openai.com/docs/changelog"}
+      - {kind: page, url: "https://developers.openai.com/api/docs/deprecations", replaces: "https://platform.openai.com/docs/deprecations"}
       - {kind: github_releases, repo: openai/openai-agents-python}
   aws-bedrock:
     match: [bedrock]
@@ -38,6 +41,7 @@ vendors:
       # 2026-11-03(W45)부터 HTML 페이지가 aistudio.google.com으로 301 → JS로 그리는 페이지(본문 45자). 마크다운 원문으로 바꾼다 (HYO-172).
       # ai.google.dev/…/changelog.md.txt도 여기로 301이라 최종 주소를 바로 쓴다 — 리다이렉트가 매주 「도메인 바뀜」으로 울리지 않게.
       # replaces: 옛 주소 — 얼릴 때 옛 페이지를 「바뀜(replaced)」으로 두고, 마지막 정상 주 이후 날짜 블록만 page-diff로 메운다
+      # (옛 주소가 지난주까지 정상이었으면 날짜로 메우지 않고 지난주 본문과 줄 비교 — 위 anthropic · openai)
       - {kind: page, format: markdown, url: "https://aistudio.google.com/docs/changelog.md", replaces: "https://ai.google.dev/gemini-api/docs/changelog"}
   typesafe:
     match: [jev, typesafe]

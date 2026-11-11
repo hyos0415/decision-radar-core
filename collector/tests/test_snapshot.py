@@ -149,6 +149,39 @@ def test_moved_page_replaced_and_backfilled():
     assert old not in rows and rows[new]["status"] == "unchanged", rows   # replaced는 한 주만 남는다
 
 
+def test_moved_healthy_page_diffs_against_last_week():
+    """HYO-175~178 — 옛 주소가 지난주까지 정상(리다이렉트로 받던 본문)이면 옮긴 주는 날짜로 메우지 않고 지난주 본문과 줄 비교한다.
+    폐기 페이지의 「가장 늦은 날짜」는 앞으로의 은퇴일이라(OpenAI 2027-04-01) 날짜 메우기로는 새 줄이 빠진다."""
+    repo, out = env()
+    old, new = "https://platform.openai.com/docs/deprecations", "https://developers.openai.com/api/docs/deprecations"
+    w41 = "Deprecations\n2026-10-01: gpt-5 shutdown on 2027-04-01\n2026-09-01: davinci shutdown"
+    make_run(out, "20261006-0700-weekly", "2026-10-06T07:00:00Z", [page("openai", old, w41)])
+    assert freeze(repo, out) == 0
+    make_run(out, "20261013-0700-weekly", "2026-10-13T07:00:00Z", [page("openai", old, w41)])   # 그대로 — 정상
+    assert freeze(repo, out) == 0
+    w43 = "Deprecations\n2026-10-15: gpt-6-luna shutdown on 2027-01-15\n2026-10-01: gpt-5 shutdown on 2027-04-01\n2026-09-01: davinci shutdown"
+    moved = page("openai", new, w43)
+    moved["meta"]["replaces"] = old
+    make_run(out, "20261020-0700-weekly", "2026-10-20T07:00:00Z", [moved])
+    assert freeze(repo, out) == 0
+    rows = {p["url"]: p for p in snapshot.read_manifest(repo, "2026-W43")["pages"]}
+    assert rows[old]["status"] == "replaced" and rows[new]["backfill"] == {"replaces": old, "from_week": "2026-W42", "by": "line"}, rows
+    items = [json.loads(l) for l in (repo / "2026-W43" / "items.jsonl").read_text(encoding="utf-8").splitlines()]
+    d = next(i for i in items if i["meta"].get("kind") == "page-diff")
+    assert d["text"] == "2026-10-15: gpt-6-luna shutdown on 2027-01-15" and d["signals"] == {"added_lines": 1, "removed_lines": 0}, d
+    assert d["url"] == new and d["meta"]["previous"] == "2026-W42" and "주소 옮김" in d["title"], d
+    # 옮겼지만 본문이 같으면 변경 항목이 없다
+    repo2, out2 = env()
+    make_run(out2, "20261006-0700-weekly", "2026-10-06T07:00:00Z", [page("openai", old, w41)])
+    assert freeze(repo2, out2) == 0
+    same = page("openai", new, w41)
+    same["meta"]["replaces"] = old
+    make_run(out2, "20261013-0700-weekly", "2026-10-13T07:00:00Z", [same])
+    assert freeze(repo2, out2) == 0
+    m = snapshot.read_manifest(repo2, "2026-W42")
+    assert m["counts"]["page_diffs"] == 0 and "backfill" not in {p["url"]: p for p in m["pages"]}[new], m["pages"]
+
+
 def test_frozen_week_is_not_rewritten():
     repo, out = env()
     make_run(out, "20261006-0700-weekly", "2026-10-06T07:00:00Z", [item("hn:1")])

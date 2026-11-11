@@ -51,7 +51,7 @@ python collector/tests/test_snapshot.py                # 오프라인 테스트
 - first-seen 원장(`first_seen.jsonl`)으로 다시 나온 항목에 `new: false` — 지우지 않는다
 - 벤더 페이지는 전문을 `pages/`에 두고 지난 주와 줄 단위로 비교해 `page-diff` 항목을 만든다. 그래서 수집기는 페이지만 `TEXT_MAX`에서 자르지 않고 블록마다 줄을 바꾼다
 - 얼린 주는 고치지 않는다 (같은 주를 다른 실행으로 다시 얼리면 거부). 놓친 주는 다음 manifest의 `missing_weeks`
-- 주소를 옮긴 페이지(`vendors.yaml`의 `replaces`)는 옛 페이지를 한 주 `replaced`로 두고, 옛 주소의 마지막 정상 주 이후 날짜 블록을 page-diff로 메운다 (HYO-172)
+- 주소를 옮긴 페이지(`vendors.yaml`의 `replaces`)는 옛 페이지를 한 주 `replaced`로 두고, 옛 주소의 마지막 정상 주 이후 날짜 블록을 page-diff로 메운다 (HYO-172). 옛 주소가 **지난주까지 정상**이었으면(주소만 옮김 — 리다이렉트로 받던 본문) 날짜로 메우지 않고 지난주 본문과 줄 비교한다 — 폐기 페이지는 날짜를 못 읽거나 앞으로의 은퇴일이 가장 늦은 날짜라 날짜 메우기로는 그 주 변경이 빠진다 (HYO-175~178)
 
 ### 출처 건강 검사 (HYO-172)
 
