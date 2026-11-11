@@ -93,6 +93,8 @@ def gate_steps(g, entry, cap):
         return out
     model, changes = g.get("model_changes"), g.get("changes") or []
     note = "모델: " + (", ".join(model) if model else "(없음)")
+    if g.get("official_security"):
+        note += " + 공식 보안 공지라 security (스크립트)"
     if model is not None and list(model) != list(changes):
         note += " → 정리: " + (", ".join(changes) or "(없음)")
     if g.get("defaulted_change"):

@@ -119,7 +119,11 @@ class Gate:
         except Exception as e:  # noqa: BLE001 — 안전 실패: 버리고 기록한다 (조용히 남기지도, 조용히 사라지게 두지도 않는다)
             return {**base, "status": "error", "tiers": {t: e2["tiers"] for t, e2 in effs.items()},
                     "reason": f"변화 분류 실패: {type(e).__name__}: {str(e)[:120]}"}
-        changes = policy.normalize_changes(ans.labels, item.get("title") or "")   # 프리릴리스 major · 덧붙인 minor_patch 빼기 (§3 변경 2026-10-21, HYO-131)
+        labels_in = list(ans.labels)
+        official = official_advisory(item) and "security" not in labels_in
+        if official:       # 공식 보안 채널 공지는 그 자체가 보안 명시(D1) — 모델이 종류를 비우거나 다른 것만 짚어도 security (§3 변경 2026-11-11, HYO-183)
+            labels_in.append("security")
+        changes = policy.normalize_changes(labels_in, item.get("title") or "")   # 프리릴리스 major · 덧붙인 minor_patch 빼기 (§3 변경 2026-10-21, HYO-131)
         rows, kept_by, defaulted, scoped = [], [], False, []
         versions = self.versions
         for t, e in effs.items():
@@ -140,7 +144,12 @@ class Gate:
                "남기는 행 없음: " + ", ".join(sorted({f"{r['tier']}×{policy.CHANGE_LABEL[r['change']]}={r['base']}" for r in rows})))
         return {"keep": keep, "status": "ok", "technologies": techs, "tiers": {t: e["tiers"] for t, e in effs.items()}, "changes": changes, "model_changes": list(ans.labels),
                 "rows": rows, "kept_by": kept_by, "defaulted_change": defaulted, "skipped": base["skipped"], "successor": base["successor"],
-                "scope": scoped, "reason": why, **_advisory(item)}
+                "scope": scoped, "reason": why, **({"official_security": True} if official else {}), **_advisory(item)}
+
+
+def official_advisory(item):
+    """공식 보안 채널(OSV · Python security-announce · Node.js 보안 릴리스, collector/sources/security.py) 항목인가."""
+    return (item.get("meta") or {}).get("kind") == "advisory"
 
 
 def _advisory(item):

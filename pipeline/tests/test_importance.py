@@ -663,6 +663,34 @@ def test_retired_technology_is_recorded_but_not_judged():
     assert both["status"] == "ok" and both["keep"] and [k["technology"] for k in both["kept_by"]] == ["python", "python"], both   # 남은 기술은 그대로 판정
 
 
+def _advisory_item(iid, title="Node.js security: Wednesday, November 11, 2026 Security Releases", **meta):
+    return {"id": iid, "source": "nodejs", "title": title, "url": "", "text": "", "channels": ["runtime-security:nodejs"],
+            "meta": {"kind": "advisory", "runtime": "nodejs", "dependency": "electron", **meta}}
+
+
+def test_official_advisory_is_security_even_when_model_misses_it():
+    # HYO-183 (2026-11-11): W46 Node.js 11/11 보안 릴리스 사전 공지 — 모델이 종류를 비워 minor·patch로 쳐졌고 electron L1 ❌로 떨어졌다
+    st = _store(electron={"tiers": ["L1"]}, pytest={"tiers": ["L7"]})
+    g = gate_mod.Gate(StubBackend(changes={"node": [], "node2": ["minor_patch"], "node3": ["security"], "both": ["breaking"],
+                                           "osv": [], "rel": []}), st)
+    r = g(_advisory_item("node"))
+    assert r["keep"] and r["changes"] == ["security"] and r["model_changes"] == [] and r["official_security"], r
+    assert not r["defaulted_change"] and [k["change"] for k in r["kept_by"]] == ["security"], r
+    r2 = g(_advisory_item("node2"))       # 모델이 minor·patch만 짚어도 — 덧붙인 minor·patch는 normalize가 뺀다
+    assert r2["keep"] and r2["changes"] == ["security"] and r2["model_changes"] == ["minor_patch"] and r2["official_security"], r2
+    r3 = g(_advisory_item("node3"))       # 모델이 이미 security면 스크립트가 더한 것이 아니다
+    assert r3["keep"] and r3["changes"] == ["security"] and "official_security" not in r3, r3
+    r4 = g(_advisory_item("both"))        # 다른 종류는 그대로 두고 security를 더한다
+    assert r4["changes"] == ["breaking", "security"] and r4["official_security"], r4
+    # OSV 공지도 공식 채널 — 남김은 표(security는 모든 등급 ✅), 우리 버전 해당 여부는 그대로 실려 목록/detect 나누기에 쓰인다
+    r5 = g({**_advisory_item("osv", title="GHSA-xxxx pytest"), "source": "osv",
+            "meta": {"kind": "advisory", "dependency": "pytest", "osv_id": "GHSA-xxxx", "affects_ours": False}})
+    assert r5["keep"] and r5["changes"] == ["security"] and r5["official_security"] and r5["advisory"]["affects_ours"] is False, r5
+    # 공식 채널이 아닌 릴리스는 예전 그대로 (모델이 비우면 minor·patch)
+    r6 = g(_item("rel", "electron/electron electron v45.1.2", tech="electron"))
+    assert not r6["keep"] and r6["defaulted_change"] and "official_security" not in r6, r6
+
+
 def test_cli_run_reads_team_stack_from_collect_only_targets():
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
@@ -2145,6 +2173,8 @@ def mutations():
         ("후속 모델을 심각도 「나머지」와 같게", [(policy, "SEVERITY", {k: v for k, v in policy.SEVERITY.items() if k != "successor_model"})], test_gate_successor_model_is_script_judged_l2_only_and_last),
         ("프리릴리스 major를 안 뺌", [(policy, "is_prerelease", lambda title: False)], test_normalize_changes_prerelease_major_and_lone_minor_patch),
         ("관문이 변화 종류 정리를 안 함 (모델 라벨 그대로)", [(policy, "normalize_changes", lambda changes, title="": list(changes))], test_normalize_changes_prerelease_major_and_lone_minor_patch),
+        ("공식 보안 공지도 모델 종류만 봄 (W46 Node.js 놓침, HYO-183)", [(gate_mod, "official_advisory", lambda item: False)], test_official_advisory_is_security_even_when_model_misses_it),
+        ("모든 소식을 공식 보안 공지로 봄", [(gate_mod, "official_advisory", lambda item: True)], test_official_advisory_is_security_even_when_model_misses_it),
         ("두 등급인데 첫 등급 행만 적용 (관문)", [(policy, "decide", _first_tier_only)], test_lane_a_gate_wiring_and_cap),
         ("모델 은퇴 ✅를 ❌로", [(policy, "TABLE", _widened_table())], test_every_cell_default_context),
         ("모델 은퇴 ✅를 ❌로 (문서 대조)", [(policy, "TABLE", _widened_table())], test_table_matches_policy_doc),
