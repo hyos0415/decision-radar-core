@@ -36,6 +36,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 if __name__ == "__main__" and __package__ in (None, ""):   # 파일로 직접 실행
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -244,12 +245,18 @@ def _gate_items(backend, gold, store):
         for item in items:
             collect(item, [])
         backend.prefetch_changes(asked)
-    gate = Gate(backend, store)
+    said = {}                                    # 모델이 댄 이유 한 문장 — 프롬프트를 다듬을 때 읽는다 (HYO-169). 관문 결과에는 넣지 않는다
+
+    def ask(q):
+        ans = backend.classify_changes(q)
+        said[q.id] = ans.reason
+        return ans
+    gate = Gate(SimpleNamespace(classify_changes=ask), store)
     preds = {}
     for it, item in zip(gold["items"], items):
         g = gate(item, [])
         preds[it["id"]] = {"keep": g["keep"], "status": g["status"], "changes": g["changes"], "model_changes": g.get("model_changes"), "tiers": g["tiers"], "reason": g["reason"],
-                           "kept_by": [{k: r[k] for k in ("technology", "tier", "change")} for r in g["kept_by"]]}
+                           "model_reason": said.get(it["id"]), "kept_by": [{k: r[k] for k in ("technology", "tier", "change")} for r in g["kept_by"]]}
     return preds, store.data["technologies"]
 
 

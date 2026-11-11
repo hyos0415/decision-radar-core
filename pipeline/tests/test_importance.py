@@ -2142,7 +2142,7 @@ class _BatchStub(StubBackend):
     def classify_changes(self, q):
         if q.id not in self._asked:
             self.single += 1
-        return super().classify_changes(q)
+        return LabelAnswer(labels=super().classify_changes(q).labels, reason=f"이유 {q.id}")
 
 
 def test_evaluate_batch_r_and_safety_k():
@@ -2154,6 +2154,7 @@ def test_evaluate_batch_r_and_safety_k():
     be = _BatchStub(tiers=tiers_, changes=changes)
     res = evaluate.evaluate(be, gold, 3, safety_k=5, with_r=True)
     assert be.rounds == [ids] * 3 + [s_ids] * 2 and be.single == 0, (be.rounds, be.single)
+    assert res["predictions"][2]["ex-1"]["model_reason"] == "이유 ex-1" and res["safety_predictions"][0]["ex-3"]["model_reason"] == "이유 ex-3"   # 다듬기에 읽는다
     j = res["judgement"]
     assert j["pass"] is True and j["C1"]["safety_only_runs"] == [0, 0] and j["R"]["judged"] and j["R"]["n"] == 2 and j["R"]["per_run"] == [1.0] * 3
     # 안전 밖 남김(ex-1 breaking·major)을 놓치는 모델 — C1~C3는 통과(C3 80%)하지만 R 50% → --with-r이면 불통과, 없으면 보고만
