@@ -40,8 +40,9 @@ def resolve_technologies(item, names, vendor_terms=None):
     vendor = meta.get("vendor")
     if vendor:
         terms = {t.lower() for t in (vendor_terms or {}).get(vendor, [vendor])}
-        for n in names:
-            if _tokens(n) & terms:
+        whole = {norm(t) for t in terms}   # 여러 낱말인 match 단어(google-genai)는 이름 전체로 — 토큰과는 안 맞는다 (W43~W46 Gemini 놓침).
+        for n in names:                    # match 단어를 토큰으로 쪼개면 넓어진다: kb-arena의 arena가 jhs-arena/… 이미지에 걸린다
+            if _tokens(n) & terms or norm(n) in whole:
                 add(n)
     title = item.get("title") or ""
     for n in names:

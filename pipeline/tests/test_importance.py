@@ -824,6 +824,11 @@ def test_resolve_technologies():
     assert r(_item("6", "Python and pydantic", tech="pydantic"), names) == ["pydantic"]         # 의존성 릴리스는 그 의존성으로만 (제목의 Python은 안 붙는다)
     assert r(_item("7", "openai/openai-python v3", tech="openai"), names) == []                # 모르는 의존성의 릴리스는 제목으로 다른 기술에 넘기지 않는다
     assert r(_item("8", "Python and pydantic"), names) == ["pydantic", "Python"]               # 의존성 릴리스가 아니면 제목의 기술을 전부
+    # 여러 낱말 match 단어는 이름 전체로 (W43~W46 Gemini 변경 기록이 「기술을 모른다」로 빠졌다) — 토큰으로 쪼개 넓히지는 않는다
+    gem = {"google-gemini": ["gemini", "google-genai"], "kb-arena": ["kb-arena"]}
+    more = names + ["google-genai", "Google_GenAI", "jhs-arena/elasticsearch-nori:9.5.4", "google-cloud-storage"]
+    assert r(_item("9", "[google-gemini] changelog 변경", vendor="google-gemini"), more, gem) == ["google-genai", "Google_GenAI"]
+    assert r(_item("10", "[kb-arena] v0.4", vendor="kb-arena"), more, gem) == []                 # arena 토큰으로 이미지 이름에 걸리지 않는다
 
 
 def test_gate_keep_drop_and_reasons():
@@ -2090,6 +2095,18 @@ def _resolve_dependency_plus_title(item, names, vendor_terms=None):
     return out + [n for n in _ORIG_RESOLVE(rest, names, vendor_terms) if n not in out] if dep else out
 
 
+def _resolve_vendor_tokens_only(item, names, vendor_terms=None):
+    """예전 규칙: match 단어를 등급 이름의 토큰과만 견준다 — 여러 낱말 단어(google-genai)는 어떤 토큰과도 안 맞는다."""
+    single = {k: [t for t in v if not re.search(r"[-_.:/\s]", t)] for k, v in (vendor_terms or {}).items()}
+    return _ORIG_RESOLVE(item, names, single)
+
+
+def _resolve_vendor_terms_split(item, names, vendor_terms=None):
+    """넓힌 규칙: match 단어도 토큰으로 쪼갠다 — google-genai의 google이 다른 google-* 이름에, kb-arena의 arena가 이미지 이름에 걸린다."""
+    split = {k: [p for t in v for p in re.split(r"[-_.:/\s]+", t) if p] for k, v in (vendor_terms or {}).items()}
+    return _ORIG_RESOLVE(item, names, split)
+
+
 def _old_lanes_split(cell):
     """예전 레인 표시 방식: `·`로 먼저 쪼갠 뒤 괄호를 지운다 (괄호 안의 `·`에서 이름이 깨진다)."""
     return [re.sub(r"\(.*?\)", "", part).replace("`", "").strip() for part in cell.split("·") if part.strip()]
@@ -2104,6 +2121,8 @@ def mutations():
         ("package.json devDependencies에 S2(→ L7)를 건다", [(signals, "NPM_DEV", "dev")], test_package_json_signals_and_dev_dependencies_are_not_s2),
         ("관문이 CLAUDE.md 의존성 표를 안 읽는다 (③ ④)", [(cli_mod, "claude_md_rows", lambda root: [])], test_queries_read_claude_md_table_usage_and_table_only_names),
         ("의존성 릴리스에 제목의 다른 기술을 덧붙임", [(gate_mod, "resolve_technologies", _resolve_dependency_plus_title)], test_resolve_technologies),
+        ("벤더 match 단어를 토큰으로만 대조 (W43~W46 Gemini 놓침)", [(gate_mod, "resolve_technologies", _resolve_vendor_tokens_only)], test_resolve_technologies),
+        ("벤더 match 단어도 토큰으로 쪼개 대조 (kb-arena → arena)", [(gate_mod, "resolve_technologies", _resolve_vendor_terms_split)], test_resolve_technologies),
         ("관문이 npm 행도 질의로 만든다", [(github, "_NPM_NOTE", re.compile(r"(?!x)x"))], test_queries_read_claude_md_table_usage_and_table_only_names),
         ("표 파서: 쪼갠 뒤 괄호를 지움 (⑥ 예전 방식)", [(github, "names_from_cell", _old_lanes_split)], test_table_cell_names_drop_parens_versions_and_notes),
         ("관문이 package.json을 안 읽는다", [(signals, "read_package_json", lambda repo, exclude=(), out=None: {} if out is None else out)], test_package_json_signals_and_dev_dependencies_are_not_s2),
