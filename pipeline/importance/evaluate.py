@@ -290,7 +290,7 @@ def main(argv=None):
             s.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(prog="pipeline.importance evaluate")
     ap.add_argument("--gold", required=True, help="정답지 JSON (형식: 이 파일 머리말)")
-    ap.add_argument("--model", required=True, help="stub | gpt-6-luna | gpt-6.1-sol | jev-1.13.0 (고정 ID — alias 거부)")
+    ap.add_argument("--model", required=True, help="stub | gpt-6-luna | gpt-6.1-sol | jev-1.13.0 | claude-sonnet-5-5 | claude-cli/claude-sonnet-5-5 (고정 ID — alias 거부)")
     ap.add_argument("--k", type=int, default=3)
     ap.add_argument("--real-api", action="store_true", help="실제 API 호출(과금)을 허용한다. 없으면 stub 외에는 거부")
     ap.add_argument("--plan", action="store_true", help="호출 수만 세고 끝 (API·키 접근 없음)")
@@ -319,7 +319,7 @@ def main(argv=None):
           f" = {sum(pl['per_run'].values())}회 × k={a.k} = {pl['total_calls']}회")
     if a.plan:
         return 0
-    out = Path(a.out) if a.out else REPO / "eval" / "runs" / f"{time.strftime('%Y%m%d-%H%M%S')}-importance-{a.model}"
+    out = Path(a.out) if a.out else REPO / "eval" / "runs" / f"{time.strftime('%Y%m%d-%H%M%S')}-importance-{a.model.replace('/', '-')}"   # claude-cli/… (HYO-169)
     out.mkdir(parents=True, exist_ok=True)
     backend = make_backend(a.model, allow_real=a.real_api, log=CallLog(out / "calls.jsonl"), **({"service_tier": "flex"} if a.flex else {}))
     try:

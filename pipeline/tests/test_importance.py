@@ -1962,6 +1962,93 @@ def test_weekly_tiers_plan_and_push_only_the_tier_file():
         assert files == ["tiers.json"], files
 
 
+# ---------------------------------------------------------------- 구독 CLI 백엔드 (HYO-169 — 가짜 claude, 구독 안 씀)
+
+from pipeline.importance import cli_backend  # noqa: E402
+
+FAKE_CLAUDE = REPO / "product" / "radar" / "fake_cli.py"
+
+
+def _fake_cli(script, d, **kw):
+    """가짜 claude 대본을 쓰고 env RADAR_FAKE_CLI를 맞춘 백엔드."""
+    p = Path(d) / f"script-{len(os.listdir(d))}.json"
+    p.write_text(json.dumps(script), encoding="utf-8")
+    os.environ["RADAR_FAKE_CLI"] = str(p)
+    return cli_backend.ClaudeCliBackend("claude-cli/claude-sonnet-5-5", bin=str(FAKE_CLAUDE), **kw)
+
+
+def test_cli_backend_isolation_labels_and_log():
+    saved = {k: os.environ.get(k) for k in ("RADAR_FAKE_CLI", "ANTHROPIC_API_KEY")}
+    try:
+        os.environ["ANTHROPIC_API_KEY"] = "sk-test-should-be-stripped"
+        with tempfile.TemporaryDirectory() as d:
+            be = _fake_cli({"structured": {"changes": ["minor_patch", "security"], "reason": "CVE"}}, d)
+            assert be.model == "claude-sonnet-5-5" and be.name == "claude-cli/claude-sonnet-5-5"
+            raw, _ = be._once("SYS", "프롬프트 한국어", cli_backend.CHANGE_SCHEMA)
+            seen = raw["_seen_env"]
+            assert not seen["api_key"] and not seen["auth_token"], seen                     # 구독으로만 — API 키를 지운다
+            assert seen["tools_flag"] == "" and seen["strict_mcp"] and seen["setting_sources"] == "", seen
+            assert Path(seen["cwd"]).resolve() != REPO.resolve() and "radar-gate-cli-" in seen["cwd"], seen   # 빈 실행 폴더
+            assert seen["prompt_chars"] == len("프롬프트 한국어")
+            ans = be.classify_changes(NewsQuery(id="n1", technology="electron", title="Node.js security", text=""))
+            assert ans.labels == ["security", "minor_patch"] and ans.reason == "CVE", ans          # 순서는 policy 순서로
+            rec = be.log.calls[-1]
+            assert (rec["engine"], rec["billing"], rec["cost_usd"], rec["cost_usd_equiv"], rec["served_model"], rec["attempts"]) == \
+                ("claude-cli", "subscription", None, 0.0123, "claude-sonnet-5-5", 1), rec
+            assert rec["input_tokens"] == 105 and rec["output_tokens"] == 50 and rec["flow"] == "changes" and "error" not in rec, rec
+            assert be.log.totals()["unpriced_calls"] == 1 and be.log.totals()["cost_usd"] == 0
+            t = _fake_cli({"structured": {"tiers": ["L5"], "unsure": False, "reason": "SDK"}}, d).classify_tiers(TechQuery(name="anthropic"))
+            assert t.labels == ["L5"] and not t.unsure
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+
+def test_cli_backend_failures_are_safe_and_retried_once():
+    saved = os.environ.get("RADAR_FAKE_CLI")
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            q = NewsQuery(id="n", technology="electron", title="t", text="")
+            for script, attempts in (({"is_error": True, "subtype": "error_during_execution", "structured": None}, 2),
+                                     ({"stdout": "Claude usage limit reached"}, 2),     # JSON 아님 — 한도 · 로그인 안내 같은 글자
+                                     ({"structured": None}, 1)):                         # 모양 이상은 다시 해도 같다
+                be = _fake_cli(script, d)
+                try:
+                    be.classify_changes(q)
+                    raise AssertionError(f"실패가 조용히 지나갔다: {script}")
+                except cli_backend.CliError:
+                    pass
+                assert len(be.log.calls) == attempts and all(c.get("error") for c in be.log.calls), (script, be.log.calls)
+                assert [c["attempts"] for c in be.log.calls] == list(range(1, attempts + 1))
+            be = _fake_cli({"sleep": 3, "structured": {"changes": [], "reason": ""}}, d, timeout=1)
+            try:
+                be.classify_changes(q)
+                raise AssertionError("시간 초과가 지나갔다")
+            except cli_backend.CliError as e:
+                assert "timeout" in str(e)
+            # 모르는 라벨은 API 백엔드와 같이 걸러진다 (--json-schema의 enum이 먼저 막는다) — 엔진에 따라 다르게 다루지 않는다
+            assert _fake_cli({"structured": {"changes": ["weird", "security"], "reason": ""}}, d).classify_changes(q).labels == ["security"]
+            # 관문: CLI 실패는 안전 실패(status error) — 버리고 기록한다
+            st = _store(electron={"tiers": ["L1"]})
+            r = gate_mod.Gate(_fake_cli({"is_error": True, "subtype": "error_max_turns"}, d), st)(_item("e", "electron v45.1.0", tech="electron"))
+            assert r["status"] == "error" and not r["keep"] and "변화 분류 실패" in r["reason"], r
+            ok = gate_mod.Gate(_fake_cli({"structured": {"changes": ["security"], "reason": "fix"}}, d), st)(_item("e", "electron v45.1.0", tech="electron"))
+            assert ok["status"] == "ok" and ok["keep"] and ok["model_changes"] == ["security"], ok
+    finally:
+        os.environ.pop("RADAR_FAKE_CLI", None) if saved is None else os.environ.__setitem__("RADAR_FAKE_CLI", saved)
+
+
+def test_make_backend_cli_gating():
+    try:
+        backends.make_backend("claude-cli/claude-sonnet-5-5")
+        raise AssertionError("플래그 없이 CLI 백엔드가 만들어졌다")
+    except PermissionError:
+        pass
+    be = backends.make_backend("claude-cli/claude-sonnet-5-5", allow_real=True, bin=str(FAKE_CLAUDE), service_tier="flex")   # 모르는 인자는 버린다
+    assert isinstance(be, cli_backend.ClaudeCliBackend) and be.model == "claude-sonnet-5-5" and be.effort == "medium"
+    assert "--model" in be._cmd("s", {}) and be._cmd("s", {})[be._cmd("s", {}).index("--model") + 1] == "claude-sonnet-5-5"
+
+
 # ---------------------------------------------------------------- 변이 검사 (규율 3)
 
 class Mutation:
@@ -2112,8 +2199,36 @@ def _old_lanes_split(cell):
     return [re.sub(r"\(.*?\)", "", part).replace("`", "").strip() for part in cell.split("·") if part.strip()]
 
 
+_ORIG_CLI_CMD = cli_backend.ClaudeCliBackend._cmd
+_ORIG_MAKE_BACKEND = backends.make_backend
+
+
+def _cli_cmd_with_tools(self, system, schema):
+    cmd = _ORIG_CLI_CMD(self, system, schema)
+    i = cmd.index("--tools")
+    return cmd[:i] + cmd[i + 2:]
+
+
+def _cli_retry_shape_errors(self, flow, system, prompt, schema):
+    last = None
+    for _ in range(cli_backend.ATTEMPTS):
+        try:
+            res, _w = self._once(system, prompt, schema)
+            if res.get("is_error") or not isinstance(res.get("structured_output"), dict):
+                raise cli_backend.CliError("x")
+            return res["structured_output"]
+        except cli_backend.CliError as e:
+            last = e
+            self.log.add({"flow": flow, "error": "x", "attempts": 1})
+    raise last
+
+
 def mutations():
     return [
+        ("CLI 백엔드가 API 키를 env에 남김 (구독이 아니라 API 과금)", [(cli_backend, "STRIP_ENV", ())], test_cli_backend_isolation_labels_and_log),
+        ("CLI 백엔드가 내장 도구를 켬", [(cli_backend.ClaudeCliBackend, "_cmd", _cli_cmd_with_tools)], test_cli_backend_isolation_labels_and_log),
+        ("CLI 백엔드가 모양 이상도 다시 시도하고 기록이 어긋남", [(cli_backend.ClaudeCliBackend, "_run", _cli_retry_shape_errors)], test_cli_backend_failures_are_safe_and_retried_once),
+        ("CLI 백엔드를 플래그 없이 만듦", [(backends, "make_backend", lambda model, allow_real=False, **kw: _ORIG_MAKE_BACKEND(model, allow_real=True, **kw))], test_make_backend_cli_gating),
         ("Claude 허용 호스트를 넓힘", [(claude_backend, "ALLOWED_HOSTS", {"api.anthropic.com", "telemetry.example.invalid"})], test_claude_backend_netguard_allows_only_anthropic),
         ("Claude 단가를 10배로", [(claude_backend, "PRICES", {"claude-sonnet-5-5": (20.0, 100.0)})], test_claude_backend_request_shape_labels_and_cost),
         ("Claude effort를 high로 (등록: medium)", [(claude_backend, "DEFAULT_EFFORT", "high")], test_claude_backend_request_shape_labels_and_cost),
