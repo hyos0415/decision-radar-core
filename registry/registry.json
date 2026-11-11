@@ -1,0 +1,236 @@
+{
+ "generated_by": "registry/build.py (HYO-180) — 손으로 고치지 않는다. *.ttl을 고치고 다시 빌드한다",
+ "names": {
+  "Channel": {
+   "daily-papers": "channel:daily-papers",
+   "dependency-releases": "channel:dependency-releases",
+   "new-repos": "channel:new-repos",
+   "runtime-security": "channel:runtime-security",
+   "security-advisories": "channel:security-advisories",
+   "slow-growers": "channel:slow-growers",
+   "stories": "channel:stories",
+   "subreddit": "channel:subreddit",
+   "task": "channel:task",
+   "trending": "channel:trending",
+   "vendor": "channel:vendor"
+  },
+  "CollectionUnit": {
+   "github": "source:github",
+   "hn": "source:hn",
+   "huggingface": "source:huggingface",
+   "reddit": "source:reddit",
+   "security": "source:security",
+   "vendor": "source:vendor"
+  },
+  "ItemSource": {
+   "github": "source:github",
+   "hn": "source:hn",
+   "huggingface": "source:huggingface",
+   "nodejs": "source:nodejs",
+   "osv": "source:osv",
+   "python": "source:python",
+   "reddit": "source:reddit",
+   "vendor": "source:vendor"
+  }
+ },
+ "normalize": "strip; lower; [-_.\\s]+ -> -",
+ "objects": {
+  "channel:daily-papers": {
+   "channelOf": "source:huggingface",
+   "label": "daily-papers",
+   "types": [
+    "Channel"
+   ]
+  },
+  "channel:dependency-releases": {
+   "channelOf": "source:github",
+   "label": "dependency-releases",
+   "types": [
+    "Channel"
+   ]
+  },
+  "channel:new-repos": {
+   "channelOf": "source:github",
+   "label": "new-repos",
+   "types": [
+    "Channel"
+   ]
+  },
+  "channel:runtime-security": {
+   "channelOf": "source:security",
+   "label": "runtime-security",
+   "prefix": "runtime-security:",
+   "types": [
+    "Channel"
+   ]
+  },
+  "channel:security-advisories": {
+   "channelOf": "source:security",
+   "label": "security-advisories",
+   "types": [
+    "Channel"
+   ]
+  },
+  "channel:slow-growers": {
+   "channelOf": "source:github",
+   "label": "slow-growers",
+   "types": [
+    "Channel"
+   ]
+  },
+  "channel:stories": {
+   "channelOf": "source:hn",
+   "label": "stories",
+   "types": [
+    "Channel"
+   ]
+  },
+  "channel:subreddit": {
+   "channelOf": "source:reddit",
+   "label": "subreddit",
+   "prefix": "r/",
+   "types": [
+    "Channel"
+   ]
+  },
+  "channel:task": {
+   "channelOf": "source:huggingface",
+   "label": "task",
+   "prefix": "task:",
+   "types": [
+    "Channel"
+   ]
+  },
+  "channel:trending": {
+   "channelOf": "source:huggingface",
+   "label": "trending",
+   "types": [
+    "Channel"
+   ]
+  },
+  "channel:vendor": {
+   "channelOf": "source:vendor",
+   "label": "vendor",
+   "prefix": "vendor:",
+   "types": [
+    "Channel"
+   ]
+  },
+  "source:github": {
+   "channels": [
+    "channel:dependency-releases",
+    "channel:new-repos",
+    "channel:slow-growers"
+   ],
+   "collectedBy": "source:github",
+   "items": [
+    "source:github"
+   ],
+   "label": "github",
+   "types": [
+    "CollectionUnit",
+    "ItemSource"
+   ]
+  },
+  "source:hn": {
+   "channels": [
+    "channel:stories"
+   ],
+   "collectedBy": "source:hn",
+   "items": [
+    "source:hn"
+   ],
+   "label": "hn",
+   "types": [
+    "CollectionUnit",
+    "ItemSource"
+   ]
+  },
+  "source:huggingface": {
+   "channels": [
+    "channel:daily-papers",
+    "channel:task",
+    "channel:trending"
+   ],
+   "collectedBy": "source:huggingface",
+   "items": [
+    "source:huggingface"
+   ],
+   "label": "huggingface",
+   "types": [
+    "CollectionUnit",
+    "ItemSource"
+   ]
+  },
+  "source:nodejs": {
+   "collectedBy": "source:security",
+   "label": "nodejs",
+   "types": [
+    "ItemSource"
+   ]
+  },
+  "source:osv": {
+   "collectedBy": "source:security",
+   "label": "osv",
+   "types": [
+    "ItemSource"
+   ]
+  },
+  "source:python": {
+   "collectedBy": "source:security",
+   "label": "python",
+   "types": [
+    "ItemSource"
+   ]
+  },
+  "source:reddit": {
+   "channels": [
+    "channel:subreddit"
+   ],
+   "collectedBy": "source:reddit",
+   "items": [
+    "source:reddit"
+   ],
+   "label": "reddit",
+   "types": [
+    "CollectionUnit",
+    "ItemSource"
+   ]
+  },
+  "source:security": {
+   "channels": [
+    "channel:runtime-security",
+    "channel:security-advisories"
+   ],
+   "items": [
+    "source:nodejs",
+    "source:osv",
+    "source:python"
+   ],
+   "label": "security",
+   "types": [
+    "CollectionUnit"
+   ]
+  },
+  "source:vendor": {
+   "channels": [
+    "channel:vendor"
+   ],
+   "collectedBy": "source:vendor",
+   "items": [
+    "source:vendor"
+   ],
+   "label": "vendor",
+   "types": [
+    "CollectionUnit",
+    "ItemSource"
+   ]
+  }
+ },
+ "sources_sha256": {
+  "ontology.ttl": "b87d5d596c41f650b76d4a8a3660458914dd6721d9f88111175be546b9524982",
+  "shapes.ttl": "032e3094924a9c44314f5c16fdbf16ae16f6dfd1df3f7dfcd278edbab62b941a",
+  "sources.ttl": "c249dd088d03bdcb7659d41e75b6120266aed4cdfef566bda4fb2b2db36bba78"
+ },
+ "version": 1
+}

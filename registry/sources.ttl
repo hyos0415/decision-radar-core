@@ -1,0 +1,122 @@
+# 출처 — 수집 단위 · 항목 출처 · 통로 (docs/design/data-registry.md §5-3, HYO-180 첫 조각)
+#
+# 새 출처를 붙일 때 (예: Go 보안 공지를 security에):
+#   1. collector/pool.yaml security.runtimes에 한 줄 (수집기)
+#   2. 여기에 항목 출처 하나:  source:go a radar:ItemSource ; skos:prefLabel "go" ; radar:collectedBy source:security .
+#   3. python registry/build.py → registry.json 커밋
+# 2를 빠뜨리면 다음 주 출처 건강 검사가 「등록부에 없음」으로 알린다 — 조용히 안 세어지지 않는다.
+#
+# ID는 한 번 정하면 바꾸지 않는다 (설계 §5-1). 이름이 바뀌면 prefLabel만 바꾸고 옛 이름은 altLabel로 내린다.
+# 근거: 얼린 W41~W46 items.jsonl의 source · channels를 센 값 (설계 부록 · §5-3).
+
+@prefix radar:   <https://github.com/hyos0415/decision-radar/registry#> .
+@prefix source:  <https://github.com/hyos0415/decision-radar/registry/source/> .
+@prefix channel: <https://github.com/hyos0415/decision-radar/registry/channel/> .
+@prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos:    <http://www.w3.org/2004/02/skos/core#> .
+
+# ── 수집 단위이자 항목 출처 (이름이 같은 같은 대상) ──
+
+source:reddit a radar:CollectionUnit, radar:ItemSource ;
+    skos:prefLabel "reddit" ;
+    radar:collectedBy source:reddit ;
+    rdfs:comment "Reddit RSS (collector/sources/reddit.py · pool.yaml reddit)" .
+
+source:hn a radar:CollectionUnit, radar:ItemSource ;
+    skos:prefLabel "hn" ;
+    radar:collectedBy source:hn ;
+    rdfs:comment "Hacker News Algolia (collector/sources/hn.py · pool.yaml hn)" .
+
+source:github a radar:CollectionUnit, radar:ItemSource ;
+    skos:prefLabel "github" ;
+    radar:collectedBy source:github ;
+    rdfs:comment "GitHub 새 repo · 천천히 뜬 repo · 의존성 릴리스 (collector/sources/github.py · pool.yaml github)" .
+
+source:huggingface a radar:CollectionUnit, radar:ItemSource ;
+    skos:prefLabel "huggingface" ;
+    radar:collectedBy source:huggingface ;
+    rdfs:comment "Hugging Face trending · 태스크 · Daily Papers (collector/sources/huggingface.py · pool.yaml huggingface)" .
+
+source:vendor a radar:CollectionUnit, radar:ItemSource ;
+    skos:prefLabel "vendor" ;
+    radar:collectedBy source:vendor ;
+    rdfs:comment "벤더 피드 · 페이지 (collector/sources/vendor.py · vendors.yaml)" .
+
+# ── 공식 보안 채널 (doc-pipeline §4-6, HYO-170 다) — 수집 단위 하나, 항목 출처 셋 ──
+
+source:security a radar:CollectionUnit ;
+    skos:prefLabel "security" ;
+    rdfs:comment "공식 보안 채널 (collector/sources/security.py · pool.yaml security). 항목은 osv · python · nodejs로 세어진다 (HYO-179)" .
+
+source:osv a radar:ItemSource ;
+    skos:prefLabel "osv" ;
+    radar:collectedBy source:security ;
+    rdfs:comment "OSV.dev 공지 — 대상 repo manifest의 PyPI · npm 이름" .
+
+source:python a radar:ItemSource ;
+    skos:prefLabel "python" ;
+    radar:collectedBy source:security ;
+    rdfs:comment "security-announce@python.org (pool.yaml security.runtimes python)" .
+
+source:nodejs a radar:ItemSource ;
+    skos:prefLabel "nodejs" ;
+    radar:collectedBy source:security ;
+    rdfs:comment "nodejs.org vulnerability.xml (pool.yaml security.runtimes nodejs)" .
+
+# ── 통로 (items.jsonl channels의 종류) ──
+
+channel:dependency-releases a radar:Channel ;
+    skos:prefLabel "dependency-releases" ;
+    radar:channelOf source:github ;
+    rdfs:comment "대상 repo 의존성의 GitHub 릴리스" .
+
+channel:new-repos a radar:Channel ;
+    skos:prefLabel "new-repos" ;
+    radar:channelOf source:github ;
+    rdfs:comment "통로 1 — 7일 안 ★100" .
+
+channel:slow-growers a radar:Channel ;
+    skos:prefLabel "slow-growers" ;
+    radar:channelOf source:github ;
+    rdfs:comment "통로 2 — 생긴 지 8~30일 ★500" .
+
+channel:stories a radar:Channel ;
+    skos:prefLabel "stories" ;
+    radar:channelOf source:hn .
+
+channel:trending a radar:Channel ;
+    skos:prefLabel "trending" ;
+    radar:channelOf source:huggingface .
+
+channel:task a radar:Channel ;
+    skos:prefLabel "task" ;
+    radar:channelPrefix "task:" ;
+    radar:channelOf source:huggingface ;
+    rdfs:comment "task:<HF 태스크> — 태스크 목록은 pool.yaml huggingface.tasks" .
+
+channel:daily-papers a radar:Channel ;
+    skos:prefLabel "daily-papers" ;
+    radar:channelOf source:huggingface .
+
+channel:subreddit a radar:Channel ;
+    skos:prefLabel "subreddit" ;
+    radar:channelPrefix "r/" ;
+    radar:channelOf source:reddit ;
+    rdfs:comment "r/<서브레딧> — 목록은 pool.yaml reddit.subreddits" .
+
+channel:vendor a radar:Channel ;
+    skos:prefLabel "vendor" ;
+    radar:channelPrefix "vendor:" ;
+    radar:channelOf source:vendor ;
+    rdfs:comment "vendor:<벤더> — 벤더는 vendors.yaml. 항목 source가 github인 것도 있다(벤더 GitHub 릴리스 · 의존성 릴리스와 합쳐진 것)" .
+
+channel:runtime-security a radar:Channel ;
+    skos:prefLabel "runtime-security" ;
+    radar:channelPrefix "runtime-security:" ;
+    radar:channelOf source:security ;
+    rdfs:comment "runtime-security:<이름> — 이름은 항목 출처(python · nodejs)와 같다" .
+
+channel:security-advisories a radar:Channel ;
+    skos:prefLabel "security-advisories" ;
+    radar:channelOf source:security ;
+    rdfs:comment "OSV 공지 (W46까지 0건)" .

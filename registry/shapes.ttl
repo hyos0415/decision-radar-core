@@ -1,0 +1,98 @@
+# 등록부 자체 검사 (SHACL, 닫힌 세계) — docs/design/data-registry.md §7
+# 빌드(build.py)가 이 모양을 추론 없이 돌린다: 원본 트리플 + ontology.ttl의 subClassOf만.
+# rdfs:range 추론을 켜면 오타 낸 대상 ID가 「CollectionUnit이다」로 추론돼 sh:class가 통과해 버린다 (ontology.ttl 머리 주석).
+# 그때도 빌드가 실패하는 것은 추론으로 생긴 그 대상에 prefLabel이 없어 LabelShape에 우연히 걸려서다 — 관계 검사 덕이 아니다.
+#
+# 정규화 규칙은 registry/lookup.py normalize와 같아야 한다: 소문자 + [-_.\s]+ → "-" (설계 §5-5).
+# 아래 SPARQL 문자열의 "\\\\s"는 Turtle이 "\\s"로, SPARQL이 정규식 \s로 읽는다 (규율 4 — 테스트가 공백 겹침을 잡는지 확인한다).
+
+@prefix radar: <https://github.com/hyos0415/decision-radar/registry#> .
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix skos:  <http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+radar:LabelShape a sh:NodeShape ;
+    sh:targetClass radar:CollectionUnit, radar:ItemSource, radar:Channel ;
+    sh:property [
+        sh:path skos:prefLabel ;
+        sh:minCount 1 ; sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:pattern "^[^ ](.*[^ ])?$" ;
+        sh:message "prefLabel은 정확히 하나 — 언어 태그 없는 문자열, 앞뒤 공백 없음" ;
+    ] ;
+    sh:property [
+        sh:path skos:altLabel ;
+        sh:datatype xsd:string ;
+        sh:pattern "^[^ ](.*[^ ])?$" ;
+        sh:message "altLabel은 언어 태그 없는 문자열, 앞뒤 공백 없음" ;
+    ] ;
+    sh:property [
+        sh:path skos:hiddenLabel ;
+        sh:datatype xsd:string ;
+        sh:pattern "^[^ ](.*[^ ])?$" ;
+        sh:message "hiddenLabel은 언어 태그 없는 문자열, 앞뒤 공백 없음" ;
+    ] ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:message "같은 종류 안에서 정규화 이름 「{?name}」이 {?other}와 겹친다 — 조회가 둘 중 하나를 고를 수 없다" ;
+        sh:select """
+            SELECT $this ?other ?name WHERE {
+                $this a ?cls .
+                FILTER (?cls IN (<https://github.com/hyos0415/decision-radar/registry#CollectionUnit>,
+                                 <https://github.com/hyos0415/decision-radar/registry#ItemSource>,
+                                 <https://github.com/hyos0415/decision-radar/registry#Channel>))
+                ?other a ?cls .
+                FILTER (?other != $this)
+                $this (<http://www.w3.org/2004/02/skos/core#prefLabel>|<http://www.w3.org/2004/02/skos/core#altLabel>|<http://www.w3.org/2004/02/skos/core#hiddenLabel>) ?l1 .
+                ?other (<http://www.w3.org/2004/02/skos/core#prefLabel>|<http://www.w3.org/2004/02/skos/core#altLabel>|<http://www.w3.org/2004/02/skos/core#hiddenLabel>) ?l2 .
+                BIND (REPLACE(LCASE(STR(?l1)), "[-_.\\\\s]+", "-") AS ?name)
+                FILTER (REPLACE(LCASE(STR(?l2)), "[-_.\\\\s]+", "-") = ?name)
+            }
+        """ ;
+    ] .
+
+radar:ItemSourceShape a sh:NodeShape ;
+    sh:targetClass radar:ItemSource ;
+    sh:property [
+        sh:path radar:collectedBy ;
+        sh:minCount 1 ; sh:maxCount 1 ;
+        sh:nodeKind sh:IRI ;
+        sh:class radar:CollectionUnit ;
+        sh:message "항목 출처는 등록된 수집 단위 정확히 하나에 속한다 (collectedBy)" ;
+    ] .
+
+radar:CollectionUnitShape a sh:NodeShape ;
+    sh:targetClass radar:CollectionUnit ;
+    sh:property [
+        sh:path [ sh:inversePath radar:collectedBy ] ;
+        sh:minCount 1 ;
+        sh:message "수집 단위에 속한 항목 출처가 하나도 없다 — 건강 검사가 늘 0건으로 센다" ;
+    ] .
+
+radar:ChannelShape a sh:NodeShape ;
+    sh:targetClass radar:Channel ;
+    sh:property [
+        sh:path radar:channelOf ;
+        sh:minCount 1 ; sh:maxCount 1 ;
+        sh:nodeKind sh:IRI ;
+        sh:class radar:CollectionUnit ;
+        sh:message "통로는 등록된 수집 단위 정확히 하나에 속한다 (channelOf)" ;
+    ] ;
+    sh:property [
+        sh:path radar:channelPrefix ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:minLength 1 ;
+        sh:message "channelPrefix는 많아야 하나, 빈 문자열이 아니다" ;
+    ] ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:message "channelPrefix 「{?p}」가 {?other}와 겹친다" ;
+        sh:select """
+            SELECT $this ?other ?p WHERE {
+                $this <https://github.com/hyos0415/decision-radar/registry#channelPrefix> ?p .
+                ?other <https://github.com/hyos0415/decision-radar/registry#channelPrefix> ?p .
+                FILTER (?other != $this)
+            }
+        """ ;
+    ] .
