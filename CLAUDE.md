@@ -8,7 +8,7 @@
 
 기술 결정 기록(결정 기록 repo)의 `jhs-decisions` 스킬이 이 절을 읽고, 이 스택에 영향을 주는 새 릴리스·모델만 골라낸다. 의존성이나 모델을 바꾸면 이 절도 같이 고친다.
 
-**지금 코드에 있는 것만** 적는다 (2026-10-02, 사용자 결정) — 아직 설계에만 있는 것(Gemini 임베딩 변형, BGE-M3, SPLADE 등)은 코드에 들어올 때 추가한다. manifest: `requirements.txt` · `product/requirements.txt` · `arena/requirements.txt` · `infra/compose.yaml` · `desktop/package.json`.
+**지금 코드에 있는 것만** 적는다 (2026-10-02, 사용자 결정) — 아직 설계에만 있는 것(Gemini 임베딩 변형, BGE-M3, SPLADE 등)은 코드에 들어올 때 추가한다. manifest: `requirements.txt` · `product/requirements.txt` · `arena/requirements.txt` · `registry/requirements.txt` · `infra/compose.yaml` · `desktop/package.json`.
 
 ### 의존성 → component
 
@@ -22,6 +22,7 @@
 | fastapi · uvicorn | desktop (`desktop/backend` — 앱 백엔드, localhost) |
 | ranx · tokenizers (+ ranx가 끄는 numpy·scipy·pandas·numba) | arena (`arena/` — 하네스 지표 · 청크 상한 계량) |
 | networkx | arena (`arena/graph.py` — S7 그래프 graph@v1 · PPR, HYO-149) |
+| rdflib · pyshacl · owlrl | registry (`registry/build.py` — 데이터 등록부 빌드 · SHACL 검사만, 실행 경로는 `registry.json`, HYO-180) |
 | Electron 45 · electron-vite 5 · React 19 · Tailwind 4 · shadcn/ui(Radix) · Geist · Pretendard 글꼴 · react-markdown + remark-gfm · remark-frontmatter (npm, `desktop/package.json`) | desktop (E6 데스크톱 앱 화면·껍데기, HYO-49) |
 | Elasticsearch (docker `infra/`, 9.5.4 + analysis-nori, basic) | arena |
 | Neo4j (docker `infra/`, 5.26.31 + n10s) | arena |
