@@ -33,7 +33,9 @@
 | **OWL** | 스키마. 클래스 · 속성 · domain/range를 정의한다. 추론은 **빌드 때만** 돌린다 | `runsInside`의 domain과 range는 Technology다 | **검증을 하지 않는다** (아래) |
 | **SHACL** | 등록부 자체 검사(닫힌 세계). 빌드가 실패하는 조건이다 | 정규화 이름이 두 대상에 겹치면 실패 · 항목 출처는 수집 단위 하나 아래 | 실행 중 검사 (실행 경로는 `registry.json`만 읽는다) |
 
-**OWL의 domain/range는 검증이 아니라 추론이다.** OWL은 열린 세계를 가정한다. 「모르는 것은 거짓이 아니라 아직 모르는 것」이라는 뜻이다. 그래서 `runsInside`의 range가 Technology라고 적어 두고 오타 낸 ID(`tech:electorn`)를 대상으로 쓰면, 오류가 나지 않는다. 대신 「`tech:electorn`도 Technology다」라는 새 사실이 추론되고 빌드가 조용히 지나간다. 「대상이 등록된 Technology여야 한다」를 실패로 만드는 것은 SHACL(`sh:class` · `sh:nodeKind`)이다. 두 층을 다 두는 이유가 이것이다. OWL은 「무엇이 있나」를 정의해 추론에 쓰고, SHACL은 「이 파일이 규칙대로 적혔나」를 확인한다.
+**OWL의 domain/range는 검증이 아니라 추론이다.** OWL은 열린 세계를 가정한다. 「모르는 것은 거짓이 아니라 아직 모르는 것」이라는 뜻이다. 그래서 `runsInside`의 range가 Technology라고 적어 두고 오타 낸 ID(`tech:electorn`)를 대상으로 쓰면, OWL 추론기는 오류를 내지 않는다. 대신 「`tech:electorn`도 Technology다」라는 새 사실을 추론한다. 「대상이 등록된 Technology여야 한다」를 실패로 만드는 것은 SHACL(`sh:class` · `sh:nodeKind`)이다. 두 층을 다 두는 이유가 이것이다. OWL은 「무엇이 있나」를 정의해 추론에 쓰고, SHACL은 「이 파일이 규칙대로 적혔나」를 확인한다.
+
+같은 이유로 **SHACL은 추론 없이 돌린다.** 추론을 켠 채 돌리면 SHACL도 추론된 타입을 보기 때문에 관계 검사(`sh:class`)가 통과해 버린다. 실측(2026-11-11, `registry/tests` — 항목 출처 하나의 `collectedBy`를 `source:securty`로 오타 냄): 추론이 없으면 그 관계에서 잡힌다. rdfs 추론을 켜면 관계 검사는 통과하고, 추론으로 생긴 수집 단위 `source:securty`에 이름이 없어 이름 검사에 **우연히** 걸릴 뿐이다. 처음에는 「빌드가 조용히 지나간다」고 적었는데, 이 등록부에서는 다른 모양이 우연히 막는다. 우연에 기대지 않으려고 추론 없이 검사한다.
 
 추론이 주는 것 (빌드 때 owlrl로 돌린 뒤 JSON에 펼쳐 넣는다):
 - 하위 클래스를 상위로 올린다. 예: Runtime이 Technology의 하위 클래스면 모든 Runtime이 Technology 목록에도 든다
