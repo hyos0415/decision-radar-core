@@ -1630,9 +1630,10 @@ export interface components {
       key: string
       /**
        * Kind
+       * @description 검사 단위 — channel: 등록부에 없는 통로 종류 (HYO-180)
        * @enum {string}
        */
-      kind: 'source' | 'page' | 'feed' | 'url'
+      kind: 'source' | 'channel' | 'page' | 'feed' | 'url'
       /**
        * Name
        * @description 출처 이름
@@ -1657,10 +1658,10 @@ export interface components {
     SourceHealthReason: {
       /**
        * Rule
-       * @description 걸린 규칙
+       * @description 걸린 규칙 — unregistered: 데이터 등록부에 없는 항목 출처 · 통로 (HYO-180). collector/health.py RULES와 같은 목록
        * @enum {string}
        */
-      rule: 'failed' | 'zero' | 'half' | 'moved' | 'stale'
+      rule: 'failed' | 'zero' | 'half' | 'moved' | 'stale' | 'unregistered'
       /**
        * Detail
        * @description 사람이 읽는 근거 한 줄

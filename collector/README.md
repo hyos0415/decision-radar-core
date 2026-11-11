@@ -55,7 +55,7 @@ python collector/tests/test_snapshot.py                # 오프라인 테스트
 
 ### 출처 건강 검사 (HYO-172)
 
-얼릴 때 출처마다 지난 4주와 비교해 이상(실패 · 0건 · 절반 미만 · 다른 도메인 · 3주째 그대로)만 `<주>/source-health.json`에 쓴다. 규칙은 doc-pipeline §4-7. 주간 사슬 `health` 단계가 `.env`의 `LINEAR_API_KEY`로 Linear 이슈를 만든다(없으면 건너뜀 — 앱 「이번 주」 머리 한 줄은 보인다). 일부러 둘 이상은 `source-health.yaml`에 예외로.
+얼릴 때 출처마다 지난 4주와 비교해 이상(실패 · 0건 · 절반 미만 · 다른 도메인 · 3주째 그대로 · 등록부에 없음)만 `<주>/source-health.json`에 쓴다. 출처 단위와 항목 수는 데이터 등록부(`registry/registry.json`, HYO-180)로 묶어 센다 — **새 출처 · 통로를 붙이면 `registry/sources.ttl`에도 적는다**(`registry/README.md`). 규칙은 doc-pipeline §4-7. 주간 사슬 `health` 단계가 `.env`의 `LINEAR_API_KEY`로 Linear 이슈를 만든다(없으면 건너뜀 — 앱 「이번 주」 머리 한 줄은 보인다). 일부러 둘 이상은 `source-health.yaml`에 예외로.
 
 ```bash
 python -m collector.health check --week 2026-W45     # 얼린 주를 다시 검사해 출력만
