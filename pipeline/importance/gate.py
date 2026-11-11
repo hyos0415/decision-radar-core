@@ -119,7 +119,7 @@ class Gate:
         except Exception as e:  # noqa: BLE001 — 안전 실패: 버리고 기록한다 (조용히 남기지도, 조용히 사라지게 두지도 않는다)
             return {**base, "status": "error", "tiers": {t: e2["tiers"] for t, e2 in effs.items()},
                     "reason": f"변화 분류 실패: {type(e).__name__}: {str(e)[:120]}"}
-        changes = policy.normalize_changes(ans.labels, item.get("title") or "")   # 프리릴리스 major · 덧붙인 minor_patch 빼기 (§3 변경 2026-10-21, HYO-131)
+        changes = policy.normalize_changes(ans.labels, item.get("title") or "", policy.item_tag(item))   # 프리릴리스 · x.0.0 아닌 major, 덧붙인 minor_patch 빼기 (§3 변경 2026-10-21 · 2026-11-11)
         rows, kept_by, defaulted, scoped = [], [], False, []
         versions = self.versions
         for t, e in effs.items():

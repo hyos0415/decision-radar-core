@@ -178,7 +178,7 @@ def make_backend(model, *, allow_real=False, **kw):
         if not allow_real:
             raise PermissionError(f"{model}: 실제 모델 실행(구독 CLI)은 --real-api 없이는 거부한다")
         from .cli_backend import ClaudeCliBackend
-        return ClaudeCliBackend(model, **{k: v for k, v in kw.items() if k in ("log", "effort", "bin", "timeout")})
+        return ClaudeCliBackend(model, **{k: v for k, v in kw.items() if k in ("log", "effort", "bin", "timeout", "batch", "seed")})
     if model.startswith("claude-"):
         if not allow_real:
             raise PermissionError(f"{model}: 실제 API 실행은 --real-api 없이는 거부한다")    # 키 파일도 읽기 전에 거부

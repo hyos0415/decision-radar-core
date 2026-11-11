@@ -110,18 +110,56 @@ def cell(tier, change, ctx=None):
 
 
 # 프리릴리스 버전 표기 — 제목에서 찾는다. `v45.0.0-beta.2` · `2.14.0b1` · `5.0.0rc1` · `1.79.1.dev2` · `v1.80.12-nightly` · `3.1.0a1`
-_PRERELEASE = re.compile(r"\d(?:[-.]?(?:alpha|beta|rc|dev|pre|preview|canary|next|nightly)\.?\d*|(?:a|b)\d+)(?![\w.])|\bnightly\b", re.I)
+# · `Lucide v1 🚀 (Release Candidate #0)` (2026-11-11, HYO-169 — 버전 옆이 아닌 rc 표기)
+_PRERELEASE = re.compile(r"\d(?:[-.]?(?:alpha|beta|rc|dev|pre|preview|canary|next|nightly)\.?\d*|(?:a|b)\d+)(?![\w.])|\bnightly\b"
+                         r"|\brelease candidate\b", re.I)
 
 
 def is_prerelease(title):
     return bool(_PRERELEASE.search(title or ""))
 
 
-def normalize_changes(changes, title=""):
+_BARE_MAJOR = re.compile(r"(?<![\w.])v(\d+)(?![\w.])", re.I)     # `Transformers v5` · `Lucide V1` — 숫자 하나뿐인 버전 = N.0.0
+_BUILD_TAG = re.compile(r"(?<![\w.])b\d+(?![\w.])")              # llama.cpp `b6512` — 빌드 번호, semver가 아니다
+
+
+def item_tag(item):
+    """릴리스 태그 — meta.tag, 없으면 `github-release:<저장소>@<태그>` id의 끝(정답지 항목은 meta.tag가 없다). 릴리스가 아니면 None.
+    제목(릴리스 이름)보다 태그가 버전이다: `Lucide V1 🚀`의 태그는 `1.0.1`, `Transformers v5`는 `v5.0.0`."""
+    tag = (item.get("meta") or {}).get("tag")
+    if tag:
+        return str(tag)
+    iid = str(item.get("id") or "")
+    return iid.rsplit("@", 1)[1] if iid.startswith("github-release:") and "@" in iid else None
+
+
+def is_formal_major(title):
+    """제목(또는 태그)에서 읽은 버전이 정식 x.0.0(x ≥ 1 · 뒤 숫자 모두 0 · 프리릴리스 아님)인가 (§3 ③ 괄호 · D2, HYO-169).
+    x.y(.z) → 그대로 본다(`0.17.0`은 False — D2) · `v5`처럼 숫자 하나 → N.0.0 · 빌드 번호(`b6512`) → False(semver 버전이 아니다).
+    벤더 소식(`[vendor] …`)이나 버전을 못 읽는 제목은 None — 판단하지 않는다."""
+    title = title or ""
+    if title.startswith("["):
+        return None
+    if is_prerelease(title):
+        return False
+    rel = release_of({"title": title})
+    if rel is not None:
+        v = rel[1]
+        return v[0] >= 1 and not any(v[1:])
+    bare = _BARE_MAJOR.findall(title)
+    if bare:
+        return int(bare[-1]) >= 1
+    if _BUILD_TAG.search(title):
+        return False
+    return None
+
+
+def normalize_changes(changes, title="", tag=None):
     """모델이 짚은 변화 종류 → 정의대로 정리한 목록 (§3 변경 2026-10-21 ③④를 스크립트로 집행 — 규율 1, HYO-131).
-    ③ 제목이 프리릴리스(alpha·beta·rc·dev·nightly)면 major를 뺀다 ④ 다른 종류가 있으면 minor_patch를 뺀다. 순서는 그대로.
-    둘 다 빼기만 한다 — 모델이 안 짚은 종류를 더하지 않는다. 다 빠져 비면 [] (decide가 minor·patch로 친다)."""
-    out = [c for c in changes if not (c == "major" and is_prerelease(title))]
+    ③ 제목이 프리릴리스(alpha·beta·rc·dev·nightly)면 major를 뺀다 — 2026-11-11(HYO-169)부터 ③의 괄호 「정식 x.0.0에서만」 + D2도:
+    릴리스 태그(없으면 제목)에서 읽은 버전이 정식 x.0.0이 아니면 major를 뺀다(버전을 못 읽으면 그대로) ④ 다른 종류가 있으면 minor_patch를 뺀다.
+    순서는 그대로. 둘 다 빼기만 한다 — 모델이 안 짚은 종류를 더하지 않는다. 다 빠져 비면 [] (decide가 minor·patch로 친다)."""
+    out = [c for c in changes if not (c == "major" and (is_prerelease(title) or is_formal_major(tag or title) is False))]
     if any(c != "minor_patch" for c in out):
         out = [c for c in out if c != "minor_patch"]
     return out

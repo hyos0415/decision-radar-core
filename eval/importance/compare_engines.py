@@ -59,11 +59,12 @@ def _kept(rec):
     return None if s is None else s.get("pass") is True
 
 
-def compare(rec_a, rec_b, recorded, answers, titles):
+def compare(rec_a, rec_b, recorded, answers, titles, tags=None):
     a, b = {r["id"]: r for r in rec_a}, {r["id"]: r for r in rec_b}
     ids = sorted(recorded)
-    same = [i for i in ids if i in answers and
-            policy.normalize_changes(recorded[i], titles.get(i, "")) == policy.normalize_changes(answers[i], titles.get(i, ""))]
+    tags = tags or {}
+    norm = lambda labels, i: policy.normalize_changes(labels, titles.get(i, ""), tags.get(i))   # noqa: E731 — 관문과 같은 정리
+    same = [i for i in ids if i in answers and norm(recorded[i], i) == norm(answers[i], i)]
     keep_a_only = [i for i in ids if _kept(a.get(i, {})) and not _kept(b.get(i, {}))]
     keep_b_only = [i for i in ids if _kept(b.get(i, {})) and not _kept(a.get(i, {}))]
     det = lambda r: (r or {}).get("end") == "detect"   # noqa: E731
@@ -131,12 +132,13 @@ def main(argv=None):
         gate_b, _ = build_gate("stub", str(tiers), backend=be)
         rec_b = tr.replay(items, gate_b, profile, stack["terms"], slots=slots, slots_raw=slots_raw)
     finally:
+        info = inner.run_info() if hasattr(inner, "run_info") else None     # 구독 CLI 버전 (precondition-hyo169 §3)
         inner.close()
     tiers_info = {"path": str(tiers), "sha256": hashlib.sha256(tiers.read_bytes()).hexdigest()}
-    res = compare(rec_a, rec_b, recorded, answers, titles)
+    res = compare(rec_a, rec_b, recorded, answers, titles, {it["id"]: policy.item_tag(it) for it in items})
     text = report(a.week, a.model, res, recorded, answers, titles, tiers_info)
     (out / "report.md").write_text(text + "\n", encoding="utf-8", newline="\n")
-    (out / "summary.json").write_text(json.dumps({"week": a.week, "model": a.model, "tiers": tiers_info, "calls": inner.log.totals(), **res},
+    (out / "summary.json").write_text(json.dumps({"week": a.week, "model": a.model, "tiers": tiers_info, "calls": inner.log.totals(), "backend_info": info, **res},
                                                  ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
     print(text)
     print(f"호출 {inner.log.totals()} -> {out}")

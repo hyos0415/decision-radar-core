@@ -518,6 +518,27 @@ def test_normalize_changes_prerelease_major_and_lone_minor_patch():
     assert n(["breaking", "minor_patch"], "x v1.2.3") == ["breaking"] and n(["minor_patch"], "x v1.2.3") == ["minor_patch"]
     assert n(["minor_patch", "major"], "x v2.0.0-beta.1") == ["minor_patch"]                    # major가 빠지면 minor_patch만 남는다
     assert n([], "x") == []
+    # ③ 괄호 「정식 x.0.0에서만」 + D2 (2026-11-11, HYO-169) — 정답지의 major 6건은 전부 정식 x.0.0, Sonnet CLI가 짚은 major 소음은 전부 아님
+    for t in ["openai/openai-python v4.0.0", "anthropics/anthropic-sdk-python v1.0.0", "vitejs/vite-plugin-react plugin-react@6.0.0",
+              "electron/electron electron v44.0.0", "x v2.0", "huggingface/transformers Transformers v5", "lucide-icons/lucide Lucide V1 🚀"]:
+        assert policy.is_formal_major(t) is True and n(["major"], t) == ["major"], t
+    for t in ["langchain-ai/langchain langchain-core==1.7.4", "astral-sh/ruff 0.17.0", "vllm v0.11.0", "BerriAI/litellm v1.105.0", "x v2.1.0",
+              "electron/electron electron v45.0.0-beta.2", "ggml-org/llama.cpp b11906", "ggml-org/llama.cpp v0.8.0"]:
+        assert policy.is_formal_major(t) is False and n(["major", "breaking"], t) == ["breaking"], t   # W44/W45 Sonnet CLI의 major 소음 (빌드 번호 포함)
+    for t in ["[vendor] Claude Opus 5 출시", "[anthropic] Models overview v2", "openai/codex Codex CLI release", ""]:
+        assert policy.is_formal_major(t) is None and n(["major"], t) == ["major"], t                   # 벤더 소식 · 버전을 못 읽는 제목은 판단하지 않는다 (빼기만)
+    assert policy.is_prerelease("lucide-icons/lucide Lucide v1 🚀  (Release Candidate #0)") and n(["major", "breaking"], "lucide-icons/lucide Lucide v1 🚀  (Release Candidate #0)") == ["breaking"]
+    assert n(["major", "minor_patch"], "x v1.7.0") == ["minor_patch"]                              # major가 빠지면 덧붙인 minor_patch가 남는다 (정리 순서)
+    # 태그가 제목보다 먼저다 — 정답지 항목(과거 릴리스)의 id 그대로: 릴리스 이름 「Lucide V1」의 태그는 1.0.1
+    tag = policy.item_tag
+    assert tag({"id": "github-release:lucide-icons/lucide@1.0.1"}) == "1.0.1" and tag({"id": "github-release:vitejs/vite-plugin-react@plugin-react@6.0.0"}) == "6.0.0"
+    assert tag({"id": "x", "meta": {"tag": "v2.4.0"}}) == "v2.4.0" and tag({"id": "vendor:aws:abc"}) is None and tag({"id": "hn:1"}) is None
+    assert n(["major"], "lucide-icons/lucide Lucide V1 🚀", "1.0.1") == [] and n(["major"], "huggingface/transformers Transformers v5", "v5.0.0") == ["major"]
+    assert n(["major"], "ggml-org/llama.cpp b11906", "b11906") == [] and n(["major"], "electron/electron electron v44.0.0", "v44.0.0") == ["major"]
+    assert n(["major"], "x Release 2", "v2.0.0-rc.1") == []                                          # 태그가 프리릴리스
+    g = gate_mod.Gate(StubBackend(changes={"github-release:lucide-icons/lucide@1.0.1": ["major"]}), _store(**{"lucide-react": {"tiers": ["L4"]}}))
+    r3 = g({"id": "github-release:lucide-icons/lucide@1.0.1", "title": "lucide-icons/lucide Lucide V1 🚀", "text": "", "meta": {"dependency": "lucide-react"}}, [])
+    assert r3["model_changes"] == ["major"] and r3["changes"] == [] and not r3["keep"], r3                 # 관문이 id의 태그로 정리한다 (L4 × major ✅가 사라진다)
     st = _store(electron={"tiers": ["L1"]})
     g = gate_mod.Gate(StubBackend(changes={"e": ["major", "minor_patch"]}), st)
     r = g(_item("e", "electron/electron electron v45.0.0-beta.2", tech="electron"))
@@ -1964,7 +1985,9 @@ def test_weekly_tiers_plan_and_push_only_the_tier_file():
 
 # ---------------------------------------------------------------- 구독 CLI 백엔드 (HYO-169 — 가짜 claude, 구독 안 씀)
 
-from pipeline.importance import cli_backend  # noqa: E402
+import random  # noqa: E402
+
+from pipeline.importance import cli_backend, prompts_cli  # noqa: E402
 
 FAKE_CLAUDE = REPO / "product" / "radar" / "fake_cli.py"
 
@@ -1997,6 +2020,9 @@ def test_cli_backend_isolation_labels_and_log():
                 ("claude-cli", "subscription", None, 0.0123, "claude-sonnet-5-5", 1), rec
             assert rec["input_tokens"] == 105 and rec["output_tokens"] == 50 and rec["flow"] == "changes" and "error" not in rec, rec
             assert be.log.totals()["unpriced_calls"] == 1 and be.log.totals()["cost_usd"] == 0
+            info = be.run_info()                                                              # CLI 버전은 실행마다 남긴다 (precondition-hyo169 §3)
+            assert info == {"engine": "claude-cli", "model": "claude-sonnet-5-5", "effort": "medium", "cli_version": "0.0.0-fake (Claude Code)",
+                            "prompt_round": prompts_cli.ROUND, "batch": None, "seed": 0}, info
             t = _fake_cli({"structured": {"tiers": ["L5"], "unsure": False, "reason": "SDK"}}, d).classify_tiers(TechQuery(name="anthropic"))
             assert t.labels == ["L5"] and not t.unsure
     finally:
@@ -2047,6 +2073,109 @@ def test_make_backend_cli_gating():
     be = backends.make_backend("claude-cli/claude-sonnet-5-5", allow_real=True, bin=str(FAKE_CLAUDE), service_tier="flex")   # 모르는 인자는 버린다
     assert isinstance(be, cli_backend.ClaudeCliBackend) and be.model == "claude-sonnet-5-5" and be.effort == "medium"
     assert "--model" in be._cmd("s", {}) and be._cmd("s", {})[be._cmd("s", {}).index("--model") + 1] == "claude-sonnet-5-5"
+    b = backends.make_backend("claude-cli/claude-haiku-5-5", allow_real=True, bin=str(FAKE_CLAUDE), batch=10, seed=3)
+    assert (b.batch, b.seed, b.model) == (10, 3, "claude-haiku-5-5")
+    assert evaluate.main(["--gold", str(REPO / "eval" / "importance" / "gold.example.json"), "--model", "stub", "--batch", "10"]) == 2   # 묶음은 CLI에만
+
+
+def test_cli_backend_batch_shuffles_by_seed_maps_numbers_and_fails_safe():
+    """묶음 모드 (HYO-169 등록 — 확정 시트 §11): 시드로 섞어 N개씩 한 세션 · 번호로 소식을 되짚음 · 빠진 번호 · 실패한 묶음은 그 소식만 안전 실패."""
+    saved = os.environ.get("RADAR_FAKE_CLI")
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            qs = [NewsQuery(id=f"n{i}", technology="electron", title=f"t{i}", text="") for i in range(5)]
+            # 가짜는 묶음마다 같은 답: [1] security · [2] breaking · [3] 없음 · [1] 중복(처음 것만)
+            be = _fake_cli({"structured": {"items": [{"n": 1, "changes": ["security"], "reason": "a"}, {"n": 2, "changes": ["breaking"], "reason": "b"},
+                                                     {"n": 1, "changes": ["eol"], "reason": "dup"}, {"n": 9, "changes": ["eol"], "reason": "범위 밖"}]}},
+                           d, batch=3, seed=7)
+            be.prefetch_changes(qs + [qs[0]])                                               # 같은 id는 한 번만 묻는다
+            order = list(qs)
+            random.Random(7).shuffle(order)
+            calls = [c for c in be.log.calls if c["flow"] == "changes-batch"]
+            assert [c["batch_ids"] for c in calls] == [[q.id for q in order[:3]], [q.id for q in order[3:]]], calls
+            assert all(c["batch_seed"] == 7 and c["engine"] == "claude-cli" for c in calls)
+            assert be.classify_changes(order[0]).labels == ["security"] and be.classify_changes(order[1]).labels == ["breaking"]
+            assert be.classify_changes(order[3]).labels == ["security"] and be.classify_changes(order[4]).labels == ["breaking"]   # 둘째 묶음
+            assert len(be.log.calls) == 2                                                   # 쌓인 답을 돌려줬다 — 한 건씩 다시 묻지 않는다
+            try:
+                be.classify_changes(order[2])
+                raise AssertionError("답에 빠진 소식이 조용히 지나갔다")
+            except cli_backend.CliError as e:
+                assert "[3]" in str(e)
+            be.prefetch_changes(qs)                                                          # 다음 차례는 시드 8 — 순서가 바뀐다
+            order2 = list(qs)
+            random.Random(8).shuffle(order2)
+            assert order2 != order and be.log.calls[-2]["batch_ids"] == [q.id for q in order2[:3]] and be.log.calls[-1]["batch_seed"] == 8
+            bad = _fake_cli({"is_error": True, "subtype": "error_during_execution", "structured": None}, d, batch=5)
+            bad.prefetch_changes(qs)                                                         # 묶음 실패 → 한 번 더 → 그 묶음 소식 전부 안전 실패
+            assert len(bad.log.calls) == cli_backend.ATTEMPTS and all(c.get("error") for c in bad.log.calls)
+            for q in qs:
+                try:
+                    bad.classify_changes(q)
+                    raise AssertionError("실패한 묶음이 조용히 지나갔다")
+                except cli_backend.CliError:
+                    pass
+            single = _fake_cli({"structured": {"changes": ["major"], "reason": "r"}}, d)
+            single.prefetch_changes(qs)                                                      # 묶음이 아니면 아무것도 안 한다
+            assert single.batch is None and single.log.calls == []
+            info = be.run_info()
+            assert (info["batch"], info["seed"], info["prompt_round"]) == (3, 7, prompts_cli.ROUND)
+            p = prompts_cli.batch_prompt(qs[:2])
+            assert p.index("=== 소식 [1] ===") < p.index("제목: t0") < p.index("=== 소식 [2] ===") < p.index("제목: t1")
+            assert "소식마다 따로" in prompts_cli.batch_instructions() and prompts_cli.batch_instructions().startswith(prompts_cli.CLI_CHANGE_INSTRUCTIONS.rstrip())
+    finally:
+        os.environ.pop("RADAR_FAKE_CLI", None) if saved is None else os.environ.__setitem__("RADAR_FAKE_CLI", saved)
+
+
+class _BatchStub(StubBackend):
+    """묶음 백엔드 흉내: prefetch로 받은 질문만 답한다 — 관문이 한 건씩 물으면 센다."""
+    batch = 2
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.rounds, self.single, self._asked = [], 0, set()
+
+    def prefetch_changes(self, qs):
+        self.rounds.append([q.id for q in qs])
+        self._asked = {q.id for q in qs}
+
+    def classify_changes(self, q):
+        if q.id not in self._asked:
+            self.single += 1
+        return super().classify_changes(q)
+
+
+def test_evaluate_batch_r_and_safety_k():
+    """HYO-169 등록: 묶음 모드는 실행마다 관문 질문 전부를 한 번에 넘긴다 · R은 --with-r일 때만 판정 · C1은 안전 항목만 더 돈 실행까지."""
+    gold, tiers_, changes = _gold_oracle()
+    ids = [it["id"] for it in gold["items"]]
+    s_ids = [it["id"] for it in evaluate.safety_items(gold["items"])]
+    assert s_ids == ["ex-3", "ex-4"]
+    be = _BatchStub(tiers=tiers_, changes=changes)
+    res = evaluate.evaluate(be, gold, 3, safety_k=5, with_r=True)
+    assert be.rounds == [ids] * 3 + [s_ids] * 2 and be.single == 0, (be.rounds, be.single)
+    j = res["judgement"]
+    assert j["pass"] is True and j["C1"]["safety_only_runs"] == [0, 0] and j["R"]["judged"] and j["R"]["n"] == 2 and j["R"]["per_run"] == [1.0] * 3
+    # 안전 밖 남김(ex-1 breaking·major)을 놓치는 모델 — C1~C3는 통과(C3 80%)하지만 R 50% → --with-r이면 불통과, 없으면 보고만
+    blind = dict(changes, **{"ex-1": ["minor_patch"]})
+    r1 = evaluate.evaluate(StubBackend(tiers=tiers_, changes=blind), gold, 3)
+    assert r1["judgement"]["pass"] is True and r1["judgement"]["R"]["pass"] is False and not r1["judgement"]["R"]["judged"]
+    assert "판정 밖" in evaluate.format_report("m", r1, CallLog().totals())
+    r2 = evaluate.evaluate(StubBackend(tiers=tiers_, changes=blind), gold, 3, with_r=True)
+    assert r2["judgement"]["pass"] is False and r2["runs"][0]["r_misses"] == ["ex-1"]
+    # 안전 항목을 다섯 번째에만 놓치는 모델 — 전체 실행 3번은 0건이어도 C1 불통과
+    n = {"ex-3": 0}
+
+    def late(q):
+        if q.id == "ex-3":
+            n["ex-3"] += 1
+            return ["minor_patch"] if n["ex-3"] == 5 else ["security"]
+        return changes[q.id]
+    r3 = evaluate.evaluate(StubBackend(tiers=tiers_, changes=late), gold, 3, safety_k=5)
+    assert r3["judgement"]["C1"]["misses_per_run"] == [0, 0, 0] and r3["judgement"]["C1"]["safety_only_runs"] == [0, 1]
+    assert r3["judgement"]["C1"]["pass"] is False and r3["judgement"]["pass"] is False
+    pl = evaluate.plan(gold, 3, None, fixed=True, safety_k=8, batch=2)               # 변화 5건 → 3세션 × 3 + 안전 2건 → 1세션 × 5
+    assert pl["per_run"]["change_calls"] == 3 and pl["safety_extra"] == {"runs": 5, "calls": 5} and pl["total_calls"] == 14
 
 
 # ---------------------------------------------------------------- 변이 검사 (규율 3)
@@ -2209,7 +2338,19 @@ def _cli_cmd_with_tools(self, system, schema):
     return cmd[:i] + cmd[i + 2:]
 
 
-def _cli_retry_shape_errors(self, flow, system, prompt, schema):
+_ORIG_GATE_ITEMS = evaluate._gate_items
+
+
+class _NoPrefetch:
+    """묶음 백엔드를 감싸 prefetch를 숨긴다 — 평가기가 관문 질문을 미리 안 넘기는 변이."""
+    def __init__(self, inner):
+        self.inner = inner
+
+    def classify_changes(self, q):
+        return self.inner.classify_changes(q)
+
+
+def _cli_retry_shape_errors(self, flow, system, prompt, schema, extra=None, timeout=None):
     last = None
     for _ in range(cli_backend.ATTEMPTS):
         try:
@@ -2229,6 +2370,13 @@ def mutations():
         ("CLI 백엔드가 내장 도구를 켬", [(cli_backend.ClaudeCliBackend, "_cmd", _cli_cmd_with_tools)], test_cli_backend_isolation_labels_and_log),
         ("CLI 백엔드가 모양 이상도 다시 시도하고 기록이 어긋남", [(cli_backend.ClaudeCliBackend, "_run", _cli_retry_shape_errors)], test_cli_backend_failures_are_safe_and_retried_once),
         ("CLI 백엔드를 플래그 없이 만듦", [(backends, "make_backend", lambda model, allow_real=False, **kw: _ORIG_MAKE_BACKEND(model, allow_real=True, **kw))], test_make_backend_cli_gating),
+        ("묶음 순서를 시드와 무관하게 섞음 (HYO-169)", [(cli_backend, "random", SimpleNamespace(Random=lambda seed: random.Random(0)))],
+         test_cli_backend_batch_shuffles_by_seed_maps_numbers_and_fails_safe),
+        ("묶음 모드인데 평가기가 관문 질문을 미리 안 넘김 (HYO-169)", [(evaluate, "_gate_items", lambda backend, gold, store: _ORIG_GATE_ITEMS(_NoPrefetch(backend), gold, store))],
+         test_evaluate_batch_r_and_safety_k),
+        ("C1이 안전 항목만 더 돈 실행을 안 봄 (HYO-169)", [(evaluate, "judge", lambda runs, k_required=3, with_r=False, safety_runs=(): _ORIG_JUDGE(runs, k_required, with_r, ()))],
+         test_evaluate_batch_r_and_safety_k),
+        ("--with-r인데 R 기준이 없음 (HYO-169)", [(evaluate, "R_MIN_RECALL", 0.0)], test_evaluate_batch_r_and_safety_k),
         ("Claude 허용 호스트를 넓힘", [(claude_backend, "ALLOWED_HOSTS", {"api.anthropic.com", "telemetry.example.invalid"})], test_claude_backend_netguard_allows_only_anthropic),
         ("Claude 단가를 10배로", [(claude_backend, "PRICES", {"claude-sonnet-5-5": (20.0, 100.0)})], test_claude_backend_request_shape_labels_and_cost),
         ("Claude effort를 high로 (등록: medium)", [(claude_backend, "DEFAULT_EFFORT", "high")], test_claude_backend_request_shape_labels_and_cost),
@@ -2259,6 +2407,9 @@ def mutations():
         ("우리 것: 은퇴 언급을 버전 없이 계열로만", [(successor, "_version", lambda parts: (0,))], test_gate_model_retirement_needs_our_model_mentioned),        ("후속 모델: L2가 아닌 기술도 봄", [(gate_mod.Gate, "_successors", lambda self, item, names: successor.find(item.get("title") or "", names))], test_gate_successor_model_is_script_judged_l2_only_and_last),
         ("후속 모델을 심각도 「나머지」와 같게", [(policy, "SEVERITY", {k: v for k, v in policy.SEVERITY.items() if k != "successor_model"})], test_gate_successor_model_is_script_judged_l2_only_and_last),
         ("프리릴리스 major를 안 뺌", [(policy, "is_prerelease", lambda title: False)], test_normalize_changes_prerelease_major_and_lone_minor_patch),
+        ("정식 x.0.0 아닌 major를 안 뺌 (HYO-169)", [(policy, "is_formal_major", lambda title: None)], test_normalize_changes_prerelease_major_and_lone_minor_patch),
+        ("버전 못 읽은 major도 뺌 (HYO-169)", [(policy, "is_formal_major", lambda title: False)], test_normalize_changes_prerelease_major_and_lone_minor_patch),
+        ("태그를 안 보고 제목(릴리스 이름)만 봄 (HYO-169)", [(policy, "item_tag", lambda item: None)], test_normalize_changes_prerelease_major_and_lone_minor_patch),
         ("관문이 변화 종류 정리를 안 함 (모델 라벨 그대로)", [(policy, "normalize_changes", lambda changes, title="": list(changes))], test_normalize_changes_prerelease_major_and_lone_minor_patch),
         ("두 등급인데 첫 등급 행만 적용 (관문)", [(policy, "decide", _first_tier_only)], test_lane_a_gate_wiring_and_cap),
         ("모델 은퇴 ✅를 ❌로", [(policy, "TABLE", _widened_table())], test_every_cell_default_context),
