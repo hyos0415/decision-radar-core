@@ -88,6 +88,31 @@ def test_validate_drops_bad_answers():
     assert got["reddit:nm"]["matches"] == [] and got["hf-model:org/Small-2B"]["matches"] == []
 
 
+SLOTS_V2 = {"version": 2, "slots": [
+    {"id": "gate-classifier", "name": "관문 분류", "repo": "decision-radar", "role": "분류", "current": ["OpenAI gpt-6.1-sol"],
+     "must": ["구조화된 답"], "now_via": ["OpenAI API 종량제"], "kinds": ["LLM", "판정 모델(decision model)"]},
+    {"id": "retrieval-dense", "name": "검색 임베딩", "repo": "decision-radar", "role": "의미 검색", "current": ["BAAI/bge-m3"],
+     "must": ["한국어 · 영어"], "now_via": ["로컬"], "kinds": ["임베딩 모델"]},
+]}
+
+
+def test_v2_roles_must_vs_now_via_and_switch_note():
+    """자리 프로필 v2 (2026-11-12): 역할 조건(must)만 거르고 지금 쓰는 방식(now_via)은 「바꾸려면 필요한 것」(switch)으로 — v1은 그대로."""
+    assert slots.system_for(SLOTS) is slots.SYSTEM and slots.system_for(SLOTS_V2) is slots.SYSTEM_V2
+    cands = slots.collect(ITEMS)
+    p1, p2 = slots.prompt(cands, SLOTS), slots.prompt(cands, SLOTS_V2)
+    assert "constraints:" in p1 and "must:" not in p1
+    assert "must:" in p2 and "now_via:" in p2 and "kinds:" in p2 and "constraints:" not in p2
+    assert "now_via" in slots.SYSTEM_V2 and "깎지 않는다" in slots.SYSTEM_V2 and "switch" in slots.SYSTEM_V2
+    so = {"judgments": [{"id": "hn:1", "release": True, "matches": [
+        {"slot": "gate-classifier", "fit": 2, "reason": "더 싸다", "switch": "OpenAI API 그대로"}]},
+        {"id": "hf-model:org/Small-2B", "release": True, "matches": [{"slot": "retrieval-dense", "fit": 2, "reason": "작은 임베딩"}]}]}
+    got, dropped = slots.validate(so, cands, SLOTS_V2)
+    per = slots.rank(cands, got, SLOTS_V2)
+    assert per["gate-classifier"][0]["switch"] == "OpenAI API 그대로" and per["retrieval-dense"][0]["switch"] == ""   # 안 쓰면 빈 칸
+    assert dropped == {"unknown_id": 0, "unknown_slot": 0, "bad_fit": 0}
+
+
 def test_rank_threshold_order_topk():
     cands = slots.collect(ITEMS)
     got, _ = slots.validate(judged_stub_terra(), cands, SLOTS)
@@ -167,7 +192,7 @@ TESTS = [(n, f) for n, f in globals().items() if n.startswith("test_")]
 
 
 def mutations():
-    orig_validate, orig_picks = slots.validate, detect_feed.slot_picks
+    orig_validate, orig_picks, orig_system_for = slots.validate, detect_feed.slot_picks, slots.system_for
 
     def trust(so, cands, sl):     # 모델 답을 검사 없이
         return {j["id"]: {"release": j["release"], "matches": j["matches"]} for j in so["judgments"]}, {"unknown_id": 0, "unknown_slot": 0, "bad_fit": 0}
@@ -181,6 +206,8 @@ def mutations():
         ("API 키를 안 지움", lambda: setattr(slots, "STRIP_ENV", ()), lambda: setattr(slots, "STRIP_ENV", ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"))),
         ("자리마다 1위만 detect로", lambda: setattr(detect_feed, "slot_picks", firsts_only), lambda: setattr(detect_feed, "slot_picks", orig_picks)),
         ("HN 점수 문턱 없음", lambda: setattr(slots, "HN_MIN_POINTS", 0), lambda: setattr(slots, "HN_MIN_POINTS", 100)),
+        ("v2 프로필인데 v1 지시문 (지금 방식이 아니면 깎는다)", lambda: setattr(slots, "system_for", lambda s: slots.SYSTEM),
+         lambda: setattr(slots, "system_for", orig_system_for)),
     ]
 
 

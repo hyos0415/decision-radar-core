@@ -52,13 +52,36 @@ SYSTEM = """너는 기술 스택 관리자의 조수다. 이번 주 수집한 �
 - reason: 한국어 한 문장 — 왜 그 자리인지, 무엇과 비교할지
 모든 후보 id에 대해 한 줄씩 답한다. 주어진 글만 근거로 한다 — 모르는 건 지어내지 않고 fit을 낮춘다."""
 
+# 자리 프로필 v2 (2026-11-12 사용자 「무슨 제품을 쓰냐보다 그 제품이 내 프로젝트에서 어떤 역할을 하느냐」) — 역할로 대 본다.
+# v1 조건 칸에는 역할 조건(구조화 출력 · 한국어 · 데이터 지역)과 지금 쓰는 방식(구독 CLI · API · 같은 벤더)이 섞여 있었고, 하나라도 못 지키면
+# 최대 1이라 W43에서 출시 71건 중 Haiku 5.5 on AWS 하나만 남았다(Gemini 4 Argon · DeepSeek V4.1 Flash가 1로 잘림, 임베딩 모델은 자리 없음).
+# v2는 역할 조건(must)만 거르고, 지금 쓰는 방식(now_via)과 다른 것은 깎지 않고 「바꾸려면 필요한 것」(switch)으로 적는다. 사람이 고른다
+SYSTEM_V2 = """너는 기술 스택 관리자의 조수다. 이번 주 수집한 소식 중 「새 모델·모델 서비스 출시」를 골라, 스택의 각 「역할」을 더 싸게 또는 더 잘 맡을 후보인지 판정한다.
+
+역할마다 하는 일(role) · 지금 맡은 것(current) · 역할 조건(must) · 지금 쓰는 방식(now_via) · 있으면 좋은 것(prefer) · 받는 후보 종류(kinds)가 주어진다.
+- must는 그 역할의 일을 하려면 반드시 지켜야 하는 것이다. 하나라도 못 지키면 fit은 최대 1이다
+- now_via는 지금 그 역할을 맡은 것을 부르는 방식(구독 CLI · 특정 회사 API · 특정 런타임)일 뿐 조건이 아니다. 후보가 다른 회사 · 다른 구독 · 다른 런타임이어도 fit을 깎지 않는다. 대신 switch에 바꾸려면 필요한 것(새 결제 · 새 API 키 · 다른 런타임 등)을 한 문장으로 적는다. 지금 방식 그대로 쓸 수 있으면 switch는 빈 문자열
+- kinds에 적힌 종류면 생성형 LLM이 아니어도 후보다(판정 모델 · 분류기 · 임베딩 모델 · 리랭커 등)
+후보마다:
+- release: 새 모델(가중치 공개 포함)이나 모델 서비스(새 모델 제공 · 새 지역 제공 · 새 API 등)의 출시·공개 소식이면 true. 사용 후기 · 벤치 글 · 도구 · 논문 · 파인튜닝 변형은 false
+- matches: release가 true일 때만, 맞는 역할마다 {slot, fit, reason, switch}. fit은
+  3 = must를 다 지키고 그 역할을 지금 것보다 더 싸게 또는 더 잘 할 것이 글에 분명하다
+  2 = must를 다 지키고 그 역할에서 지금 것과 비교 실험해 볼 만하다
+  1 = 관련은 있으나 must 일부를 못 지키거나 불확실하다
+  0이면 넣지 않는다
+- reason: 한국어 한 문장 — 왜 그 역할인지, 지금 것과 무엇을 비교할지
+모든 후보 id에 대해 한 줄씩 답한다. 주어진 글만 근거로 한다 — 모르는 건 지어내지 않고 fit을 낮춘다."""
+SLOT_FIELDS = {1: ("id", "name", "repo", "role", "current", "constraints", "prefer"),
+               2: ("id", "name", "repo", "role", "current", "must", "now_via", "prefer", "kinds")}
+
 SCHEMA = {
     "type": "object",
     "properties": {"judgments": {"type": "array", "items": {
         "type": "object",
         "properties": {"id": {"type": "string"}, "release": {"type": "boolean"},
                        "matches": {"type": "array", "items": {"type": "object", "properties": {
-                           "slot": {"type": "string"}, "fit": {"type": "integer", "minimum": 0, "maximum": 3}, "reason": {"type": "string"}},
+                           "slot": {"type": "string"}, "fit": {"type": "integer", "minimum": 0, "maximum": 3}, "reason": {"type": "string"},
+                           "switch": {"type": "string"}},     # v2만 쓴다 (바꾸려면 필요한 것) — 필수가 아니라 v1 답도 그대로 통과
                            "required": ["slot", "fit", "reason"]}}},
         "required": ["id", "release", "matches"]}}},
     "required": ["judgments"],
@@ -149,17 +172,26 @@ def collect(items):
     return sorted(out, key=lambda c: str(c["id"]))
 
 
+def is_v2(slots):
+    return (slots.get("version") or 1) >= 2
+
+
+def system_for(slots):
+    return SYSTEM_V2 if is_v2(slots) else SYSTEM
+
+
 def prompt(cands, slots):
-    sl = [{k: s.get(k) for k in ("id", "name", "repo", "role", "current", "constraints", "prefer")} for s in slots["slots"]]
+    fields = SLOT_FIELDS[2 if is_v2(slots) else 1]
+    sl = [{k: s.get(k) for k in fields if s.get(k) is not None} for s in slots["slots"]]
     lines = [json.dumps({k: c[k] for k in ("id", "source", "title", "url", "text")}, ensure_ascii=False) for c in cands]
     return ("## 자리\n" + yaml.safe_dump(sl, allow_unicode=True, sort_keys=False) +
             f"\n## 후보 ({len(cands)}건, 한 줄에 하나)\n" + "\n".join(lines) + "\n")
 
 
-def judge_claude(user, model="claude-sonnet-5-5", effort="medium", timeout=900):
+def judge_claude(user, model="claude-sonnet-5-5", effort="medium", timeout=900, system=SYSTEM):
     """구독 `claude -p` 한 번 — 도구 없음 · 설정 안 읽음 · API 키 지움 (HYO-99와 같은 설정). → structured_output, 원본"""
     b = os.environ.get("RADAR_CLAUDE_BIN") or shutil.which("claude") or "claude"
-    cmd = [*([sys.executable, b] if b.endswith(".py") else [b]), "-p", "--output-format", "json", "--system-prompt", SYSTEM,
+    cmd = [*([sys.executable, b] if b.endswith(".py") else [b]), "-p", "--output-format", "json", "--system-prompt", system,
            "--json-schema", json.dumps(SCHEMA, ensure_ascii=False), "--tools", "", "--setting-sources", "",
            "--no-session-persistence", "--model", model, "--effort", effort, "--permission-mode", "dontAsk"]
     env = {k: v for k, v in os.environ.items() if k not in STRIP_ENV}
@@ -203,7 +235,7 @@ def validate(so, cands, slots):
             elif not isinstance(m.get("fit"), int) or not 0 <= m["fit"] <= 3:
                 dropped["bad_fit"] += 1
             else:
-                ms.append({"slot": m["slot"], "fit": m["fit"], "reason": str(m.get("reason") or "")})
+                ms.append({"slot": m["slot"], "fit": m["fit"], "reason": str(m.get("reason") or ""), "switch": str(m.get("switch") or "")})
         got[j["id"]] = {"release": bool(j.get("release")), "matches": ms if j.get("release") else []}
     return got, dropped
 
@@ -218,7 +250,7 @@ def rank(cands, judged, slots, k=None, fit_min=None):
             if m["fit"] >= fit_min:
                 c = by_id[cid]
                 per[m["slot"]].append({"id": cid, "title": c["title"], "url": c["url"], "source": c["source"], "why": c["why"],
-                                       "fit": m["fit"], "reason": m["reason"], "popularity": c["popularity"]})
+                                       "fit": m["fit"], "reason": m["reason"], "switch": m.get("switch", ""), "popularity": c["popularity"]})
     for s in per:
         per[s] = sorted(per[s], key=lambda x: (-x["fit"], x["source"] != "vendor", x["popularity"], x["id"]))[:k]
         for i, x in enumerate(per[s], 1):
@@ -236,7 +268,7 @@ def run(items, slots, engine="claude", out=None, reuse=False):
     elif engine == "stub":
         so = judge_stub(cands, slots)
     elif engine == "claude":
-        so, res = judge_claude(prompt(cands, slots))
+        so, res = judge_claude(prompt(cands, slots), system=system_for(slots))
         if raw_path:
             write_json(raw_path, {"engine": "claude-cli", "structured_output": so, "usage": res.get("usage"),
                                   "cost_usd_equiv": res.get("total_cost_usd"), "billing": "subscription"})
