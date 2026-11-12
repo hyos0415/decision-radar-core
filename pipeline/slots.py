@@ -267,6 +267,34 @@ def fold_same_model(xs):
     return out
 
 
+def check_list(cands, judged, per):
+    """v2 「확인 필요」 — 최고 적합도가 1인 출시(정보가 모자라거나 역할 조건 일부를 못 지킨 것). detect로는 안 보내고 목록에 한 줄씩.
+    같은 model은 한 줄로, 이미 어느 역할에 2 이상으로 보인 model · id는 뺀다 (2026-11-12: W41 「Gemini 4 Argon」 HN 제목만 있는 글이 실행마다 2 ↔ 1로 흔들렸다)."""
+    def key(model, cid):
+        return re.sub(r"\s+", " ", model or "").strip().lower() or cid
+    by_id = {c["id"]: c for c in cands}
+    shown_ids = {i for xs in per.values() for x in xs for i in [x["id"]] + list(x.get("also") or [])}
+    shown_models = {key(x.get("model"), x["id"]) for xs in per.values() for x in xs}
+    rows = []
+    for cid, j in judged.items():
+        ms = j["matches"]
+        if not j["release"] or not ms or max(m["fit"] for m in ms) != 1 or cid in shown_ids or key(j.get("model"), cid) in shown_models:
+            continue
+        c = by_id[cid]
+        rows.append({"id": cid, "title": c["title"], "url": c["url"], "source": c["source"], "model": j.get("model", ""),
+                     "slots": [m["slot"] for m in ms], "reason": ms[0]["reason"], "switch": ms[0].get("switch", ""), "popularity": c["popularity"]})
+    rows.sort(key=lambda x: (x["source"] != "vendor", x["popularity"], x["id"]))
+    out, seen = [], {}
+    for x in rows:
+        k = key(x["model"], x["id"])
+        if k in seen:
+            seen[k].setdefault("also", []).append(x["id"])
+            continue
+        seen[k] = x
+        out.append(x)
+    return out
+
+
 def rank(cands, judged, slots, k=None, fit_min=None):
     v2 = is_v2(slots)
     if k is None:
@@ -317,7 +345,8 @@ def run(items, slots, engine="claude", out=None, reuse=False):
             "unjudged": sorted({c["id"] for c in cands} - set(judged)), "dropped": dropped,
             "slot_names": {s["id"]: s.get("name") for s in slots["slots"]},
             "slot_current": {s["id"]: s.get("current") or [] for s in slots["slots"]},
-            "per_slot": per, "to_detect": to_detect, "candidate_list": cands}
+            "per_slot": per, "to_detect": to_detect, "candidate_list": cands,
+            "check": check_list(cands, judged, per) if is_v2(slots) else []}     # 「확인 필요」 — 목록에만, detect 아님 (v2)
 
 
 def summary_line(res):

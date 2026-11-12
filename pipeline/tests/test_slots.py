@@ -126,6 +126,18 @@ def test_v2_roles_must_vs_now_via_and_switch_note():
                  channels=["r/LocalLLaMA:top-week"], signals={"rank:r/LocalLLaMA:top-week": 17}),
              _it("reddit:news", "reddit", "llama, server: add /v1/systemone API", "https://www.reddit.com/r/LocalLLaMA/comments/w",
                  channels=["r/LocalLLaMA:flair:News"], signals={"rank:r/LocalLLaMA:flair:News": 14})]
+    # 「확인 필요」: 최고 1점인 출시는 detect가 아니라 목록 한 줄 — 이미 2점 이상으로 보인 model은 빼고, 같은 model은 묶는다
+    mixed = {"judgments": [
+        {"id": "hn:1", "release": True, "model": "GPT-6.1 Terra", "matches": [{"slot": "gate-classifier", "fit": 2, "reason": "r"}]},
+        {"id": "vendor:aws-bedrock:t", "release": True, "model": "GPT-6.1 Terra", "matches": [{"slot": "retrieval-dense", "fit": 1, "reason": "약함"}]},
+        {"id": "reddit:nm", "release": True, "model": "Unlimited-OCR-2", "matches": [{"slot": "gate-classifier", "fit": 1, "reason": "정보 부족"}]},
+        {"id": "hf-model:org/Small-2B", "release": True, "model": "unlimited-ocr-2", "matches": [{"slot": "retrieval-dense", "fit": 1, "reason": "r"}]},
+        {"id": TERRA_CL, "release": False, "matches": []}]}
+    got, _ = slots.validate(mixed, cands, SLOTS_V2)
+    per = slots.rank(cands, got, SLOTS_V2)
+    chk = slots.check_list(cands, got, per)
+    assert [(x["id"], x.get("also")) for x in chk] == [("hf-model:org/Small-2B", ["reddit:nm"])], chk   # Terra는 2점으로 이미 보임 · 대표는 인기 순
+    assert all(x["id"] not in {"reddit:nm", "hf-model:org/Small-2B"} for xs in per.values() for x in xs)          # detect(per_slot)엔 없다
     wide = {c["id"]: c["why"] for c in slots.collect(extra)}
     assert wide == {"hf-model:org/Decide-1B": "hf-task:token-classification:1", "reddit:ll": "reddit:top-week:17", "reddit:news": "reddit:news"}, wide
 
