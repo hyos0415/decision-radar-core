@@ -137,6 +137,23 @@ def test_slots_step_runs_when_profile_exists_and_failure_continues():
     assert [s["ok"] for s in w2.summary()["steps"] if s["name"] == "slots"] == [False]
 
 
+def test_interest_step_runs_when_profile_exists_and_failure_continues():
+    """HYO-187 — 관심사 프로필(radar-profile.yaml)이 있으면 자리 질의 다음 · feed 앞에 관심사 질의를 같은 run 폴더로 돌린다.
+    실패해도(구독 claude -p) detect 입력은 게시한다. 프로필이 없으면 건너뛴다 (위 test_order_and_args — World 기본은 프로필 없음)."""
+    w = World()
+    Path(w.env["RADAR_PROFILE"]).write_text("version: 1\ninterests: []\n", encoding="utf-8")
+    rc, _ = w.go("--no-push")
+    assert rc == 0 and w.mods()[3:6] == ["pipeline.profile_filter", "pipeline.interest", "pipeline.detect_feed"], w.mods()
+    it = w.calls[4]
+    assert it[1][0] == "run" and arg(it, "--snapshot") == str(w.snaps / WEEK) and arg(it, "--out") == str(w.pout / WEEK)
+    assert arg(it, "--profile") == w.env["RADAR_PROFILE"]
+    w2 = World(fail={"pipeline.interest"})
+    Path(w2.env["RADAR_PROFILE"]).write_text("version: 1\ninterests: []\n", encoding="utf-8")
+    rc, _ = w2.go()
+    assert rc == 0 and f"detect/{WEEK}/feed.json" in w2.remote_files()
+    assert [s["ok"] for s in w2.summary()["steps"] if s["name"] == "interest"] == [False]
+
+
 def test_health_step_alerts_after_freeze_and_failure_continues():
     """HYO-172 — 얼릴 때 쓴 <주>/source-health.json이 있으면 얼림 다음에 Linear 알림을 부른다. 실패해도 사슬은 간다.
     파일이 없으면(얼릴 때 검사가 죽었다) 건너뛴다 (위 test_order_and_args)."""
