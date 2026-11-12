@@ -319,7 +319,11 @@ def rank(cands, judged, slots, k=None, fit_min=None):
     return per
 
 
-def run(items, slots, engine="claude", out=None, reuse=False):
+DEFAULT_MODEL = "claude-sonnet-5-5"
+
+
+def run(items, slots, engine="claude", out=None, reuse=False, model=None):
+    model = model or DEFAULT_MODEL
     cands = collect(items)
     raw_path = Path(out) / "slots-raw.json" if out else None
     if reuse and raw_path and raw_path.exists():
@@ -329,9 +333,9 @@ def run(items, slots, engine="claude", out=None, reuse=False):
     elif engine == "stub":
         so = judge_stub(cands, slots)
     elif engine == "claude":
-        so, res = judge_claude(prompt(cands, slots), system=system_for(slots))
+        so, res = judge_claude(prompt(cands, slots), model=model, system=system_for(slots))
         if raw_path:
-            write_json(raw_path, {"engine": "claude-cli", "structured_output": so, "usage": res.get("usage"),
+            write_json(raw_path, {"engine": "claude-cli", "model": model, "structured_output": so, "usage": res.get("usage"),
                                   "cost_usd_equiv": res.get("total_cost_usd"), "billing": "subscription"})
     else:
         raise SlotError(f"모르는 엔진 {engine!r} (claude · stub — codex는 HYO-169)")
@@ -364,11 +368,13 @@ def main(argv=None):
     r.add_argument("--out", required=True, help="결과 폴더 — profile_filter run과 같은 폴더 (detect_feed가 slots.json을 읽는다)")
     r.add_argument("--engine", default=os.environ.get("RADAR_SLOTS_ENGINE", "claude"), help="claude(구독 claude -p) · stub")
     r.add_argument("--reuse", action="store_true", help="slots-raw.json이 있으면 모델을 다시 부르지 않는다")
+    r.add_argument("--model", default=os.environ.get("RADAR_SLOTS_MODEL", DEFAULT_MODEL),
+                   help="claude -p 모델 (전체 id, 기본 claude-sonnet-5-5 — 2026-11-12 Haiku 비교)")
     a = ap.parse_args(argv)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     from . import union  # 합집합(HYO-167 D6) — 스킬만 잡은 항목도 자리 질의 후보로. 꺼져 있으면 빈 목록
-    res = run(read_items(a.snapshot) + union.extra_items(out), load_slots(a.slots), engine=a.engine, out=out, reuse=a.reuse)
+    res = run(read_items(a.snapshot) + union.extra_items(out), load_slots(a.slots), engine=a.engine, out=out, reuse=a.reuse, model=a.model)
     write_json(out / "slots.json", res)
     print(summary_line(res))
     for s, v in res["per_slot"].items():
