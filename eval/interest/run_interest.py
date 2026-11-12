@@ -21,12 +21,17 @@ sys.path.insert(0, str(ROOT))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-CORPUS_VERSION = "c-laneb@2026-W46"      # 임베딩 캐시 · ES 색인 이름에 들어간다 (Arena c-all@v1과 섞이지 않게)
+CORPUS_VERSION = "c-laneb@2026-W46"      # 임베딩 캐시 · ES 색인 이름에 들어간다 (Arena c-all@v1과 섞이지 않게) — 주마다 corpus_version()
 K_DOCS = 30                              # 문서 순위 길이 = 판정 풀 깊이 = 지표 깊이 (등록 문서 「지표」)
 CHUNK_K = 200                            # 문서 30 · 재정렬 1단계 100을 채우게 청크를 넉넉히 (S4 num_candidates 200과 같게)
 RERANK_DEPTH = 100                       # Arena 등록값 50 — 50이면 S6의 상위 30 문서 집합이 1단계의 상위 50 안에서만 바뀐다
 STRATEGIES = ("kw", "s2", "s4", "s3a.ko", "s6")
-LANGS = ("en", "ko")
+LANGS = ("en", "ko", "sent")             # sent = 관심사 description을 영어 문장으로 옮긴 것 (등록 문서 §9 변경, 시멘틱 서치 문장 질의)
+EXTRA_POOL = (("s4", "sent"),)           # 풀에 더하는 (전략, 질의) — §9 변경
+
+
+def corpus_version(snapshot):
+    return f"c-laneb@{Path(snapshot).name}"
 
 # 관심사 topic의 영어 이름 — 질의 글의 머리 (등록 때 고정, 결과를 보고 바꾸지 않는다)
 TOPIC_EN = {
@@ -44,6 +49,24 @@ TOPIC_EN = {
     "preference-optimization": "Reinforcement learning and preference optimization (DPO, ORPO)",
     "code-impact": "Code understanding and impact analysis",
     "model-routing-cost": "Model routing and cost reduction",
+}
+
+# 관심사 description(한국어 문장)을 영어로 그대로 옮긴 것 — 문장 질의 (§9 변경, 결과를 보기 전에 고정. 낱말을 더하거나 빼지 않는다)
+DESC_EN = {
+    "multimodal": "Models that understand images and documents together, including OCR, document understanding and table extraction.",
+    "hybrid-sparse-retrieval": "Methods that combine keyword (BM25) and vector search, learned sparse representations, result fusion such as RRF, and query expansion or rewriting.",
+    "embeddings-rerankers": "Embedding and reranking models for document retrieval: multilingual and Korean, small models, long documents, late interaction.",
+    "graph-rag": "Methods that build a knowledge graph and use it for retrieval: entity and relation extraction, graph traversal combined with vectors, ontology validation.",
+    "vector-index-efficiency": "Techniques that reduce storage and memory such as vector quantization and compression, disk-based ANN, and recomputation-based indexes.",
+    "agent-runtime": "Agent orchestration, human approval (interrupt and resume), state persistence (checkpoint) and durable execution, multi-agent patterns.",
+    "llm-eval": "Regression eval design, reliability of LLM-as-judge, pass^k and statistical tests, agent trajectory evaluation, eval harnesses.",
+    "small-local-models": "Serving 3-8B models locally: quantization such as int4, serving engines like vLLM and llama.cpp, inference speed and memory.",
+    "answer-verification": "Judging whether a generated answer matches its evidence: claim decomposition, grounding checks, hallucination detection, small models built for verification.",
+    "guardrails-pii": "Prompt injection defense, detecting and masking personal information (PII), including NER-based methods, and output filters.",
+    "speech": "Models that turn speech into text (STT, ASR) and models that turn text into speech (TTS): multilingual and Korean, real-time and streaming, local execution.",
+    "preference-optimization": "Training methods that align language models with human or AI preference data: RLHF, reward-model-free methods such as DPO and ORPO, their variants and training tools.",
+    "code-impact": "Techniques that read repository code to find where an external change has an impact: code search, code graphs, dependency analysis.",
+    "model-routing-cost": "Routers that send easy requests to cheaper models, caching, and token reduction.",
 }
 
 
@@ -64,6 +87,8 @@ def query_text(it, lang):
     """영어 = 「영어 topic: 별칭들. Examples: 예시들.」 (기계적 틀) · 한국어 = topic 그대로."""
     if lang == "ko":
         return it["topic"]
+    if lang == "sent":
+        return DESC_EN[it["id"]]
     s = f"{TOPIC_EN[it['id']]}: {', '.join(it.get('aliases') or [])}."
     if it.get("examples"):
         s += f" Examples: {', '.join(it['examples'])}."
@@ -74,9 +99,9 @@ def cmd_queries(a):
     prof = read_json(a.profile)
     rows = []
     for it in active_interests(prof):
-        if it["id"] not in TOPIC_EN:
-            raise SystemExit(f"TOPIC_EN에 없는 관심사: {it['id']}")
-        for lang in LANGS:
+        if it["id"] not in TOPIC_EN or it["id"] not in DESC_EN:
+            raise SystemExit(f"TOPIC_EN · DESC_EN에 없는 관심사: {it['id']}")
+        for lang in (a.langs or LANGS):
             rows.append({"qid": f"{it['id']}@{lang}", "interest": it["id"], "lang": lang, "type": "interest", "text": query_text(it, lang)})
     Path(a.out).write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8", newline="\n")
     print(f"질의 {len(rows)}개 → {a.out}")
@@ -131,10 +156,10 @@ def strategy_args(name):
                               neo4j_url=None)
 
 
-def rank_arena(name, docs, chunks, policy, queries):
+def rank_arena(name, docs, chunks, policy, queries, cv=CORPUS_VERSION):
     from arena import cli, harness
     args = strategy_args(name)
-    cfg = {"version": CORPUS_VERSION}
+    cfg = {"version": cv}
     sparse = cli.sparse_kind(args)
     splade = cli.make_splade_embedder(args, cfg, policy, sparse) if sparse else None
     embedder = cli.make_embedder(args, cfg, policy) if name in cli.BGE_STRATEGIES else None
@@ -162,10 +187,10 @@ def cmd_rank(a):
         n_docs = len(items)
     else:
         items, docs, chunks, policy = build_corpus(a.snapshot)
-        run, info = rank_arena(a.strategy, docs, chunks, policy, queries)
+        run, info = rank_arena(a.strategy, docs, chunks, policy, queries, corpus_version(a.snapshot))
         info["chunks"] = len(chunks)
         n_docs = len(docs)
-    info.update({"corpus_version": CORPUS_VERSION, "snapshot": str(a.snapshot), "docs": n_docs, "k_docs": K_DOCS,
+    info.update({"corpus_version": corpus_version(a.snapshot), "snapshot": str(a.snapshot), "docs": n_docs, "k_docs": K_DOCS,
                  "seconds": round(time.perf_counter() - t0, 1)})
     write_json(out / "run.json", run)
     write_json(out / "meta.json", info)
@@ -278,23 +303,50 @@ def check_labels(so, n):
     return got, problems
 
 
+def split_pool(pool_raw):
+    """풀 v1({관심사: [문서]}) · v2({관심사: [[주, 문서]]}) → ({관심사: [문서]}, {문서: 주})."""
+    pool, week_of = {}, {}
+    for i, xs in pool_raw.items():
+        ids = []
+        for x in xs:
+            if isinstance(x, list):
+                w, d = x
+                week_of.setdefault(d, w)
+            else:
+                d = x
+            ids.append(d)
+        pool[i] = ids
+    return pool, week_of
+
+
 def cmd_judge(a):
-    pool, prof = read_json(a.pool), read_json(a.profile)
+    pool, week_of = split_pool(read_json(a.pool))
+    prof = read_json(a.profile)
     interests = {it["id"]: it for it in active_interests(prof)}
     batches = judge_batches(pool, prof)
     print(f"판정 {sum(len(x[2]) for x in batches)}쌍 · 세션 {len(batches)} (관심사 {len(pool)}, 묶음 최대 {BATCH_MAX})")
     if a.dry_run:
         return
     from arena import corpus
-    items = {it["id"]: it for it in lane_b_items(a.snapshot)}
+    if week_of:
+        if not a.snapshots_root:
+            raise SystemExit("여러 주 풀이다 — --snapshots-root를 준다")
+        snaps = {w: Path(a.snapshots_root) / w for w in sorted(set(week_of.values()))}
+        by_week = {w: {it["id"]: it for it in lane_b_items(p)} for w, p in snaps.items()}
+        def doc_of(d):
+            w = week_of[d]
+            return corpus._item_to_doc(by_week[w][d], snaps[w]), by_week[w][d].get("source")
+    else:
+        items = {it["id"]: it for it in lane_b_items(a.snapshot)}
+        def doc_of(d):
+            return corpus._item_to_doc(items[d], Path(a.snapshot)), items[d].get("source")
     out = Path(a.out)
     (out / "raw").mkdir(parents=True, exist_ok=True)
     for interest, b, ids in batches:
         raw_path = out / "raw" / f"{interest}-{b}.json"
         if raw_path.exists():
             continue
-        listing = "\n\n".join(f"[{i}]\n" + doc_brief(corpus._item_to_doc(items[d], Path(a.snapshot)), items[d].get("source"))
-                              for i, d in enumerate(ids, 1))
+        listing = "\n\n".join(f"[{i}]\n" + doc_brief(*doc_of(d)) for i, d in enumerate(ids, 1))
         user = f"{interest_card(interests[interest])}\n\n글 {len(ids)}개:\n\n{listing}"
         for attempt in (1, 2):
             t0 = time.perf_counter()
@@ -422,11 +474,147 @@ def cmd_score(a):
     print(json.dumps({"order": order, "table": table, "diff_vs_s4": ci}, ensure_ascii=False, indent=1))
 
 
+# ---- 여러 주 (등록 문서 §9 변경) -----------------------------------------------------------------------------------
+
+def pool2(runs_by_week, labeled=None):
+    """runs_by_week = {주: {전략: run}} → {관심사: [[주, 문서], ...]} — 영어 질의 5전략 상위 30 + EXTRA_POOL 상위 30.
+    같은 관심사에서 문서가 여러 주에 나오면 처음 주 하나로(같은 글이면 판정도 같다). labeled({관심사: {문서: …}})에 있는 문서는 뺀다."""
+    labeled = labeled or {}
+    out = {}
+    for week in sorted(runs_by_week):
+        runs = runs_by_week[week]
+        picks = [(s, "en") for s in STRATEGIES] + list(EXTRA_POOL)
+        for s, lang in picks:
+            for qid, rows in (runs.get(s) or {}).items():
+                interest, _, ql = qid.rpartition("@")
+                if ql != lang:
+                    continue
+                seen = out.setdefault(interest, {})
+                for d, _ in rows[:K_DOCS]:
+                    if d not in seen and d not in labeled.get(interest, {}):
+                        seen[d] = week
+    return {i: sorted([[w, d] for d, w in v.items()], key=lambda x: (x[1], x[0])) for i, v in sorted(out.items())}
+
+
+def load_runs(root, weeks):
+    return {w: {s: read_json(Path(root) / w / s / "run.json") for s in STRATEGIES if (Path(root) / w / s / "run.json").exists()}
+            for w in weeks}
+
+
+def cmd_pool2(a):
+    pool = pool2(load_runs(a.runs_root, a.weeks), read_json(a.labeled) if a.labeled else None)
+    write_json(a.out, pool)
+    sizes = {k: len(v) for k, v in pool.items()}
+    print(f"새로 판정할 쌍 {sum(sizes.values())} · 관심사별 {sizes}")
+
+
+def cmd_merge_gold(a):
+    base, new = read_json(a.base), read_json(a.new)
+    out = {i: dict(v) for i, v in base.items()}
+    clash = 0
+    for i, docs in new.items():
+        for d, v in docs.items():
+            if d in out.get(i, {}):
+                clash += 1          # 얼린 판정은 그대로 둔다
+                continue
+            out.setdefault(i, {})[d] = v
+    write_json(a.out, out)
+    print(f"합친 정답 {sum(len(v) for v in out.values())}쌍 (새 {sum(len(v) for v in new.values()) - clash} · 겹쳐 버린 새 판정 {clash})")
+
+
+def cluster_ci(per_interest_diffs, n=10_000, seed=JUDGE_SEED):
+    """관심사 묶음 bootstrap — 관심사를 다시 뽑고 그 관심사의 주들을 함께 가져간다 (같은 관심사의 주들은 독립이 아니다)."""
+    import random
+    keys = [k for k, v in per_interest_diffs.items() if v]
+    if not keys:
+        return None
+    rng = random.Random(seed)
+    means = []
+    for _ in range(n):
+        xs = [x for k in (rng.choice(keys) for _ in keys) for x in per_interest_diffs[k]]
+        means.append(sum(xs) / len(xs))
+    means.sort()
+    return [round(means[int(0.025 * n)], 3), round(means[int(0.975 * n) - 1], 3)]
+
+
+def cmd_score2(a):
+    from pipeline import lanes
+    from pipeline.profile_filter import read_items
+    gold = {i: {d: v["grade"] for d, v in docs.items()} for i, docs in read_json(a.gold).items()}
+    runs = load_runs(a.runs_root, a.weeks)
+    week_ids = {}
+    for w in a.weeks:
+        _a, lane_b, _s = lanes.split_lanes(read_items(Path(a.snapshots_root) / w))
+        week_ids[w] = {it["id"] for it in lane_b}
+    cols = [(s, "en") for s in STRATEGIES] + [(s, "sent") for s in STRATEGIES] + [(s, "ko") for s in STRATEGIES]
+    per = {}          # (전략, 질의) -> {관심사: [recall per week]}
+    rows = {}
+    for s, lang in cols:
+        for w in a.weeks:
+            run = runs[w].get(s) or {}
+            for i, grades in gold.items():
+                g = {d: v for d, v in grades.items() if d in week_ids[w]}
+                for mg in (1, 2):
+                    m = per_query_metrics(run.get(f"{i}@{lang}") or [], g, mg)
+                    rows[(s, lang, w, i, mg)] = m
+                    if mg == 1 and m["recall"] is not None:
+                        per.setdefault((s, lang), {}).setdefault(i, []).append(m["recall"])
+    def macro(s, lang, key, mg=1, weeks=None):
+        vals = [rows[(s, lang, w, i, mg)][key] for w in (weeks or a.weeks) for i in gold
+                if rows[(s, lang, w, i, mg)][key] is not None]
+        return (round(sum(vals) / len(vals), 3) if vals else None), len(vals)
+    table = {}
+    for s, lang in cols:
+        r1, n1 = macro(s, lang, "recall")
+        r2, _ = macro(s, lang, "recall", 2)
+        nd, _ = macro(s, lang, "ndcg10")
+        jd, _ = macro(s, lang, "judged")
+        table[f"{s}@{lang}"] = {"recall30": r1, "n_queries": n1, "recall30_grade2": r2, "ndcg10": nd, "judged30": jd,
+                                "by_week": {w: macro(s, lang, "recall", 1, [w])[0] for w in a.weeks}}
+    def diff(x, y):
+        d = {}
+        for i in gold:
+            for w in a.weeks:
+                rx, ry = rows[(*x, w, i, 1)]["recall"], rows[(*y, w, i, 1)]["recall"]
+                if rx is not None and ry is not None:
+                    d.setdefault(i, []).append(rx - ry)
+        flat = [v for vs in d.values() for v in vs]
+        wins = sum(1 for v in flat if v > 0)
+        losses = sum(1 for v in flat if v < 0)
+        return {"mean": round(sum(flat) / len(flat), 3) if flat else None, "ci95_cluster": cluster_ci(d),
+                "wins": wins, "losses": losses, "ties": len(flat) - wins - losses}
+    comps = {"s6-s2": diff(("s6", "en"), ("s2", "en")), "s2-s4": diff(("s2", "en"), ("s4", "en")),
+             "s3a.ko-s2": diff(("s3a.ko", "en"), ("s2", "en")), "s2-kw": diff(("s2", "en"), ("kw", "en")),
+             "s4sent-s4": diff(("s4", "sent"), ("s4", "en")), "s4sent-s2": diff(("s4", "sent"), ("s2", "en"))}
+    order = sorted(STRATEGIES, key=lambda s: -(table[f"{s}@en"]["recall30"] or 0))
+    write_json(a.out, {"weeks": a.weeks, "table": table, "comparisons": comps, "order_recall30_en": order,
+                       "per_query": {"|".join(map(str, k)): v for k, v in rows.items()}})
+    print(json.dumps({"order": order, "comparisons": comps,
+                      "table": {k: {x: v[x] for x in ("recall30", "recall30_grade2", "ndcg10", "judged30", "by_week")} for k, v in table.items()}},
+                     ensure_ascii=False, indent=1))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("queries")
     p.add_argument("--profile", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--langs", nargs="+", choices=LANGS, help="기본: 전부")
+    p = sub.add_parser("pool2", help="여러 주 풀 (§9 변경) — 관심사마다 [주, 문서], 이미 판정한 문서는 뺀다")
+    p.add_argument("--runs-root", required=True, help="<root>/<주>/<전략>/run.json")
+    p.add_argument("--weeks", nargs="+", required=True)
+    p.add_argument("--labeled", help="이미 얼린 정답 (빼고 판정한다)")
+    p.add_argument("--out", required=True)
+    p = sub.add_parser("merge-gold", help="얼린 정답 + 새 판정 → 합친 정답 (기존 판정은 그대로)")
+    p.add_argument("--base", required=True)
+    p.add_argument("--new", required=True)
+    p.add_argument("--out", required=True)
+    p = sub.add_parser("score2", help="여러 주 채점 — (주 × 관심사) 질의 평균 · 관심사 묶음 bootstrap")
+    p.add_argument("--runs-root", required=True)
+    p.add_argument("--snapshots-root", required=True)
+    p.add_argument("--weeks", nargs="+", required=True)
+    p.add_argument("--gold", required=True)
     p.add_argument("--out", required=True)
     p = sub.add_parser("rank")
     p.add_argument("--strategy", choices=STRATEGIES, required=True)
@@ -439,7 +627,8 @@ def main(argv=None):
     p.add_argument("--out", required=True)
     p = sub.add_parser("judge", help="풀 판정 — 관심사마다 claude -p (구독, API 키 제거)")
     p.add_argument("--pool", required=True)
-    p.add_argument("--snapshot", required=True)
+    p.add_argument("--snapshot", help="한 주 풀(v1)일 때")
+    p.add_argument("--snapshots-root", help="여러 주 풀(v2)일 때 — <root>/<주>")
     p.add_argument("--profile", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--model", default="claude-sonnet-5-5")
@@ -456,7 +645,8 @@ def main(argv=None):
     p.add_argument("--gold", required=True)
     p.add_argument("--out", required=True)
     a = ap.parse_args(argv)
-    {"queries": cmd_queries, "rank": cmd_rank, "pool": cmd_pool, "judge": cmd_judge, "review": cmd_review, "score": cmd_score}[a.cmd](a)
+    {"queries": cmd_queries, "rank": cmd_rank, "pool": cmd_pool, "judge": cmd_judge, "review": cmd_review, "score": cmd_score,
+     "pool2": cmd_pool2, "merge-gold": cmd_merge_gold, "score2": cmd_score2}[a.cmd](a)
 
 
 if __name__ == "__main__":

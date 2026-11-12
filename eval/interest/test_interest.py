@@ -58,10 +58,30 @@ def test_review_set_takes_unique_relevant_and_zero_sample():
     assert ri.review_set(pool, runs, labels) == rows, "시드가 같으면 표본이 같아야 한다"
 
 
+def test_pool2_merges_weeks_adds_sentence_semantic_and_skips_labeled():
+    run = lambda *ds: {"i@en": [[d, 1] for d in ds], "i@sent": [], "i@ko": [["k", 1]]}
+    runs = {"W1": {"s2": run("a", "b"), "s4": {"i@en": [["c", 1]], "i@sent": [["s", 1]], "i@ko": [["k2", 1]]}},
+            "W2": {"s2": run("b", "d")}}
+    pool = ri.pool2(runs, labeled={"i": {"d": {"grade": 1}}})
+    assert pool == {"i": [["W1", "a"], ["W1", "b"], ["W1", "c"], ["W1", "s"]]}, pool   # b는 처음 주 · d는 이미 판정 · 한국어는 풀 밖
+    p, week_of = ri.split_pool(pool)
+    assert p == {"i": ["a", "b", "c", "s"]} and week_of["s"] == "W1"
+    assert ri.split_pool({"i": ["x"]}) == ({"i": ["x"]}, {})
+
+
+def test_cluster_ci_resamples_interests():
+    ci = ri.cluster_ci({"a": [0.1, 0.1], "b": [0.1], "c": []})
+    assert ci == [0.1, 0.1], ci
+    lo, hi = ri.cluster_ci({"a": [1.0, 1.0, 1.0], "b": [-1.0]})
+    assert lo < 0 < hi
+
+
 def test_query_text_is_mechanical():
     it = {"id": "graph-rag", "topic": "그래프 기반 검색 (GraphRAG)", "aliases": ["GraphRAG", "knowledge graph"], "examples": []}
     assert ri.query_text(it, "en") == "Graph-based retrieval (GraphRAG): GraphRAG, knowledge graph."
     assert ri.query_text(it, "ko") == "그래프 기반 검색 (GraphRAG)"
+    assert ri.query_text(it, "sent") == ri.DESC_EN["graph-rag"]
+    assert set(ri.DESC_EN) == set(ri.TOPIC_EN)
 
 
 if __name__ == "__main__":
