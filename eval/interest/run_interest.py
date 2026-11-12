@@ -189,6 +189,239 @@ def cmd_pool(a):
     print(f"풀 {sum(sizes.values())}쌍 · 관심사별 {sizes}")
 
 
+# ---- 판정 (등록 문서 §5) -------------------------------------------------------------------------------------------
+
+JUDGE_SEED = 20261112
+BODY_CHARS = 800
+BATCH_MAX = 100
+STRIP_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")      # 구독으로만 (pipeline.slots와 같다)
+JUDGE_SYSTEM = """너는 기술 소식 분류 판정자다. 관심사 하나의 정의와 이번 주 글 목록을 받는다. 글마다 그 관심사와의 관련 등급을 매긴다.
+
+등급
+- 2: 이 관심사에 속하는 **특정한 새** 도구·모델·라이브러리·기법·논문·벤치마크를 다룬다(출시, 공개, 큰 업데이트). 실험 후보가 될 수 있는 것.
+- 1: 이 관심사가 글의 주제지만 특정한 새것은 아니다(토론, 질문, 경험담, 이미 있는 것의 튜토리얼, 일반 소식).
+- 0: 이 관심사가 주제가 아니다(지나가는 언급, 정의의 `제외`에 해당, 무관).
+
+규칙
+- 글의 제목과 본문 앞부분만 보고 판단한다. 링크를 따라가지 않는다.
+- 관심사 낱말이 나와도 글의 주제가 아니면 0이다. 낱말이 안 나와도 주제가 맞으면 1이나 2다.
+- 목록의 모든 번호에 정확히 한 번씩 답한다. why는 한국어 한 줄(40자 안쪽)."""
+JUDGE_SCHEMA = {"type": "object", "required": ["labels"], "properties": {"labels": {"type": "array", "items": {
+    "type": "object", "required": ["n", "grade", "why"],
+    "properties": {"n": {"type": "integer"}, "grade": {"type": "integer", "enum": [0, 1, 2]}, "why": {"type": "string"}}}}}}
+
+
+def interest_card(it):
+    lines = [f"관심사: {it['topic']} ({it['id']})", f"설명: {it.get('description') or ''}",
+             f"별칭: {', '.join(it.get('aliases') or [])}", f"예시: {', '.join(it.get('examples') or []) or '없음'}",
+             f"제외: {', '.join(it.get('not') or []) or '없음'}"]
+    return "\n".join(lines)
+
+
+def doc_brief(doc, source):
+    body = " ".join((doc.get("text") or "").split())[:BODY_CHARS]
+    return f"제목: {doc['title']}\n출처: {source}\n본문 앞부분: {body}"
+
+
+def judge_batches(pool, profile):
+    """관심사마다 풀 문서를 시드로 섞어 BATCH_MAX개씩 나눈다 → [(interest, b, [doc_id...])]."""
+    import random
+    out = []
+    for interest, ids in pool.items():
+        ids = list(ids)
+        random.Random(f"{JUDGE_SEED}:{interest}").shuffle(ids)
+        n = -(-len(ids) // BATCH_MAX)
+        size = -(-len(ids) // n) if n else 0
+        for b in range(n):
+            out.append((interest, b, ids[b * size:(b + 1) * size]))
+    return out
+
+
+def call_claude(user, model, timeout=900):
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+    b = os.environ.get("RADAR_CLAUDE_BIN") or shutil.which("claude") or "claude"
+    cmd = [*([sys.executable, b] if b.endswith(".py") else [b]), "-p", "--output-format", "json", "--system-prompt", JUDGE_SYSTEM,
+           "--json-schema", json.dumps(JUDGE_SCHEMA, ensure_ascii=False), "--tools", "", "--setting-sources", "",
+           "--no-session-persistence", "--model", model, "--effort", "medium", "--permission-mode", "dontAsk"]
+    env = {k: v for k, v in os.environ.items() if k not in STRIP_ENV}
+    env["PYTHONIOENCODING"] = "utf-8"
+    with tempfile.TemporaryDirectory(prefix="radar-interest-") as run:
+        p = subprocess.run(cmd, input=user.encode("utf-8"), capture_output=True, cwd=run, env=env, timeout=timeout)
+    try:
+        res = json.loads(p.stdout.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise RuntimeError(f"claude 결과가 JSON이 아니다 (exit {p.returncode}) {p.stderr.decode('utf-8', 'replace')[-300:]}")
+    if res.get("is_error") or res.get("structured_output") is None:
+        raise RuntimeError(f"claude 실패: {res.get('subtype')} {str(res.get('result'))[:300]}")
+    return res["structured_output"], res
+
+
+def check_labels(so, n):
+    """번호 1..n이 정확히 한 번씩 · 등급 0~2 — 아니면 문제 목록 (규율 1: 스크립트가 검사)."""
+    got, problems = {}, []
+    for x in (so or {}).get("labels") or []:
+        k = x.get("n")
+        if not isinstance(k, int) or not 1 <= k <= n:
+            problems.append(f"모르는 번호 {k}")
+        elif k in got:
+            problems.append(f"겹친 번호 {k}")
+        elif x.get("grade") not in (0, 1, 2):
+            problems.append(f"{k}: 등급 {x.get('grade')}")
+        else:
+            got[k] = x
+    missing = [k for k in range(1, n + 1) if k not in got]
+    if missing:
+        problems.append(f"빠진 번호 {missing[:10]}")
+    return got, problems
+
+
+def cmd_judge(a):
+    pool, prof = read_json(a.pool), read_json(a.profile)
+    interests = {it["id"]: it for it in active_interests(prof)}
+    batches = judge_batches(pool, prof)
+    print(f"판정 {sum(len(x[2]) for x in batches)}쌍 · 세션 {len(batches)} (관심사 {len(pool)}, 묶음 최대 {BATCH_MAX})")
+    if a.dry_run:
+        return
+    from arena import corpus
+    items = {it["id"]: it for it in lane_b_items(a.snapshot)}
+    out = Path(a.out)
+    (out / "raw").mkdir(parents=True, exist_ok=True)
+    for interest, b, ids in batches:
+        raw_path = out / "raw" / f"{interest}-{b}.json"
+        if raw_path.exists():
+            continue
+        listing = "\n\n".join(f"[{i}]\n" + doc_brief(corpus._item_to_doc(items[d], Path(a.snapshot)), items[d].get("source"))
+                              for i, d in enumerate(ids, 1))
+        user = f"{interest_card(interests[interest])}\n\n글 {len(ids)}개:\n\n{listing}"
+        for attempt in (1, 2):
+            t0 = time.perf_counter()
+            so, res = call_claude(user, a.model)
+            got, problems = check_labels(so, len(ids))
+            if not problems:
+                break
+            print(f"  {interest}-{b} 시도 {attempt} 문제: {problems[:3]}")
+        if problems:
+            raise SystemExit(f"{interest}-{b}: 두 번 다 답이 어긋났다 — {problems[:5]}")
+        labels = {ids[k - 1]: {"grade": x["grade"], "why": x["why"]} for k, x in sorted(got.items())}
+        write_json(raw_path, {"interest": interest, "batch": b, "ids": ids, "labels": labels, "model": a.model,
+                              "seconds": round(time.perf_counter() - t0, 1), "usage": res.get("usage"),
+                              "cost_usd_equiv": res.get("total_cost_usd")})
+        print(f"  {interest}-{b}: {len(ids)}건 · 2={sum(1 for v in labels.values() if v['grade'] == 2)} "
+              f"1={sum(1 for v in labels.values() if v['grade'] == 1)} · {round(time.perf_counter() - t0)}초")
+    merged = {}
+    for p in sorted((out / "raw").glob("*.json")):
+        r = read_json(p)
+        merged.setdefault(r["interest"], {}).update(r["labels"])
+    write_json(out / "labels.json", merged)
+    print(f"판정 합본 → {out / 'labels.json'}")
+
+
+ZERO_SAMPLE = 30
+
+
+def review_set(pool, runs, labels):
+    """사람 확인 대상 (등록 문서 §5) — 한 전략만 상위 30(영어)에 올린 문서 중 판정 ≥ 1 전부 + 판정 0 무작위 ZERO_SAMPLE쌍(시드).
+    → [{"interest", "doc_id", "kind", "by"}] (관심사 → 문서 id 순)"""
+    import random
+    found = {}
+    for s, run in runs.items():
+        for interest in pool:
+            for d, _ in (run.get(f"{interest}@en") or [])[:K_DOCS]:
+                found.setdefault((interest, d), set()).add(s)
+    out, zeros = [], []
+    for interest, docs in sorted(labels.items()):
+        for d, v in sorted(docs.items()):
+            by = sorted(found.get((interest, d), ()))
+            if v["grade"] >= 1 and len(by) == 1:
+                out.append({"interest": interest, "doc_id": d, "kind": "unique", "by": by})
+            elif v["grade"] == 0:
+                zeros.append({"interest": interest, "doc_id": d, "kind": "zero-sample", "by": by})
+    out += sorted(random.Random(JUDGE_SEED).sample(zeros, min(ZERO_SAMPLE, len(zeros))), key=lambda x: (x["interest"], x["doc_id"]))
+    return out
+
+
+def cmd_review(a):
+    pool, labels = read_json(a.pool), read_json(a.labels)
+    runs = {s: read_json(Path(a.runs) / s / "run.json") for s in STRATEGIES}
+    rows = review_set(pool, runs, labels)
+    from arena import corpus
+    items = {it["id"]: it for it in lane_b_items(a.snapshot)}
+    topics = {it["id"]: it["topic"] for it in active_interests(read_json(a.profile))}
+    for n, r in enumerate(rows, 1):
+        it = items[r["doc_id"]]
+        doc = corpus._item_to_doc(it, Path(a.snapshot))
+        lab = labels[r["interest"]][r["doc_id"]]
+        r.update({"n": n, "topic": topics[r["interest"]], "title": doc["title"], "url": it.get("url"), "source": it.get("source"),
+                  "grade": lab["grade"], "why": lab["why"], "snippet": " ".join((doc.get("text") or "").split())[:BODY_CHARS]})
+        r.pop("by")             # 사람에게 전략을 가린다 (어느 전략이 찾았는지는 runs에서 다시 셀 수 있다)
+    write_json(Path(a.out), rows)
+    kinds = {}
+    for r in rows:
+        kinds[r["kind"]] = kinds.get(r["kind"], 0) + 1
+    print(f"확인 대상 {len(rows)}건 {kinds} → {a.out}")
+
+
+# ---- 채점 (등록 문서 §6) -------------------------------------------------------------------------------------------
+
+def per_query_metrics(run_rows, grades, min_grade=1):
+    """한 관심사 · 한 전략 → recall@30(등급 ≥ min_grade) · nDCG@10(등급 그대로, 선형 이득) · judged@30. 정답이 없으면 recall None."""
+    import math
+    top = [d for d, _ in run_rows[:K_DOCS]]
+    rel = {d for d, g in grades.items() if g >= min_grade}
+    recall = (len(rel & set(top)) / len(rel)) if rel else None
+    dcg = sum(grades.get(d, 0) / math.log2(i + 2) for i, d in enumerate(top[:10]))
+    ideal = sorted(grades.values(), reverse=True)[:10]
+    idcg = sum(g / math.log2(i + 2) for i, g in enumerate(ideal))
+    judged = (sum(1 for d in top if d in grades) / len(top)) if top else None
+    return {"recall": recall, "ndcg10": (dcg / idcg) if idcg else None, "judged": judged, "returned": len(top)}
+
+
+def bootstrap_ci(diffs, n=10_000, seed=JUDGE_SEED):
+    import random
+    if not diffs:
+        return None
+    rng = random.Random(seed)
+    means = sorted(sum(rng.choice(diffs) for _ in diffs) / len(diffs) for _ in range(n))
+    return [round(means[int(0.025 * n)], 3), round(means[int(0.975 * n) - 1], 3)]
+
+
+def cmd_score(a):
+    gold = {i: {d: v["grade"] for d, v in docs.items()} for i, docs in read_json(a.gold).items()}
+    rows, table = {}, {}
+    for s in STRATEGIES:
+        run = read_json(Path(a.runs) / s / "run.json")
+        for lang in LANGS:
+            for interest, grades in gold.items():
+                for mg in (1, 2):
+                    rows[(s, lang, interest, mg)] = per_query_metrics(run.get(f"{interest}@{lang}") or [], grades, mg)
+    def macro(s, lang, key, mg=1):
+        vals = [rows[(s, lang, i, mg)][key] for i in gold if rows[(s, lang, i, mg)][key] is not None]
+        return (round(sum(vals) / len(vals), 3) if vals else None), len(vals)
+    for s in STRATEGIES:
+        for lang in LANGS:
+            r1, n1 = macro(s, lang, "recall")
+            r2, n2 = macro(s, lang, "recall", 2)
+            nd, _ = macro(s, lang, "ndcg10")
+            jd, _ = macro(s, lang, "judged")
+            table[f"{s}@{lang}"] = {"recall30": r1, "n_interests": n1, "recall30_grade2": r2, "n_interests_grade2": n2,
+                                    "ndcg10": nd, "judged30": jd}
+    ref = "s4"
+    ci = {}
+    for s in STRATEGIES:
+        if s == ref:
+            continue
+        d = [rows[(s, "en", i, 1)]["recall"] - rows[(ref, "en", i, 1)]["recall"] for i in gold if rows[(ref, "en", i, 1)]["recall"] is not None]
+        ci[f"{s}-{ref}"] = {"mean": round(sum(d) / len(d), 3) if d else None, "ci95": bootstrap_ci(d)}
+    order = sorted(STRATEGIES, key=lambda s: -(table[f"{s}@en"]["recall30"] or 0))
+    out = {"table": table, "diff_vs_s4_recall30_en": ci, "order_recall30_en": order,
+           "per_interest": {f"{s}@{lang}@{i}@{mg}": v for (s, lang, i, mg), v in rows.items()}}
+    write_json(a.out, out)
+    print(json.dumps({"order": order, "table": table, "diff_vs_s4": ci}, ensure_ascii=False, indent=1))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -204,8 +437,26 @@ def main(argv=None):
     p = sub.add_parser("pool")
     p.add_argument("--runs", required=True)
     p.add_argument("--out", required=True)
+    p = sub.add_parser("judge", help="풀 판정 — 관심사마다 claude -p (구독, API 키 제거)")
+    p.add_argument("--pool", required=True)
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--profile", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--model", default="claude-sonnet-5-5")
+    p.add_argument("--dry-run", action="store_true", help="세션 수만 센다")
+    p = sub.add_parser("review", help="사람 확인 대상 — 한 전략만 찾은 정답 전부 + 0 무작위 30 (전략은 가린다)")
+    p.add_argument("--pool", required=True)
+    p.add_argument("--runs", required=True)
+    p.add_argument("--labels", required=True)
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--profile", required=True)
+    p.add_argument("--out", required=True)
+    p = sub.add_parser("score", help="얼린 정답으로 채점 — recall@30 · nDCG@10 · judged@30 · s4 대비 차이 CI")
+    p.add_argument("--runs", required=True)
+    p.add_argument("--gold", required=True)
+    p.add_argument("--out", required=True)
     a = ap.parse_args(argv)
-    {"queries": cmd_queries, "rank": cmd_rank, "pool": cmd_pool}[a.cmd](a)
+    {"queries": cmd_queries, "rank": cmd_rank, "pool": cmd_pool, "judge": cmd_judge, "review": cmd_review, "score": cmd_score}[a.cmd](a)
 
 
 if __name__ == "__main__":
