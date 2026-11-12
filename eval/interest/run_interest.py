@@ -541,6 +541,38 @@ def cmd_merge_gold(a):
     print(f"합친 정답 {sum(len(v) for v in out.values())}쌍 (새 {sum(len(v) for v in new.values()) - clash} · 겹쳐 버린 새 판정 {clash})")
 
 
+REVIEW_POS, REVIEW_NEG = 20, 10
+
+
+def review_sample(labels):
+    """§9 사람 확인 — 새 판정 중 1 이상 REVIEW_POS + 0 REVIEW_NEG를 시드로 뽑는다 → [(관심사, 문서)] (관심사 → 문서 순)."""
+    import random
+    pos = sorted((i, d) for i, ds in labels.items() for d, v in ds.items() if v["grade"] >= 1)
+    neg = sorted((i, d) for i, ds in labels.items() for d, v in ds.items() if v["grade"] == 0)
+    rng = random.Random(JUDGE_SEED)
+    return sorted(rng.sample(pos, min(REVIEW_POS, len(pos))) + rng.sample(neg, min(REVIEW_NEG, len(neg))))
+
+
+def cmd_review2(a):
+    from arena import corpus
+    labels = read_json(a.labels)
+    _pool, week_of = split_pool(read_json(a.pool))
+    topics = {it["id"]: it["topic"] for it in active_interests(read_json(a.profile))}
+    cache, rows = {}, []
+    for n, (i, d) in enumerate(review_sample(labels), 1):
+        w = week_of[d]
+        if w not in cache:
+            cache[w] = {it["id"]: it for it in lane_b_items(Path(a.snapshots_root) / w)}
+        it = cache[w][d]
+        doc = corpus._item_to_doc(it, Path(a.snapshots_root) / w)
+        lab = labels[i][d]
+        rows.append({"n": n, "interest": i, "topic": topics[i], "doc_id": d, "week": w, "title": doc["title"], "url": it.get("url"),
+                     "source": it.get("source"), "grade": lab["grade"], "why": lab["why"],
+                     "snippet": " ".join((doc.get("text") or "").split())[:BODY_CHARS]})
+    write_json(a.out, rows)
+    print(f"확인 표본 {len(rows)}건 → {a.out}")
+
+
 def cluster_ci(per_interest_diffs, n=10_000, seed=JUDGE_SEED):
     """관심사 묶음 bootstrap — 관심사를 다시 뽑고 그 관심사의 주들을 함께 가져간다 (같은 관심사의 주들은 독립이 아니다)."""
     import random
@@ -629,6 +661,12 @@ def main(argv=None):
     p.add_argument("--base", required=True)
     p.add_argument("--new", required=True)
     p.add_argument("--out", required=True)
+    p = sub.add_parser("review2", help="§9 사람 확인 표본 — 새 판정 중 1 이상 20 + 0 10")
+    p.add_argument("--labels", required=True)
+    p.add_argument("--pool", required=True)
+    p.add_argument("--snapshots-root", required=True)
+    p.add_argument("--profile", required=True)
+    p.add_argument("--out", required=True)
     p = sub.add_parser("score2", help="여러 주 채점 — (주 × 관심사) 질의 평균 · 관심사 묶음 bootstrap")
     p.add_argument("--runs-root", required=True)
     p.add_argument("--snapshots-root", required=True)
@@ -665,7 +703,7 @@ def main(argv=None):
     p.add_argument("--out", required=True)
     a = ap.parse_args(argv)
     {"queries": cmd_queries, "rank": cmd_rank, "pool": cmd_pool, "judge": cmd_judge, "review": cmd_review, "score": cmd_score,
-     "pool2": cmd_pool2, "merge-gold": cmd_merge_gold, "score2": cmd_score2}[a.cmd](a)
+     "pool2": cmd_pool2, "merge-gold": cmd_merge_gold, "score2": cmd_score2, "review2": cmd_review2}[a.cmd](a)
 
 
 if __name__ == "__main__":

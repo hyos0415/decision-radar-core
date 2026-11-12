@@ -69,6 +69,14 @@ def test_pool2_merges_weeks_adds_sentence_semantic_and_skips_labeled():
     assert ri.split_pool({"i": ["x"]}) == ({"i": ["x"]}, {})
 
 
+def test_review_sample_is_20_positive_10_zero_and_stable():
+    labels = {"i": {f"p{n}": {"grade": 1 + n % 2} for n in range(50)}, "j": {f"z{n}": {"grade": 0} for n in range(50)}}
+    s = ri.review_sample(labels)
+    assert len(s) == 30 and len(set(s)) == 30
+    assert sum(1 for i, _ in s if i == "i") == ri.REVIEW_POS and sum(1 for i, _ in s if i == "j") == ri.REVIEW_NEG
+    assert ri.review_sample(labels) == s
+
+
 def test_cluster_ci_resamples_interests():
     ci = ri.cluster_ci({"a": [0.1, 0.1], "b": [0.1], "c": []})
     assert ci == [0.1, 0.1], ci
