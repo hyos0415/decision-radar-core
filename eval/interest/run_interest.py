@@ -122,8 +122,26 @@ def build_corpus(snapshot):
     docs = [corpus._item_to_doc(it, Path(snapshot)) for it in items]
     policy_path = ROOT / "arena" / "corpus" / "chunk-policy@v1.json"
     policy = chunking.load_policy(policy_path)
-    chunks = chunking.Chunker(policy, HFTokenCounter(policy["tokenizers"])).chunk_all(docs)
+    chunker = chunking.Chunker(policy, HFTokenCounter(policy["tokenizers"]))
+    try:
+        chunks = chunker.chunk_all(docs)
+    except ValueError:
+        # 청크 정책이 거부하는 문서(헤딩이 상한을 거의 다 쓰는 글 — W43 1건)는 모든 전략에서 뺀다 (§9 변경). kw도 같은 문서를 뺀다
+        keep, chunks = [], []
+        for d in docs:
+            try:
+                cs = chunker.chunk_all([d])
+            except ValueError:
+                DROPPED.add(d["doc_id"])
+                continue
+            keep.append(d)
+            chunks += cs
+        docs = keep
+        items = [it for it in items if it["id"] not in DROPPED]
     return items, docs, chunks, policy
+
+
+DROPPED = set()      # build_corpus가 뺀 문서 id (meta.json에 적는다)
 
 
 def rank_kw(items, profile, queries):
@@ -182,7 +200,7 @@ def cmd_rank(a):
         raise SystemExit(f"이미 있다 — 덮어쓰지 않는다: {out / 'run.json'}")
     t0 = time.perf_counter()
     if a.strategy == "kw":
-        items = lane_b_items(a.snapshot)
+        items = build_corpus(a.snapshot)[0]          # 청크 정책이 거부한 문서를 다른 전략과 똑같이 뺀다
         run, info = rank_kw(items, read_json(a.profile), queries), {"strategy": {"id": "kw", "fields": "kw+aliases", "per_interest": True}}
         n_docs = len(items)
     else:
@@ -191,6 +209,7 @@ def cmd_rank(a):
         info["chunks"] = len(chunks)
         n_docs = len(docs)
     info.update({"corpus_version": corpus_version(a.snapshot), "snapshot": str(a.snapshot), "docs": n_docs, "k_docs": K_DOCS,
+                 "dropped_by_chunk_policy": sorted(DROPPED),
                  "seconds": round(time.perf_counter() - t0, 1)})
     write_json(out / "run.json", run)
     write_json(out / "meta.json", info)
