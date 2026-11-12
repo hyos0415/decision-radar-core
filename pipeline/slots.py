@@ -32,6 +32,10 @@ FIT_MIN = 2              # 자리 적합도 문턱 (0~3) — top-k는 늘 채우
 HN_MIN_POINTS = 100
 REDDIT_TOP_RANK = 30     # LocalLLaMA 주간 상위 몇 위까지 (New Model flair는 순위 없이 전부)
 HF_TOP_RANK = 30
+# 넓은 후보 (2026-11-12 사용자 「건 수 늘어도 돼, 놓치지만 않으면」) — W41 판정 모델 소식 42건 중 후보에 든 것이 11건이었다:
+# HF 작업별 순위(분류 · 토큰 분류 · 임베딩 …) 상위 · LocalLLaMA 상위인데 출시 낱말이 없는 글 · LocalLLaMA News 꼬리표가 빠졌다
+WIDE_CANDIDATES = True
+HF_TASK_TOP_RANK = 10
 TEXT_CHARS = 300
 STRIP_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")   # 남아 있으면 claude가 API 키로 과금한다 — 구독으로만 (engines.ClaudeCliRunner와 같다)
 
@@ -63,7 +67,8 @@ SYSTEM_V2 = """너는 기술 스택 관리자의 조수다. 이번 주 수집한
 - now_via는 지금 그 역할을 맡은 것을 부르는 방식(구독 CLI · 특정 회사 API · 특정 런타임)일 뿐 조건이 아니다. 후보가 다른 회사 · 다른 구독 · 다른 런타임이어도 fit을 깎지 않는다. 대신 switch에 바꾸려면 필요한 것(새 결제 · 새 API 키 · 다른 런타임 등)을 한 문장으로 적는다. 지금 방식 그대로 쓸 수 있으면 switch는 빈 문자열
 - kinds에 적힌 종류면 생성형 LLM이 아니어도 후보다(판정 모델 · 분류기 · 임베딩 모델 · 리랭커 등)
 후보마다:
-- release: 새 모델(가중치 공개 포함)이나 모델 서비스(새 모델 제공 · 새 지역 제공 · 새 API 등)의 출시·공개 소식이면 true. 사용 후기 · 벤치 글 · 도구 · 논문 · 파인튜닝 변형은 false
+- release: 새 모델(가중치 공개 포함)이나 모델 서비스(새 모델 제공 · 새 지역 제공 · 새 API 등)의 출시·공개 소식이면 true. 파인튜닝 · 증류 모델도 가중치나 서비스를 새로 내놓은 것이면 true다(쓸 만한지는 fit이 가른다). 사용 후기 · 벤치 글 · 도구 · 논문은 false
+- model: release가 true면 그 모델·서비스의 짧은 이름(예: Clef, Gemini 4 Argon, GLiNER2.5-Decide). 같은 모델을 다룬 여러 소식(HF 페이지 · HN 글 · Reddit 글)은 같은 이름으로 적는다
 - matches: release가 true일 때만, 맞는 역할마다 {slot, fit, reason, switch}. fit은
   3 = must를 다 지키고 그 역할을 지금 것보다 더 싸게 또는 더 잘 할 것이 글에 분명하다
   2 = must를 다 지키고 그 역할에서 지금 것과 비교 실험해 볼 만하다
@@ -78,7 +83,7 @@ SCHEMA = {
     "type": "object",
     "properties": {"judgments": {"type": "array", "items": {
         "type": "object",
-        "properties": {"id": {"type": "string"}, "release": {"type": "boolean"},
+        "properties": {"id": {"type": "string"}, "release": {"type": "boolean"}, "model": {"type": "string"},   # model은 v2만 (같은 모델 묶기)
                        "matches": {"type": "array", "items": {"type": "object", "properties": {
                            "slot": {"type": "string"}, "fit": {"type": "integer", "minimum": 0, "maximum": 3}, "reason": {"type": "string"},
                            "switch": {"type": "string"}},     # v2만 쓴다 (바꾸려면 필요한 것) — 필수가 아니라 v1 답도 그대로 통과
@@ -130,8 +135,10 @@ def why_candidate(it):
         if any("flair:New Model" in c for c in chans):
             return "reddit:new-model"
         r = _rank(it, "rank:r/LocalLLaMA:top-week")
-        if r is not None and r <= REDDIT_TOP_RANK and RELEASE.search(title):
+        if r is not None and r <= REDDIT_TOP_RANK and (WIDE_CANDIDATES or RELEASE.search(title)):
             return f"reddit:top-week:{r}"
+        if WIDE_CANDIDATES and any("r/LocalLLaMA:flair:News" in c for c in chans):    # 출시 낱말 없는 소식 (W41 「llama, server: add /v1/systemone API」)
+            return "reddit:news"
         return None
     if src == "skill" and not meta.get("dependency"):  # 합집합 스킬 줄(HYO-167) — 스택에 닿는다고 본 새 모델 · 서비스 (의존성 릴리스는 관문으로)
         return "skill-line"
@@ -139,6 +146,11 @@ def why_candidate(it):
         r = _rank(it, "rank:trending")
         if r is not None and r <= HF_TOP_RANK:
             return f"hf-trending:{r}"
+        if WIDE_CANDIDATES:      # 작업별 순위 — 판정 · 임베딩 모델은 전체 급상승이 아니라 분류 · 임베딩 순위 위에 있다 (W41 GLiNER2.5-Decide 토큰 분류 1위)
+            best = min(((v, k.split(":", 2)[2]) for k, v in (it.get("signals") or {}).items()
+                        if k.startswith("rank:task:") and isinstance(v, (int, float))), default=None)
+            if best and best[0] <= HF_TASK_TOP_RANK:
+                return f"hf-task:{best[1]}:{best[0]}"
     return None
 
 
@@ -236,12 +248,29 @@ def validate(so, cands, slots):
                 dropped["bad_fit"] += 1
             else:
                 ms.append({"slot": m["slot"], "fit": m["fit"], "reason": str(m.get("reason") or ""), "switch": str(m.get("switch") or "")})
-        got[j["id"]] = {"release": bool(j.get("release")), "matches": ms if j.get("release") else []}
+        got[j["id"]] = {"release": bool(j.get("release")), "matches": ms if j.get("release") else [],
+                        "model": str(j.get("model") or "").strip()}
     return got, dropped
 
 
+def fold_same_model(xs):
+    """같은 모델(모델 답의 model 이름 — 대소문자 · 띄어쓰기 무시)은 한 줄로. 정렬 순서의 첫 것이 대표, 나머지 id는 also에 (v2)."""
+    out, by = [], {}
+    for x in xs:
+        key = re.sub(r"\s+", " ", x.get("model") or "").strip().lower()
+        if key and key in by:
+            by[key].setdefault("also", []).append(x["id"])
+            continue
+        if key:
+            by[key] = x
+        out.append(x)
+    return out
+
+
 def rank(cands, judged, slots, k=None, fit_min=None):
-    k = TOPK if k is None else k
+    v2 = is_v2(slots)
+    if k is None:
+        k = None if v2 else TOPK     # v2: 상한 없음 — 문턱 넘은 것은 다 보인다 (사용자 11/12 「건 수 늘어도 돼, 놓치지만 않으면」)
     fit_min = FIT_MIN if fit_min is None else fit_min
     by_id = {c["id"]: c for c in cands}
     per = {s["id"]: [] for s in slots["slots"]}
@@ -250,9 +279,13 @@ def rank(cands, judged, slots, k=None, fit_min=None):
             if m["fit"] >= fit_min:
                 c = by_id[cid]
                 per[m["slot"]].append({"id": cid, "title": c["title"], "url": c["url"], "source": c["source"], "why": c["why"],
-                                       "fit": m["fit"], "reason": m["reason"], "switch": m.get("switch", ""), "popularity": c["popularity"]})
+                                       "fit": m["fit"], "reason": m["reason"], "switch": m.get("switch", ""), "popularity": c["popularity"],
+                                       "model": j.get("model", "")})
     for s in per:
-        per[s] = sorted(per[s], key=lambda x: (-x["fit"], x["source"] != "vendor", x["popularity"], x["id"]))[:k]
+        xs = sorted(per[s], key=lambda x: (-x["fit"], x["source"] != "vendor", x["popularity"], x["id"]))
+        if v2:
+            xs = fold_same_model(xs)
+        per[s] = xs if k is None else xs[:k]
         for i, x in enumerate(per[s], 1):
             x["rank"] = i
     return per
@@ -279,7 +312,7 @@ def run(items, slots, engine="claude", out=None, reuse=False):
     to_detect = []      # 자리마다 top-k 전부 (detect_feed.slot_picks와 같은 규칙 — query-topk.md §2 변경 2026-11-04)
     for s in slots["slots"]:
         to_detect += [x["id"] for x in per[s["id"]] if x["id"] not in to_detect]
-    return {"slots_version": slots.get("version"), "engine": engine, "k": TOPK, "fit_min": FIT_MIN,
+    return {"slots_version": slots.get("version"), "engine": engine, "k": None if is_v2(slots) else TOPK, "fit_min": FIT_MIN,
             "candidates": len(cands), "judged": len(judged), "releases": sum(1 for j in judged.values() if j["release"]),
             "unjudged": sorted({c["id"] for c in cands} - set(judged)), "dropped": dropped,
             "slot_names": {s["id"]: s.get("name") for s in slots["slots"]},

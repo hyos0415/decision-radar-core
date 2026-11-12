@@ -111,6 +111,23 @@ def test_v2_roles_must_vs_now_via_and_switch_note():
     per = slots.rank(cands, got, SLOTS_V2)
     assert per["gate-classifier"][0]["switch"] == "OpenAI API 그대로" and per["retrieval-dense"][0]["switch"] == ""   # 안 쓰면 빈 칸
     assert dropped == {"unknown_id": 0, "unknown_slot": 0, "bad_fit": 0}
+    # 상한 없음 + 같은 모델 묶기: Terra 세 소식(같은 model) → 한 줄, 다른 모델은 상위 3 밖이어도 보인다
+    many = {"judgments": [{"id": i, "release": True, "model": "GPT-6.1 Terra" if i in (TERRA_CL, "hn:1", "vendor:aws-bedrock:t") else f"m-{i}",
+                           "matches": [{"slot": "gate-classifier", "fit": 2, "reason": "r"}]} for i in [c["id"] for c in cands]]}
+    got, _ = slots.validate(many, cands, SLOTS_V2)
+    gc = slots.rank(cands, got, SLOTS_V2)["gate-classifier"]
+    assert len(gc) == len(cands) - 2, gc                                               # 5 후보 → Terra 3개가 1줄로, 나머지 2 = 3줄 (v1이면 상위 3에서 잘렸다)
+    terra = [x for x in gc if x["model"] == "GPT-6.1 Terra"]
+    assert len(terra) == 1 and terra[0]["id"] == TERRA_CL and sorted(terra[0]["also"]) == sorted(["hn:1", "vendor:aws-bedrock:t"]), terra
+    # 넓은 후보: HF 작업별 순위 상위 · LocalLLaMA 출시 낱말 없는 상위 글 · News 꼬리표
+    extra = [_it("hf-model:org/Decide-1B", "huggingface", "org/Decide-1B", "https://huggingface.co/org/Decide-1B",
+                 signals={"rank:trending": 70, "rank:task:token-classification": 1}),
+             _it("reddit:ll", "reddit", "New in llama.cpp: Decision Models", "https://www.reddit.com/r/LocalLLaMA/comments/z",
+                 channels=["r/LocalLLaMA:top-week"], signals={"rank:r/LocalLLaMA:top-week": 17}),
+             _it("reddit:news", "reddit", "llama, server: add /v1/systemone API", "https://www.reddit.com/r/LocalLLaMA/comments/w",
+                 channels=["r/LocalLLaMA:flair:News"], signals={"rank:r/LocalLLaMA:flair:News": 14})]
+    wide = {c["id"]: c["why"] for c in slots.collect(extra)}
+    assert wide == {"hf-model:org/Decide-1B": "hf-task:token-classification:1", "reddit:ll": "reddit:top-week:17", "reddit:news": "reddit:news"}, wide
 
 
 def test_rank_threshold_order_topk():
@@ -192,7 +209,7 @@ TESTS = [(n, f) for n, f in globals().items() if n.startswith("test_")]
 
 
 def mutations():
-    orig_validate, orig_picks, orig_system_for = slots.validate, detect_feed.slot_picks, slots.system_for
+    orig_validate, orig_picks, orig_system_for, orig_fold = slots.validate, detect_feed.slot_picks, slots.system_for, slots.fold_same_model
 
     def trust(so, cands, sl):     # 모델 답을 검사 없이
         return {j["id"]: {"release": j["release"], "matches": j["matches"]} for j in so["judgments"]}, {"unknown_id": 0, "unknown_slot": 0, "bad_fit": 0}
@@ -208,6 +225,9 @@ def mutations():
         ("HN 점수 문턱 없음", lambda: setattr(slots, "HN_MIN_POINTS", 0), lambda: setattr(slots, "HN_MIN_POINTS", 100)),
         ("v2 프로필인데 v1 지시문 (지금 방식이 아니면 깎는다)", lambda: setattr(slots, "system_for", lambda s: slots.SYSTEM),
          lambda: setattr(slots, "system_for", orig_system_for)),
+        ("넓은 후보 끔 (HF 작업별 순위 · LocalLLaMA 출시 낱말 없는 글)", lambda: setattr(slots, "WIDE_CANDIDATES", False),
+         lambda: setattr(slots, "WIDE_CANDIDATES", True)),
+        ("같은 모델을 묶지 않음", lambda: setattr(slots, "fold_same_model", lambda xs: xs), lambda: setattr(slots, "fold_same_model", orig_fold)),
     ]
 
 
