@@ -301,3 +301,7 @@ tier-screen v2(`eval/tier-screen/results-v2.md`)에서 Elasticsearch·Neo4j 서�
 **변경 (2026-11-12 오후, 사용자 — Sol 기준점, 결과 0건, HYO-169)**: ⑨ Opus도 C1로 불통과(`results-hyo169.md` §5). 세 모델의 놓침이 같은 세 소식에 몰리고, 운영 Sol은 이 test에서 잰 적이 없어 지금 바(C1 실행 8번 모두 0건)를 넘는 모델이 있는지 모른다. 사용자: 「Sol도 test로 먼저 — API로 하면 공정하지 않다, codex exec로」. 다음을 등록한다
 - **⑩ Sol 기준점**: 구독 `codex exec`(`codex-cli/gpt-6-sol`, `pipeline/importance/codex_backend.py`). ChatGPT 구독의 codex는 운영 모델 `gpt-6.1-sol`을 받지 않아(`model_not_found`, 11/12 확인) **한 판 앞 `gpt-6-sol`**이다. effort `medium` · 0판 문구 그대로 · 묶음 10 · 시드 0 · test v2 · 고정 등급 · 네 기준 · **46세션**. Claude CLI와 다른 것은 codex 자체 기본 지시(약 1.4만 토큰)가 붙고, 분류 지시가 시스템 프롬프트가 아니라 사용자 메시지 앞에 붙는 것뿐이다
 - 이 결과는 후보 판정이 아니라 **「이 바를 넘을 만한가」의 기준점**이다. Sol이 통과하든 아니든 ⑦ ⑧ ⑨의 판정은 그대로 둔다. 바를 바꿀지(정답 의심 · 정의를 코드로 옮기기)는 이 결과를 본 뒤 「변경」으로 따로 정한다
+
+**변경 (2026-11-12 저녁, 사용자 — ⑪ Jev 등록, 결과 0건, HYO-169)**: ⑩ Sol도 C1로 불통과 — 이 test에서 C1을 넘은 모델이 없다(`results-hyo169.md` §5 · §6). 사용자: 「Jev 키가 있다 — 이것도 분류니까 해 보자」. 다음을 등록한다
+- **⑪ Jev 1.13.0**: TypeSafe API(`jev-1.13.0` 고정), 2026-10-06 등록 형식 그대로 — 종류마다 예/아니오 질문(`prompts.jev_change_questions`, 운영 문구와 같은 정의 표 `CHANGE_MEANING`) · **문턱 p ≥ 0.5 고정**. 묶음 없음(소식 하나 = 요청 하나 — 이 API에는 묶음이 없다). 같은 test v2 · 고정 등급 · 네 기준(C1 실행 8번 · C2 · C3 · R). **439회**, 입력 토큰당 $0.042/Mtok · 출력 무료(W41 513회가 $0.042였다)
+- Claude CLI · Sol(codex)과 문구 모양이 다르다(묶음 지시 · 한 번에 종류 고르기 대신 종류마다 확률). 판정은 같은 기준으로 하되, 편향 비교(`cross_model_diag.py`)에서는 이 차이를 함께 적는다
