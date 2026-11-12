@@ -344,7 +344,7 @@ def main(argv=None):
             s.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(prog="pipeline.importance evaluate")
     ap.add_argument("--gold", required=True, help="정답지 JSON (형식: 이 파일 머리말)")
-    ap.add_argument("--model", required=True, help="stub | gpt-6-luna | gpt-6.1-sol | jev-1.13.0 | claude-sonnet-5-5 | claude-cli/claude-sonnet-5-5 (고정 ID — alias 거부)")
+    ap.add_argument("--model", required=True, help="stub | gpt-6-luna | gpt-6.1-sol | jev-1.13.0 | claude-sonnet-5-5 | claude-cli/claude-sonnet-5-5 | codex-cli/gpt-6-sol (고정 ID — alias 거부)")
     ap.add_argument("--k", type=int, default=3)
     ap.add_argument("--real-api", action="store_true", help="실제 API 호출(과금)을 허용한다. 없으면 stub 외에는 거부")
     ap.add_argument("--plan", action="store_true", help="호출 수만 세고 끝 (API·키 접근 없음)")
@@ -357,8 +357,8 @@ def main(argv=None):
     ap.add_argument("--batch", type=int, help="구독 CLI 묶음 크기 (소식 N개 = 세션 하나, HYO-169 등록: 10)")
     ap.add_argument("--seed", type=int, default=0, help="묶음 순서 시드의 시작값 — 실행마다 +1")
     a = ap.parse_args(argv)
-    if a.batch and not a.model.startswith("claude-cli/"):
-        print(f"거부: --batch는 구독 CLI 백엔드(claude-cli/…)에만 있다 ({a.model})", file=sys.stderr)
+    if a.batch and not a.model.startswith(("claude-cli/", "codex-cli/")):
+        print(f"거부: --batch는 구독 CLI 백엔드(claude-cli/… · codex-cli/…)에만 있다 ({a.model})", file=sys.stderr)
         return 2
     if a.model != "stub" and not a.real_api and not a.plan:
         print(f"거부: {a.model}은 실제 API를 부른다. 호출 수는 --plan, 실행은 --real-api로 명시한다", file=sys.stderr)

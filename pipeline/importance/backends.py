@@ -174,6 +174,11 @@ def make_backend(model, *, allow_real=False, **kw):
             raise PermissionError(f"{model}: 실제 API 실행은 --real-api 없이는 거부한다")    # 키 파일도 읽기 전에 거부
         from .jev_backend import JevBackend
         return JevBackend(model, **{k: v for k, v in kw.items() if k in ("key", "log", "base_url", "opener", "guard", "timeout")})
+    if model.startswith("codex-cli/"):       # 구독 `codex exec` (HYO-169 — Sol을 Claude CLI 후보와 같은 조건으로)
+        if not allow_real:
+            raise PermissionError(f"{model}: 실제 모델 실행(구독 CLI)은 --real-api 없이는 거부한다")
+        from .codex_backend import CodexCliBackend
+        return CodexCliBackend(model, **{k: v for k, v in kw.items() if k in ("log", "effort", "bin", "timeout", "batch", "seed")})
     if model.startswith("claude-cli/"):      # 구독 `claude -p` (HYO-169) — API 키를 읽지 않지만 실제 모델이라 같은 문으로 막는다
         if not allow_real:
             raise PermissionError(f"{model}: 실제 모델 실행(구독 CLI)은 --real-api 없이는 거부한다")

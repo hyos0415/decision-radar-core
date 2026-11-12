@@ -2127,6 +2127,85 @@ def test_cli_backend_batch_shuffles_by_seed_maps_numbers_and_fails_safe():
         os.environ.pop("RADAR_FAKE_CLI", None) if saved is None else os.environ.__setitem__("RADAR_FAKE_CLI", saved)
 
 
+from pipeline.importance import codex_backend  # noqa: E402
+
+FAKE_CODEX = REPO / "pipeline" / "tests" / "fake_codex.py"
+
+
+def _fake_codex(script, d, **kw):
+    p = Path(d) / f"codex-{len(os.listdir(d))}.json"
+    p.write_text(json.dumps(script), encoding="utf-8")
+    os.environ["RADAR_FAKE_CODEX"] = str(p)
+    return codex_backend.CodexCliBackend("codex-cli/gpt-6-sol", bin=str(FAKE_CODEX), **kw), Path(str(p) + ".seen.json")
+
+
+def test_codex_backend_isolation_batch_and_safe_failures():
+    """Sol을 구독 codex exec로 (HYO-169 11/12): Claude CLI와 같은 문구 · 묶음, 실행 모양만 다르다 · 키 지움 · 실패는 안전 실패."""
+    saved = {k: os.environ.get(k) for k in ("RADAR_FAKE_CODEX", "OPENAI_API_KEY")}
+    try:
+        os.environ["OPENAI_API_KEY"] = "sk-test-should-be-stripped"
+        with tempfile.TemporaryDirectory() as d:
+            be, seen_p = _fake_codex({"last": {"changes": ["minor_patch", "security"], "reason": "CVE"}}, d)
+            assert (be.model, be.name, be.effort, be.engine) == ("gpt-6-sol", "codex-cli/gpt-6-sol", "medium", "codex-cli")
+            q = NewsQuery(id="n1", technology="electron", title="Node.js security", text="")
+            ans = be.classify_changes(q)
+            assert ans.labels == ["security", "minor_patch"] and ans.reason == "CVE", ans
+            seen = json.loads(seen_p.read_text(encoding="utf-8"))
+            assert not seen["openai_key"] and not seen["codex_key"], seen                    # 구독으로만
+            a = seen["argv"]
+            assert a[0] == "exec" and a[a.index("-m") + 1] == "gpt-6-sol" and a[a.index("-s") + 1] == "read-only" and a[-1] == "-", a
+            assert "--ignore-user-config" in a and "--ephemeral" in a and 'model_reasoning_effort="medium"' in a and "mcp_servers={}" in a, a
+            assert "radar-gate-codex-" in seen["cwd"] and Path(seen["cwd"]).resolve() != REPO.resolve()
+            assert seen["schema"] == cli_backend.CHANGE_SCHEMA                              # Claude CLI와 같은 스키마
+            assert seen["stdin"].startswith(codex_backend.TASK_HEAD) and prompts_cli.CLI_CHANGE_INSTRUCTIONS.strip()[:40] in seen["stdin"]
+            assert "Node.js security" in seen["stdin"]                                       # 지시 + 소식이 stdin 하나로
+            rec = be.log.calls[-1]
+            assert (rec["engine"], rec["billing"], rec["cost_usd"], rec["served_model"], rec["input_tokens"], rec["output_tokens"]) == \
+                ("codex-cli", "subscription", None, "gpt-6-sol", 300, 40), rec
+            assert be.run_info()["engine"] == "codex-cli" and be.run_info()["cli_version"] == "codex-cli 0.0.0-fake"
+            # 묶음: ClaudeCliBackend의 섞기 · 번호 되짚기를 그대로 쓴다
+            qs = [NewsQuery(id=f"n{i}", technology="electron", title=f"t{i}", text="") for i in range(3)]
+            bb, _ = _fake_codex({"last": {"items": [{"n": 1, "changes": ["security"], "reason": "a"}, {"n": 2, "changes": ["breaking"], "reason": "b"}]}},
+                                d, batch=3, seed=4)
+            bb.prefetch_changes(qs)
+            order = list(qs)
+            random.Random(4).shuffle(order)
+            assert bb.classify_changes(order[0]).labels == ["security"] and bb.classify_changes(order[1]).labels == ["breaking"]
+            try:
+                bb.classify_changes(order[2])
+                raise AssertionError("답에 빠진 소식이 조용히 지나갔다")
+            except cli_backend.CliError:
+                pass
+            assert bb.log.calls[-1]["batch_ids"] == [x.id for x in order] and bb.log.calls[-1]["engine"] == "codex-cli"
+            # 실패: turn.failed · 마지막 답 없음 · JSON 아님 → 한 번 더 → 안전 실패
+            for script in ({"fail": "model_not_found"}, {"last": None}, {"raw_last": "not json"}):
+                bad, _ = _fake_codex(script, d)
+                try:
+                    bad.classify_changes(q)
+                    raise AssertionError(f"실패가 조용히 지나갔다: {script}")
+                except cli_backend.CliError:
+                    pass
+                assert len(bad.log.calls) == cli_backend.ATTEMPTS and all(c.get("error") for c in bad.log.calls), (script, bad.log.calls)
+            slow, _ = _fake_codex({"sleep": 3, "last": {"changes": [], "reason": ""}}, d, timeout=1)
+            try:
+                slow.classify_changes(q)
+                raise AssertionError("시간 초과가 지나갔다")
+            except cli_backend.CliError as e:
+                assert "timeout" in str(e)
+        try:
+            backends.make_backend("codex-cli/gpt-6-sol")
+            raise AssertionError("플래그 없이 codex 백엔드가 만들어졌다")
+        except PermissionError:
+            pass
+        mb = backends.make_backend("codex-cli/gpt-6-sol", allow_real=True, bin=str(FAKE_CODEX), batch=10, seed=0)
+        assert isinstance(mb, codex_backend.CodexCliBackend) and (mb.batch, mb.model) == (10, "gpt-6-sol")
+        assert evaluate.main(["--gold", str(REPO / "eval" / "importance" / "gold.example.json"), "--model", "codex-cli/gpt-6-sol",
+                              "--batch", "10", "--plan"]) == 0                                # 묶음은 codex에도
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+
 class _BatchStub(StubBackend):
     """묶음 백엔드 흉내: prefetch로 받은 질문만 답한다 — 관문이 한 건씩 물으면 센다."""
     batch = 2
@@ -2369,6 +2448,7 @@ def mutations():
     return [
         ("CLI 백엔드가 API 키를 env에 남김 (구독이 아니라 API 과금)", [(cli_backend, "STRIP_ENV", ())], test_cli_backend_isolation_labels_and_log),
         ("CLI 백엔드가 내장 도구를 켬", [(cli_backend.ClaudeCliBackend, "_cmd", _cli_cmd_with_tools)], test_cli_backend_isolation_labels_and_log),
+        ("codex 백엔드가 OpenAI 키를 env에 남김 (구독이 아니라 API 과금)", [(codex_backend, "STRIP_ENV", ())], test_codex_backend_isolation_batch_and_safe_failures),
         ("CLI 백엔드가 모양 이상도 다시 시도하고 기록이 어긋남", [(cli_backend.ClaudeCliBackend, "_run", _cli_retry_shape_errors)], test_cli_backend_failures_are_safe_and_retried_once),
         ("CLI 백엔드를 플래그 없이 만듦", [(backends, "make_backend", lambda model, allow_real=False, **kw: _ORIG_MAKE_BACKEND(model, allow_real=True, **kw))], test_make_backend_cli_gating),
         ("묶음 순서를 시드와 무관하게 섞음 (HYO-169)", [(cli_backend, "random", SimpleNamespace(Random=lambda seed: random.Random(0)))],
