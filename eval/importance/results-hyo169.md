@@ -95,3 +95,52 @@ W41은 다듬기 금지(§8 2026-10-16 밤)이고 이 규칙은 결과를 본 �
 - 셋째는 「보안」 낱말 없이 취약점 종류(SSRF)만 적은 수정 — 프롬프트의 「글이 밝힌 것만(security · CVE · GHSA · vulnerability · advisory)」 목록에 없다
 - 앞의 두 건을 맞힌 것으로 치면(저장된 답 다시 세기, 호출 0): Opus 전체 3번 **0 · 0 · 0**, 안전만 5번 중 4번에 langchain-core 1건 · Haiku 매 실행 langchain-core(+ uv 0.11.7 한 번) · Sonnet 안전만 첫 실행 7건(묶음 이웃이 안전 항목뿐인 실행) — 결과를 본 뒤의 셈이라 판정에 쓰지 않는다
 - 운영 Sol은 이 test 세트에서 잰 적이 없다 — 지금 바(C1 실행 8번 0건)를 Sol이 넘는지 모른다
+
+### ⑩ Sol 기준점 (구독 codex, `gpt-6-sol` — 운영 `gpt-6.1-sol`보다 한 판 앞, 등록 `7c79cf6`, 원자료 `eval/runs/hyo169/test-sol-codex`)
+
+| | C1 놓침 (전체 3 + 안전만 5) | C2 소음 | C3 일치 | R (23건) | 판정 |
+|---|---|---|---|---|---|
+| ⑩ Sol (gpt-6-sol) | **5 · 4 · 3** + 2 · 3 · 3 · 2 · 3 | 12.8 · 10.3 · 12.2% | 90.7 · 92.4 · 92.4% | 96 · 96 · 96% | 불통과 (C1) |
+
+- 세션 46(오류 0) · 입력 98.0만(codex 기본 지시가 세션마다 붙는다) · 출력 4.0만 토큰
+- **이 test에서 C1(실행 8번 모두 0건)을 넘은 모델은 없다 — Sol 포함.** 안전 놓침은 Sol이 가장 많다(다수결 4건 · Claude 셋은 2건씩)
+
+## 6. 네 모델 나란히 — 오류 지점 · 편향 (판정 아님, `cross_model_diag.py`, 원자료 `eval/runs/hyo169/cross-model-test.md`)
+
+전체 실행 3번의 다수결로 읽는다.
+
+| | 남김 일치 | 남겼는데 정답 버림 | 정답 남김인데 버림 (안전) | 실행마다 남김이 갈린 소식 |
+|---|---|---|---|---|
+| Haiku | **110**/118 | **3** | 5 (2) | 3 |
+| Sonnet | 107/118 | 6 | 5 (2) | **10** |
+| Opus | **110**/118 | 4 | 4 (2) | 3 |
+| Sol | 108/118 | 5 | 5 (**4**) | 3 |
+
+**네 모델이 모두 틀린 5건** — 두 회사 모델이 같은 쪽으로 답했다. 정의로 다시 보면:
+
+| 소식 | 정답 | 네 모델 | 본문 | 읽음 |
+|---|---|---|---|---|
+| langchain 0.3.30 | minor_patch (버림) | deprecation (남김) | `... and deprecate hub` | 정답 의심 — 정의상 deprecation |
+| langfuse-python 4.0.0b1 | minor_patch (버림) | breaking (남김) | 첫 줄 `## Breaking changes` | 정답 의심 — 프리릴리스는 major만 아니다(③ 「본문의 breaking은 그대로」) |
+| vLLM 0.16.0 | minor_patch (버림) | breaking · deprecation · security (남김) | protobuf CVE-2026-0994 패치 · BitBlas 제거 · `Deprecated IPEX`(938자째) | 정답 의심 — D1 실행 의존성 CVE 올림 포함 |
+| openai-python 3.28.0 | security (남김) | minor_patch (버림) | `deps: update PyJWT security constraint` — CVE · 실행 의존성인지 안 밝힘 | 정의가 가르지 못함 |
+| claude-code 2.1.295 | breaking (남김) | minor_patch (버림) | 8,000자 노트, 3,000자 창 안에 breaking 근거 없음 | 창 책임으로 보임 `[확인]` |
+
+**편향 — 회색 지대 두 곳에서 모델마다 다른 쪽으로 기운다**
+
+| 회색 지대 | 소식 | Haiku | Sonnet | Opus | Sol |
+|---|---|---|---|---|---|
+| 의존성 보안 올림 (CVE 있음) | uv 0.11.7 (번들 CPython OpenSSL) · k6 1.7.1 (grpc CVE) | 잡음 | 잡음 | 잡음 | **놓침** (6/8 · 2/8) |
+| 의존성 보안 올림 (CVE 없음) | litellm 1.82.2 (`fix(security)` tar · tornado) | 잡음 2/3 | 놓침 | 놓침 | 잡음 2/3 |
+| 〃 | openai-python 3.28.0 (PyJWT 「security constraint」) | 놓침 | 놓침 | 놓침 | 놓침 |
+| 「보안」 낱말 없는 취약점 수정 | langchain-core 1.6.8 (IPv6 SSRF 검사 강화) | **놓침** 8/8 | 잡음 | 잡음(전체) · 놓침(안전만 4/5) | **놓침** 8/8 |
+| 목차의 「Security」 절 | PyTorch 2.14 · 2.10 | 안 붙임 | **붙임**(소음) | 2.14만 붙임 | 안 붙임 |
+| Python 버전 지원 중단 | pydantic 2.14 · langfuse 3.8.0 · langgraph prebuilt 1.0.2 | eol 또는 없음 | minor_patch | eol | **breaking**(남김 ↑) |
+
+- **Sol**: 의존성 CVE는 「대상 기술 자체가 아니다」로 엄격하게 읽어 안전 놓침이 가장 많고, Python 버전 지원 중단은 breaking으로 넉넉히 붙여 R(96%)이 가장 높다
+- **Haiku**: 글자 그대로 읽는다 — 「security · CVE」가 적힌 의존성 올림은 잡고, 낱말이 없는 SSRF는 놓친다. 남겼는데 틀린 것이 가장 적다(3). model_retirement를 넉넉히 붙이지만(6, 정답 1) 다른 모델 은퇴라 우리 것 좁히기에서 빠져 남김은 안 바뀐다
+- **Sonnet**: 목차 낱말 · 짐작으로 security를 붙여 소음이 가장 많고, 실행마다 가장 흔들린다(10건 · 안전만 첫 실행 7건 한꺼번에)
+- **Opus**: 뜻으로 읽어 SSRF를 잡지만, 묶음 이웃이 안전 항목뿐일 때는 놓친다(전체 0/3 · 안전만 4/5 놓침 — 묶음 이웃 효과). eol을 가장 잘 붙인다(3/9)
+- **공통**: eol(정답 9, 붙인 수 1~3)과 deprecation(맞힘 11~13/21)은 넷 다 약하다. eol은 대부분 다른 버전 지원 중단이라 남김에는 영향이 적다
+
+**읽은 것**: 안전 놓침의 대부분은 모델이 약해서가 아니라 **정의가 가르지 못하는 두 회색 지대**(의존성 보안 올림 · 「보안」 낱말 없는 취약점 수정)에서 생기고, 모델마다 다른 쪽으로 기운다. 이 test에서 Haiku는 Sol보다 안전 놓침이 적고(2 대 4) 소음도 적다(3 대 5) — 「Claude가 떨어져서 Sol 유지」는 품질 근거가 아니다(판정은 등록대로 그대로 둔다)
