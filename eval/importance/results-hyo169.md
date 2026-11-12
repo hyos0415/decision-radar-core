@@ -72,3 +72,26 @@ W41은 다듬기 금지(§8 2026-10-16 밤)이고 이 규칙은 결과를 본 �
 - 안전 항목 17건 중 놓친 것(8번 중 몇 번): openai-python v3.28.0 **Haiku 8 · Sonnet 8** · langchain-core 1.6.8 Haiku 8 · Sonnet 2 · litellm v1.82.2-dynamoai.dev 2 · 2 · 그 밖은 1~2번씩. Sonnet의 안전만 첫 실행은 8건을 한꺼번에 놓쳤다(오류 0 — 묶음 이웃이 안전 항목뿐인 실행)
 - 두 모델 모두 16번 중 16번 놓친 openai-python v3.28.0은 정답(security)이 정의(D1)에 맞는지 따로 본다(§8 변경 2026-11-12 — 고치면 원래 판정은 두고 저장된 답을 다시 채점)
 - 다음: ⑨ Opus 5.5 — 같은 0판 · 같은 test · 같은 기준, 46세션 (§8 변경 2026-11-12)
+
+### ⑨ Opus 5.5 (등록 `6847cc0`, 원자료 `eval/runs/hyo169/test-opus`)
+
+| | C1 놓침 (전체 3 + 안전만 5) | C2 소음 | C3 일치 | R (23건) | 판정 |
+|---|---|---|---|---|---|
+| ⑨ Opus 5.5 | 2 · 2 · 2 + 3 · 2 · 2 · 2 · 2 | 10.0 · 14.3 · 9.8% | 93.2 · 91.5 · 94.1% | 91 · 91 · 96% | **불통과** (C1) |
+
+- 세션 46(오류 0) · 입력 50.2만 · 출력 7.2만 토큰. 세 모델 다 불통과 → 운영 관문은 Sol API 그대로
+
+### 관찰 (판정 아님 — 결과를 본 뒤)
+
+세 모델의 C1 놓침은 같은 세 소식에 몰린다(8번 중 몇 번 놓쳤나 — Haiku · Sonnet · Opus).
+
+| 소식 | 본문의 보안 근거 | 놓침 | 모델 이유 (요지) |
+|---|---|---|---|
+| openai-python v3.28.0 | `deps: update PyJWT security constraint to 2.14.0` | 8 · 8 · 7 | 의존성 chore — SDK 자체 보안 수정이 아니다 |
+| litellm v1.82.2-dynamoai.dev | `fix(security): bump tar to 7.5.11 and tornado to 6.5.5` | 2 · 2 · 6 | 의존성 올림 — litellm 자체 보안 패치가 아니다 |
+| langchain-core 1.6.8 | `fix(core): harden scoped and compatible IPv6 SSRF checks` | 8 · 2 · 4 | (Haiku) 보안 · CVE라고 밝히지 않았다 |
+
+- 앞의 두 건은 **정의와 프롬프트가 어긋난 곳**이다. 확정 시트 D1은 「실행 의존성 CVE 올림 포함」(정답지의 k6 의존성 올림도 security)인데, 프롬프트는 「대상 기술 자체의 수정이어야 한다(… 개발 의존성 · CI 스캔 설정은 아니다)」만 적어 세 모델 모두 의존성 올림을 chore로 읽는다. openai-python은 HYO-131의 Luna도 3번 다 minor_patch였다
+- 셋째는 「보안」 낱말 없이 취약점 종류(SSRF)만 적은 수정 — 프롬프트의 「글이 밝힌 것만(security · CVE · GHSA · vulnerability · advisory)」 목록에 없다
+- 앞의 두 건을 맞힌 것으로 치면(저장된 답 다시 세기, 호출 0): Opus 전체 3번 **0 · 0 · 0**, 안전만 5번 중 4번에 langchain-core 1건 · Haiku 매 실행 langchain-core(+ uv 0.11.7 한 번) · Sonnet 안전만 첫 실행 7건(묶음 이웃이 안전 항목뿐인 실행) — 결과를 본 뒤의 셈이라 판정에 쓰지 않는다
+- 운영 Sol은 이 test 세트에서 잰 적이 없다 — 지금 바(C1 실행 8번 0건)를 Sol이 넘는지 모른다
