@@ -18,7 +18,8 @@
   trace.jsonl  탈락 추적 — 항목마다 지나간 단계와 빠진 곳 · 이유 (pipeline.trace, HYO-171). `python -m pipeline.trace <검색어> --week <주>`가 읽는다
 
 무엇을 넣나: 관문이 남기고(keep) detect로 고른 것(shown — 「항상」을 (패키지 × 줄)마다 1건으로 접은 것 + 기술마다 top-k, 2026-11-04 전에는 5/N 상한 안)
-+ run 폴더에 slots.json(pipeline.slots)이 있으면 자리마다 top-k 전부 (kind model_release). `--all-kept`면 관문이 남긴 것 전부.
++ run 폴더에 slots.json(pipeline.slots)이 있으면 자리마다 top-k 전부 (kind model_release)
++ interest.json(pipeline.interest, HYO-187)이 있으면 관심사 질의 주 10건 (kind new_technology). `--all-kept`면 관문이 남긴 것 전부.
 버린 이유(결정표의 행)는 여기 옮기지 않는다 — `lane_a.json`·`gate-calls.jsonl`에 이미 있다 (깔때기 화면은 만들지 않는다, 10/8).
 
 1차 출처 링크 (HYO-174, doc-pipeline.md ④ 「글의 링크」): HN · Reddit 글은 근거가 아니라서(R2) detect가 1차 출처를 찾아야 하는데, 모델은
@@ -39,6 +40,7 @@ from .profile_filter import read_items, write_json
 
 SUMMARY_CHARS = 1500    # triage 프롬프트에 그대로 들어간다. 전문은 snapshot_fetch로
 SLOTS = "slots.json"    # 자리 질의 결과 (pipeline.slots, HYO-168) — run 폴더에 있으면 자리마다 top-k를 detect에 더한다
+INTEREST = "interest.json"   # 관심사 질의 결과 (pipeline.interest, HYO-187) — run 폴더에 있으면 주 10건(to_detect)을 detect에 더한다
 LIST = "list.json"      # 이번 주 목록 — 「항상」 · 기술 질의 · 자리 질의 (query-topk.md) + 경보 · 우리 스택 아님 (HYO-170). 화면이 읽는다
 ALARM = "alarm.json"    # 경보 그물 · 「우리 스택 아님」 (pipeline.alarm, profile_filter가 쓴다)
 VENDORS = Path(__file__).resolve().parents[1] / "collector" / "vendors.yaml"   # 1차 출처 도메인의 기준 (HYO-174)
@@ -117,6 +119,17 @@ def slot_entry(item):
     e["kind"] = "model_release"
     # 합집합 스킬 항목(HYO-167)은 원문을 받은 근거의 유형 그대로 — 1차 출처만 받는다 (pipeline.union.primary_evidence)
     e["source_type"] = SLOT_SOURCE_TYPE.get(item.get("source")) or (item.get("meta") or {}).get("source_type") or "community"
+    return e
+
+
+INTEREST_SOURCE_TYPE = {**SLOT_SOURCE_TYPE, "huggingface": "repo", "github": "repo"}
+
+
+def interest_entry(item):
+    """관심사 질의로 온 항목의 feed 칸 (HYO-187) — kind는 new_technology. HN · Reddit은 community(근거가 아니다 — detect가 1차 출처를 찾는다, R2)."""
+    e = feed_entry(item)
+    e["kind"] = "new_technology"
+    e["source_type"] = INTEREST_SOURCE_TYPE.get(item.get("source"), "community")
     return e
 
 
@@ -212,7 +225,7 @@ def week_list(lane_a, slots, detect_ids, alarm_info=None):
                        "to_detect": len(detect_ids)}}
 
 
-def funnel(manifest, lane_a, chosen, slots=None, alarm_info=None):
+def funnel(manifest, lane_a, chosen, slots=None, alarm_info=None, interest=None):
     c = manifest.get("counts") or {}
     g = manifest.get("lane_a_gate") or {}
     own = [e for e in lane_a if not e.get("alarm")]        # 레인 A 건수 · 판정 못 한 비율은 레인 A만 (경보 그물 글은 따로 센다)
@@ -232,6 +245,10 @@ def funnel(manifest, lane_a, chosen, slots=None, alarm_info=None):
     if slots:
         f["slots"] = {"candidates": slots.get("candidates"), "releases": slots.get("releases"),
                       "listed": sum(len(v) for v in slots["per_slot"].values()), "to_detect": len(slots.get("to_detect") or [])}
+    if interest:
+        c = interest.get("counts") or {}
+        f["interest"] = {"new": c.get("picks"), "topical": c.get("topical"), "to_detect": len(interest.get("to_detect") or []),
+                         "pick": (interest.get("pick") or {}).get("engine"), "failed": len(interest.get("failed") or {})}
     return f
 
 
@@ -249,6 +266,9 @@ def funnel_line(f):
     if f.get("slots"):
         s = f["slots"]
         line += f" · 자리 질의 후보 {s['candidates']} → 출시 {s['releases']} → 목록 {s['listed']} (detect {s['to_detect']})"
+    if f.get("interest"):
+        n = f["interest"]
+        line += f" · 관심사 질의 새것 {n['new']} (detect {n['to_detect']}" + (f", 실패 {n['failed']}" if n.get("failed") else "") + ")"
     if f.get("alarm"):
         a = f["alarm"]
         line += f" · 경보 그물 {a['net']} (관문 남김 {a['kept']} · 관문이 모르는 기술 {a['unknown']}) · 우리 스택 아님 {a['not_ours']}"
@@ -322,14 +342,19 @@ def links_note(rows):
     return "\n".join(lines)
 
 
-def choose(lane_a, slots, all_kept=False):
-    """detect로 갈 항목 — 관문 몫(select) + 자리 질의 top-k + 경보 그물의 관문이 모르는 기술. 탈락 추적의 재생(pipeline.trace --now)도 이 함수를 쓴다."""
+def choose(lane_a, slots, all_kept=False, interest=None):
+    """detect로 갈 항목 — 관문 몫(select) + 자리 질의 top-k + 관심사 질의 주 10건 + 경보 그물의 관문이 모르는 기술.
+    탈락 추적의 재생(pipeline.trace --now)도 이 함수를 쓴다."""
     chosen = select(lane_a, all_kept)
     taken = {e["id"] for e in chosen}
     for sid, (slot, x) in slot_picks(slots).items():   # 자리 질의 top-k (HYO-168) — 관문이 이미 넣은 항목이면 한 번만
         if sid not in taken:
             chosen.append({"id": sid, "slot": slot, "slot_hit": x})
             taken.add(sid)
+    for p in (interest or {}).get("to_detect") or []:  # 관심사 질의 주 10건 (HYO-187) — 앞에서 이미 넣은 항목이면 한 번만
+        if p["id"] not in taken:
+            chosen.append({"id": p["id"], "interest": p["interest"], "interest_hit": p})
+            taken.add(p["id"])
     for e, rep in alarm_unknown(lane_a):               # 경보 그물 · 관문이 모르는 기술 (HYO-170) — 이름 묶음마다 하나
         if e["id"] == rep and e["id"] not in taken:
             chosen.append({**e, "alarm_unknown": True})
@@ -345,10 +370,11 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False, fetcher=None):
         raise SystemExit(f"{run_dir}는 관문 없이 돌린 결과다 — profile_filter run에 --gate·--tiers를 준다")
     lane_a = json.loads((run_dir / "lane_a.json").read_text(encoding="utf-8"))
     slots = json.loads((run_dir / SLOTS).read_text(encoding="utf-8")) if (run_dir / SLOTS).exists() else None
+    interest = json.loads((run_dir / INTEREST).read_text(encoding="utf-8")) if (run_dir / INTEREST).exists() else None
     snap = Path(snapshot or manifest["snapshot"])
     from . import union  # 합집합(HYO-167 D6) — 관문 · 자리 질의가 읽은 스킬만 항목. 꺼져 있으면 빈 목록
     by_id = {it["id"]: it for it in read_items(snap) + union.extra_items(run_dir)}
-    chosen = choose(lane_a, slots, all_kept)
+    chosen = choose(lane_a, slots, all_kept, interest)
     alarm_info = json.loads((run_dir / ALARM).read_text(encoding="utf-8")) if (run_dir / ALARM).exists() else None
     missing = [e["id"] for e in chosen if e["id"] not in by_id]
     if missing:
@@ -361,7 +387,8 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False, fetcher=None):
     links = []
     for i, e in enumerate(chosen, 1):
         item = by_id[e["id"]]
-        entry = slot_entry(item) if e.get("slot") else alarm_entry(item) if e.get("alarm") else feed_entry(item)
+        entry = (slot_entry(item) if e.get("slot") else interest_entry(item) if e.get("interest") else
+                 alarm_entry(item) if e.get("alarm") else feed_entry(item))
         body = body_of(item, snap_dir)
         index[url_key(item["url"])] = {"source_type": entry["source_type"], "file": f"items/F{i:02d}.md"}
         if fetcher and entry["source_type"] == "community":
@@ -384,13 +411,17 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False, fetcher=None):
             x = e["slot_hit"]
             why[item["url"]] = {"id": e["id"], "reason": f"자리 {slots['slot_names'].get(e['slot']) or e['slot']} · 적합도 {x['fit']}: {x['reason']}",
                                 "kept_by": [], "shown": True, "slot": e["slot"], "fit": x["fit"]}
+        elif e.get("interest"):
+            x = e["interest_hit"]
+            why[item["url"]] = {"id": e["id"], "reason": f"관심사 {x.get('topic') or e['interest']} · 새것 {x.get('order')}번: {x.get('reason')}",
+                                "kept_by": [], "shown": True, "interest": e["interest"]}
         elif e.get("alarm_unknown"):
             why[item["url"]] = {"id": e["id"], "reason": "경보 그물 · 관문이 모르는 기술 (" + ", ".join(e["alarm"]) + ")", "kept_by": [],
                                 "shown": True, "alarm": e["alarm"]}
         else:
             g = e["gate"]
             why[item["url"]] = {"id": e["id"], "reason": g.get("reason"), "kept_by": g.get("kept_by") or [], "shown": e.get("shown")}
-    f = funnel(manifest, lane_a, chosen, slots, alarm_info)
+    f = funnel(manifest, lane_a, chosen, slots, alarm_info, interest)
     if links:
         f["links"] = {"total": len(links), "fetched": sum(1 for r in links if r["status"] == 200)}
     u = union.funnel_info(run_dir, lane_a, [e["id"] for e in chosen])

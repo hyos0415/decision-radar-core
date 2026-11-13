@@ -1,11 +1,12 @@
 """주간 사슬 한 줄 — 수집 → 얼림 → 출처 건강 알림 → 등급 → 관문 → detect 입력 → revisit 출처 → 게시 (HYO-99 3단계 · HYO-159). Windows·macOS 같은 코드다.
 
-  python -m collector.weekly [--from {collect,freeze,health,tiers,skill,gate,slots,feed,revisit,publish}] [--week YYYY-Www] [--gate 백엔드] [--no-push] [--dry-run]
+  python -m collector.weekly [--from {collect,freeze,health,tiers,skill,gate,slots,interest,feed,revisit,publish}] [--week YYYY-Www] [--gate 백엔드] [--no-push] [--dry-run]
 
 실패 규칙: 수집 실패 → 그래도 얼린다(죽은 출처도 manifest에 남는다) · 얼림 실패 → 멈춤 · 등급 실패 → 계속 (키 없음은 weekly-tiers가 이미 건너뜀)
           · 출처 건강(HYO-172 — 검사는 얼릴 때 <주>/source-health.json, 이 단계는 Linear 알림) 실패 · LINEAR_API_KEY 없음 → 계속
           · 관문 실패(예: OPENAI_API_KEY 없음) → 멈춤, feed·게시 없음 · feed 실패 → 멈춤
           · 자리 질의 실패(구독 claude -p · HYO-168) → 계속 — detect 입력은 관문 몫만. 자리 프로필(ADR repo radar-slots.yaml)이 없으면 건너뜀
+          · 관심사 질의 실패(구독 claude -p · HYO-187) → 계속 — interest.json만 없다. 관심사 프로필(radar-profile.yaml)이 없으면 건너뜀
           · 스킬 줄(합집합 HYO-167 — 기본 꺼짐, RADAR_UNION=on) → 관문 앞에서 skill@v1 라이브 detect → 원문 받기 → 합치기.
             실패하면 계속 — 관문 · 자리 질의 · detect 입력은 수집 항목만 (union-pipeline.md D6)
           · revisit 출처 실패(네트워크) → 계속 — detect 입력은 게시한다. 데스크톱 revisit은 가장 새 revisit/<주>/를 본다
@@ -34,7 +35,7 @@ from pipeline import basis, union  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 STEP_LOG = "last-weekly-steps.log"  # 예약 작업 콘솔 로그(last-weekly.log)와 달라야 한다 — 위 머리말
-STEPS = ["collect", "freeze", "health", "tiers", "skill", "gate", "slots", "feed", "revisit", "publish"]
+STEPS = ["collect", "freeze", "health", "tiers", "skill", "gate", "slots", "interest", "feed", "revisit", "publish"]
 PUBLISHED = {"detect": "feed.json", "revisit": "index.json"}  # 게시하는 폴더 → 다 만들어졌다는 표시 파일
 DEFAULT_GATE = "gpt-6.1-sol"
 
@@ -228,6 +229,16 @@ def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None
                     continue
                 rc = runner("pipeline.slots", ["run", "--snapshot", str(p["snapshots"] / week), "--slots", str(p["slots"]), "--out", str(run_out)], log)
                 record(name, rc == 0, "자리 질의 (구독 claude -p)" if rc == 0 else f"종료 코드 {rc} — 계속 (detect 입력은 관문 몫만, {log})", t0=t0)
+            elif name == "interest":         # 관심사 질의 (HYO-187) — BM25 상위 60 → 구독 claude -p 관심사마다 한 세션. 실패해도 계속
+                if state["done"]:
+                    record(name, True, "이미 만듦", skipped=True)
+                    continue
+                if not p["profile"].exists():
+                    record(name, True, f"관심사 프로필이 없다: {p['profile']} — 관심사 질의 없이 간다", skipped=True)
+                    continue
+                rc = runner("pipeline.interest", ["run", "--snapshot", str(p["snapshots"] / week), "--profile", str(p["profile"]),
+                                                  "--out", str(run_out)], log)
+                record(name, rc == 0, "관심사 질의 (구독 claude -p)" if rc == 0 else f"종료 코드 {rc} — 계속 (interest.json 없음, {log})", t0=t0)
             elif name == "feed":
                 if state["done"]:
                     record(name, True, "이미 만듦", skipped=True)
@@ -273,6 +284,7 @@ def dry_run(a, env=None, root=REPO):
                   if union.enabled(os.environ if env is None else env) else f"(꺼짐 — {union.FLAG}=on)"),
         "gate": f"{py} -m pipeline.profile_filter " + " ".join(gate_args(p["snapshots"] / wk, gate, p, run_out)),
         "slots": f"{py} -m pipeline.slots run --snapshot {p['snapshots'] / wk} --slots {p['slots']} --out {run_out}",
+        "interest": f"{py} -m pipeline.interest run --snapshot {p['snapshots'] / wk} --profile {p['profile']} --out {run_out}",
         "feed": f"{py} -m pipeline.detect_feed --run {run_out} --out {p['snapshots'] / 'detect' / wk}",
         "revisit": f"{py} -m pipeline.revisit_feed --adr-dir {p['adr_dir']} --snapshots {p['snapshots']} --week {wk} --out {p['snapshots'] / 'revisit' / wk}",
         "publish": f"git -C {p['snapshots']} pull --ff-only; add detect/{wk} revisit/{wk}; commit; " + ("(push 없음)" if a.no_push else "push"),

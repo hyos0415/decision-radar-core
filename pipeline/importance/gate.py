@@ -155,7 +155,7 @@ def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT, mode=None):
     """레인 A 항목들(각각 `gate` 칸을 가짐)에서 detect로 갈 것을 고른다. 항목에 `shown`(= detect로 간다)을 쓰고 요약을 돌려준다.
     잘린 것은 summary["truncated"] — 로그용.
     - topk (기본, 2026-11-04 HYO-168): 「항상」 + 기술마다 top-k 목록(`listed` · `rank` · `always` · `query`), detect는 「항상」을 (패키지 × 줄)마다
-      최신 1건으로 접은 것(`folded_into` = 대표 id) + 기술마다 top-k
+      최신 1건으로 접은 것(`folded_into` = 대표 id) + 기술마다 top-k. 2026-11-13부터 k = policy.TOPK = None(상한 없음 — 요약의 "k"도 null)
     - weekly5 (그 전): 5/N 상한 · 기술당 1칸 먼저"""
     mode = mode or policy.CAP_MODE
     kept = [{"id": e["id"], "kept_by": e["gate"]["kept_by"], "title": e.get("title"), "release_line": _release_line(e),
