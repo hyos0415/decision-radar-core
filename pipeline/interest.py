@@ -250,6 +250,120 @@ def judge_interest(interest, ids, items, excludes, engine, model):
     return labels, raws
 
 
+# ---- 3단계: 주 PICK_N건 고르기 (사용자 11/13 「그냥 10개 정도」 — W46에 새것이 161건이었다) ---------------------------
+
+PICK_N = 10
+PRIORITY = {"high": 0, "normal": 1, "low": 2}
+PICK_SYSTEM = """너는 기술 스택 관리자의 조수다. 관심사별로 이번 주 「새 도구·모델·기법」 후보가 있다.
+사용자가 자기 프로젝트에서 **직접 실험해 볼 만한 것**을 최대 {n}개, 중요한 순서로 고른다.
+
+규칙
+- 실제로 받아서 돌려 볼 수 있는 것(공개 모델, 라이브러리, 도구, 코드가 있는 기법)을 먼저 본다. 소개 · 팟캐스트 · 의견 글은 뒤로.
+- 같은 것을 다룬 글이 여럿이면 하나만 고른다(1차 출처에 가까운 것).
+- 관심사마다 적힌 「이미 아는 것」 자체를 다룬 글은 고르지 않는다. 그것의 새 버전 · 큰 업데이트면 고를 수 있다. 우리는 놓치던 것을 찾는다.
+- 한 관심사에 몰리지 않게 하되, 정말 중요한 게 몰려 있으면 그대로 고른다.
+- 후보 번호(c1, c2 …)로만 답한다. reason은 한국어 한 줄(50자 안쪽) — 어느 프로젝트에서 무엇을 해 볼 수 있나."""
+PICK_SCHEMA = {"type": "object", "required": ["picks"], "properties": {"picks": {"type": "array", "items": {
+    "type": "object", "required": ["c", "reason"], "properties": {"c": {"type": "string"}, "reason": {"type": "string"}}}}}}
+
+
+def _norm_title(t):
+    return " ".join(tokens(t))[:80]
+
+
+def pick_candidates(per):
+    """관심사별 새것 → 후보 목록 [{c, id, interest, title, …}] — 같은 글(id)이나 같은 제목은 검색 순위가 높은 쪽 하나만."""
+    rows = sorted(((x["rank"], i, x) for i, v in per.items() for x in v["picks"]), key=lambda r: (r[0], r[1], r[2]["id"]))
+    seen_id, seen_title, out = set(), set(), []
+    for _rank, i, x in rows:
+        nt = _norm_title(x.get("title") or "")
+        if x["id"] in seen_id or (nt and nt in seen_title):
+            continue
+        seen_id.add(x["id"])
+        seen_title.add(nt)
+        out.append({"c": f"c{len(out) + 1}", "id": x["id"], "interest": i, "title": x.get("title"), "source": x.get("source"),
+                    "rank": x["rank"], "why": x.get("why")})
+    return out
+
+
+def pick_fallback(cands, profile, n=PICK_N):
+    """모델 없이 — 관심사마다 검색 순위가 가장 높은 새것 1건, 프로필 우선순위(high → normal → low) · 검색 순위 순으로 n건."""
+    prio = {it["id"]: PRIORITY.get(it.get("priority"), 1) for it in profile["interests"]}
+    first = {}
+    for c in cands:
+        if c["interest"] not in first or c["rank"] < first[c["interest"]]["rank"]:
+            first[c["interest"]] = c
+    ordered = sorted(first.values(), key=lambda c: (prio.get(c["interest"], 1), c["rank"], c["id"]))[:n]
+    return [{"id": c["id"], "interest": c["interest"], "reason": f"관심사 1위 (검색 {c['rank']}위)"} for c in ordered]
+
+
+def check_picks(so, cands, n=PICK_N):
+    """모델 답 → ([{id, interest, reason}], 버린 수). 모르는 번호 · 겹친 번호는 버리고, n건을 넘으면 자른다 (규율 1)."""
+    by_c = {c["c"]: c for c in cands}
+    out, seen, dropped = [], set(), 0
+    for p in (so or {}).get("picks") or []:
+        c = by_c.get(str(p.get("c", "")).strip())
+        if c is None or c["id"] in seen:
+            dropped += 1
+            continue
+        seen.add(c["id"])
+        out.append({"id": c["id"], "interest": c["interest"], "reason": str(p.get("reason") or "")[:120]})
+    dropped += max(0, len(out) - n)
+    return out[:n], dropped
+
+
+def pick_prompt(cands, profile):
+    defs = "\n".join(f"- {it['id']} ({it['topic']}): {it.get('description') or ''}" + (f" · 왜: {it['why']}" if it.get("why") else "")
+                     + (f" · 관련: {', '.join(it['relates_to'])}" if it.get("relates_to") else "")
+                     + (f" · 이미 아는 것: {', '.join(it['examples'])}" if it.get("examples") else "")
+                     for it in profile["interests"] if it.get("active", True))
+    rows = "\n".join(f"[{c['c']}] ({c['interest']}) {c['title']} | 출처 {c['source']} | {c['why']}" for c in cands)
+    return f"관심사:\n{defs}\n\n후보 {len(cands)}개:\n{rows}"
+
+
+def pick_claude(cands, profile, model, n=PICK_N, timeout=900):
+    b = os.environ.get("RADAR_CLAUDE_BIN") or shutil.which("claude") or "claude"
+    cmd = [*([sys.executable, b] if b.endswith(".py") else [b]), "-p", "--output-format", "json", "--system-prompt", PICK_SYSTEM.format(n=n),
+           "--json-schema", json.dumps(PICK_SCHEMA, ensure_ascii=False), "--tools", "", "--setting-sources", "",
+           "--no-session-persistence", "--model", model, "--effort", "medium", "--permission-mode", "dontAsk"]
+    env = {k: v for k, v in os.environ.items() if k not in STRIP_ENV}
+    env["PYTHONIOENCODING"] = "utf-8"
+    with tempfile.TemporaryDirectory(prefix="radar-interest-pick-") as run:
+        p = subprocess.run(cmd, input=pick_prompt(cands, profile).encode("utf-8"), capture_output=True, cwd=run, env=env, timeout=timeout)
+    try:
+        res = json.loads(p.stdout.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise InterestError(f"claude 결과가 JSON이 아니다 (exit {p.returncode}) {p.stderr.decode('utf-8', 'replace')[-300:]}")
+    if res.get("is_error") or res.get("structured_output") is None:
+        raise InterestError(f"claude 실패: {res.get('subtype')} {str(res.get('result'))[:300]}")
+    return res["structured_output"], res
+
+
+def choose_week(per, profile, engine, model, old=None, n=PICK_N):
+    """주 n건 → (to_detect, 기록). 모델이 실패하거나 하나도 못 고르면 코드 규칙(pick_fallback)으로."""
+    cands = pick_candidates(per)
+    info = {"candidates": len(cands), "n": n}
+    if not cands:
+        return [], {**info, "engine": "none"}
+    if old and old.get("ids") == [c["id"] for c in cands]:
+        return old["to_detect"], {**info, **old["info"], "reused": True}
+    if engine == "stub":
+        picks, dropped = check_picks({"picks": [{"c": c["c"], "reason": "stub"} for c in cands]}, cands, n)
+        return picks, {**info, "engine": "stub", "dropped": dropped}
+    for attempt in (1, 2):
+        try:
+            so, res = pick_claude(cands, profile, model, n)
+        except (InterestError, subprocess.TimeoutExpired) as e:
+            err = str(e)[:300]
+            continue
+        picks, dropped = check_picks(so, cands, n)
+        if picks:
+            return picks, {**info, "engine": "claude", "model": model, "dropped": dropped, "attempts": attempt,
+                           "usage": res.get("usage"), "cost_usd_equiv": res.get("total_cost_usd")}
+        err = f"고른 것이 없다 (버림 {dropped})"
+    return pick_fallback(cands, profile, n), {**info, "engine": "fallback", "error": err}
+
+
 def run(items, profile, engine="claude", model=DEFAULT_MODEL, out=None, reuse=False, k=TOPK):
     """레인 B 후보 → {관심사: {query, picks(등급 2), topical(등급 1), searched}}."""
     _a, lane_b, _s = lanes.split_lanes(items)
@@ -281,18 +395,24 @@ def run(items, profile, engine="claude", model=DEFAULT_MODEL, out=None, reuse=Fa
         per[it["id"]] = {"topic": it["topic"], "query": q, "searched": len(hits),
                          "picks": [row(d) for d in ordered if labels[d]["grade"] == 2],
                          "topical": [row(d) for d in ordered if labels[d]["grade"] == 1]}
+    to_detect, pick_info = choose_week(per, profile, engine, model, old=old.get("_pick"))
+    topic = {i: v["topic"] for i, v in per.items()}
+    to_detect = [dict(p, topic=topic.get(p["interest"]), order=n) for n, p in enumerate(to_detect, 1)]
     if raw_path:
+        raw["_pick"] = {"ids": [c["id"] for c in pick_candidates(per)], "to_detect": to_detect, "info": pick_info}
         write_json(raw_path, raw)
     return {"engine": engine, "model": model if engine == "claude" else None, "k": k, "lane_b": len(lane_b),
-            "interests": per, "failed": failed,
+            "interests": per, "failed": failed, "to_detect": to_detect, "pick": pick_info,
             "counts": {"picks": sum(len(v["picks"]) for v in per.values()), "topical": sum(len(v["topical"]) for v in per.values()),
-                       "sessions": sum(len(v["raw"]) for v in raw.values())}}
+                       "to_detect": len(to_detect),
+                       "sessions": sum(len(v["raw"]) for k_, v in raw.items() if k_ != "_pick") + (1 if pick_info.get("engine") == "claude" and not pick_info.get("reused") else 0)}}
 
 
 def summary_line(res):
     c = res["counts"]
     return (f"관심사 질의: 레인 B {res['lane_b']} → 관심사 {len(res['interests'])}개 × 상위 {res['k']} → "
-            f"새것(2) {c['picks']} · 주제만(1) {c['topical']}" + (f" · 실패 {len(res['failed'])}" if res["failed"] else ""))
+            f"새것(2) {c['picks']} · 주제만(1) {c['topical']} → detect {c['to_detect']} ({res['pick'].get('engine')})"
+            + (f" · 실패 {len(res['failed'])}" if res["failed"] else ""))
 
 
 def main(argv=None):
@@ -318,7 +438,10 @@ def main(argv=None):
     write_json(out / "interest.json", res)
     print(summary_line(res))
     for i, v in res["interests"].items():
-        print(f"  {i}: 새것 {len(v['picks'])} · 주제만 {len(v['topical'])}" + "".join(f"\n    #{x['rank']} {x['title'][:90]}" for x in v["picks"][:3]))
+        print(f"  {i}: 새것 {len(v['picks'])} · 주제만 {len(v['topical'])}")
+    titles = {x["id"]: x["title"] for v in res["interests"].values() for x in v["picks"]}
+    for p in res["to_detect"]:
+        print(f"  detect {p['order']}. [{p['interest']}] {(titles.get(p['id']) or '')[:80]} — {p['reason']}")
     return 1 if res["failed"] and not res["interests"] else 0
 
 

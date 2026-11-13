@@ -101,8 +101,14 @@ def _fake_cli(d, mode="ok"):
                  "user = sys.stdin.read()\n"
                  "if os.environ.get('ANTHROPIC_API_KEY'):\n"
                  "    print(json.dumps({'is_error': True, 'subtype': 'api-key-seen', 'result': 'API key billing'})); sys.exit(0)\n"
-                 "n = int(re.search(r'글 (\\d+)개', user).group(1))\n"
                  f"mode = {mode!r}\n"
+                 "m = re.search(r'후보 (\\d+)개', user)\n"
+                 "if m:\n"                                                    # 3단계 — 주 10건 고르기
+                 "    n = int(m.group(1))\n"
+                 "    picks = [{'c': f'c{k}', 'reason': 'fake'} for k in range(n, 0, -1)] + [{'c': 'c1', 'reason': 'dup'}]\n"
+                 "    if mode == 'badpick': picks = [{'c': 'zzz', 'reason': 'x'}]\n"
+                 "    print(json.dumps({'is_error': False, 'subtype': 'success', 'structured_output': {'picks': picks}})); sys.exit(0)\n"
+                 "n = int(re.search(r'글 (\\d+)개', user).group(1))\n"
                  "labels = [{'n': k, 'grade': 2, 'why': 'fake'} for k in range(1, n + 1)]\n"
                  "if mode == 'short': labels = labels[:-1]\n"
                  "print(json.dumps({'is_error': False, 'subtype': 'success', 'structured_output': {'labels': labels}, 'total_cost_usd': 0.1}))\n",
@@ -131,13 +137,14 @@ def test_claude_engine_subscription_only_raw_saved_and_reuse():
         assert not res["failed"], res["failed"]
         assert all(x["grade"] == 2 for v in res["interests"].values() for x in v["picks"]) and res["counts"]["picks"] > 0
         raw = json.loads((Path(d) / "interest-raw.json").read_text(encoding="utf-8"))
-        assert set(raw) == set(res["interests"])
+        assert set(raw) - {"_pick"} == set(res["interests"]) and res["pick"]["engine"] == "claude"
         undo = _with_env(RADAR_CLAUDE_BIN=str(Path(d) / "no-such-cli.py"))
         try:
             again = interest.run(ITEMS, PROFILE, engine="claude", out=d, reuse=True)     # 저장한 판정을 쓴다 (CLI를 안 부른다)
         finally:
             undo()
-        assert again["counts"] == res["counts"] and not again["failed"]
+        assert again["counts"]["picks"] == res["counts"]["picks"] and not again["failed"]
+        assert again["to_detect"] == res["to_detect"] and again["pick"].get("reused"), "주 10건 고르기도 저장한 답을 쓴다"
 
 
 def test_bad_answer_fails_that_interest_only():
@@ -151,11 +158,86 @@ def test_bad_answer_fails_that_interest_only():
         assert res["interests"] == {} and "빠진" in res["failed"]["hybrid-sparse-retrieval"]
 
 
+MANY = {"interests": [
+    {"id": f"i{k}", "topic": f"관심사 {k}", "aliases": [f"topic{k}"], "examples": [], "not": [], "active": True,
+     "priority": "low" if k < 3 else "high" if k > 9 else "normal"} for k in range(14)], "excludes": []}
+MANY_ITEMS = [_it(f"rd:{k}-{n}", f"topic{k} release {n}", f"topic{k} new tool number {n}") for k in range(14) for n in range(3)]
+
+
+def test_week_pick_caps_at_10_checks_ids_and_dedupes():
+    with tempfile.TemporaryDirectory() as d:
+        undo = _with_env(RADAR_CLAUDE_BIN=_fake_cli(d))
+        try:
+            res = interest.run(MANY_ITEMS, MANY, engine="claude", out=d)
+        finally:
+            undo()
+    ids = [p["id"] for p in res["to_detect"]]
+    assert len(ids) == interest.PICK_N == 10 and len(set(ids)) == 10, ids          # 가짜 모델은 42개 + 겹친 번호를 낸다
+    assert res["pick"]["engine"] == "claude" and res["pick"]["dropped"] >= 1
+    assert [p["order"] for p in res["to_detect"]] == list(range(1, 11)) and all(p["topic"] for p in res["to_detect"])
+    same = interest.pick_candidates({"a": {"picks": [{"id": "x1", "title": "Tool X released!", "rank": 2}]},
+                                     "b": {"picks": [{"id": "x2", "title": "tool x released", "rank": 1}]}})
+    assert [c["id"] for c in same] == ["x2"], "같은 제목은 검색 순위가 높은 글 하나만"
+
+
+def test_week_pick_falls_back_to_rule_by_priority():
+    with tempfile.TemporaryDirectory() as d:
+        undo = _with_env(RADAR_CLAUDE_BIN=_fake_cli(d, "badpick"))
+        try:
+            res = interest.run(MANY_ITEMS, MANY, engine="claude", out=d)
+        finally:
+            undo()
+    assert res["pick"]["engine"] == "fallback" and len(res["to_detect"]) == 10
+    got = [p["interest"] for p in res["to_detect"]]
+    assert len(set(got)) == 10, "규칙은 관심사마다 1건"
+    assert {"i10", "i11", "i12", "i13"} <= set(got) and not {"i0", "i1", "i2"} & set(got), got     # high 먼저, low는 밀린다
+
+
+def test_detect_feed_adds_week_picks_as_new_technology():
+    from pipeline import detect_feed
+    with tempfile.TemporaryDirectory() as d:
+        snap, run, out = Path(d) / "snap", Path(d) / "run", Path(d) / "out"
+        snap.mkdir(), run.mkdir()
+        items = MANY_ITEMS + [_it("hf:model", "topic13 model card", "weights", source="huggingface")]
+        (snap / "items.jsonl").write_text("".join(json.dumps(i, ensure_ascii=False) + "\n" for i in items), encoding="utf-8")
+        (run / "lane_a.json").write_text("[]", encoding="utf-8")
+        (run / "run.json").write_text(json.dumps({"snapshot": str(snap), "counts": {"items": len(items), "lane_a": 0},
+                                                  "lane_a_gate": {"model": "stub", "mode": "topk", "total_kept": 0, "label": "0", "listed": []}}),
+                                      encoding="utf-8")
+        res = interest.run(items, MANY, engine="stub")
+        (run / "interest.json").write_text(json.dumps(res, ensure_ascii=False), encoding="utf-8")
+        f = detect_feed.build(run, out)
+        feed = json.loads((out / "feed.json").read_text(encoding="utf-8"))
+        assert [e["id"] for e in feed] == [p["id"] for p in res["to_detect"]] and len(feed) == 10
+        assert all(e["kind"] == "new_technology" for e in feed)
+        assert {e["source_type"] for e in feed if e["id"].startswith("rd:")} == {"community"}
+        assert f["interest"]["to_detect"] == 10 and "관심사 질의" in detect_feed.funnel_line(f)
+        why = json.loads((out / "gate.json").read_text(encoding="utf-8"))
+        assert all("관심사" in v["reason"] for v in why.values())
+        empty = Path(d) / "out2"
+        (run / "interest.json").unlink()
+        assert detect_feed.build(run, empty)["to_detect"] == 0, "interest.json이 없으면 예전 그대로"
+
+
 TESTS = [(n, f) for n, f in globals().items() if n.startswith("test_")]
 
 
 def mutations():
     orig_check, orig_chunks, orig_stem, orig_run = interest.check_labels, interest.chunks_of, interest.stem, interest.run
+    orig_picks, orig_choose_week = interest.check_picks, interest.choose_week
+    from pipeline import detect_feed
+    orig_choose = detect_feed.choose
+
+    def no_cap(so, cands, n=10):
+        out, _ = orig_picks(so, cands, 10 ** 6)
+        return out, 0
+
+    def no_fallback(per, profile, engine, model, old=None, n=10):
+        picks, info = orig_choose_week(per, profile, engine, model, old, n)
+        return ([], info) if info.get("engine") == "fallback" else (picks, info)
+
+    def no_interest(lane_a, slots, all_kept=False, interest=None):
+        return orig_choose(lane_a, slots, all_kept)
 
     def trust(so, n):
         return {x["n"]: x for x in so["labels"]}, []
@@ -177,6 +259,9 @@ def mutations():
         ("어미를 안 뗌", lambda: setattr(interest, "stem", lambda t: t), lambda: setattr(interest, "stem", orig_stem)),
         ("첫 조각만 봄", lambda: setattr(interest, "chunks_of", first_chunk_only), lambda: setattr(interest, "chunks_of", orig_chunks)),
         ("등급 1도 picks에", lambda: setattr(interest, "run", picks_with_grade1), lambda: setattr(interest, "run", orig_run)),
+        ("주 10건 상한 없음", lambda: setattr(interest, "check_picks", no_cap), lambda: setattr(interest, "check_picks", orig_picks)),
+        ("모델 실패 시 대신 고르지 않음", lambda: setattr(interest, "choose_week", no_fallback), lambda: setattr(interest, "choose_week", orig_choose_week)),
+        ("detect에 관심사 10건을 안 넣음", lambda: setattr(detect_feed, "choose", no_interest), lambda: setattr(detect_feed, "choose", orig_choose)),
     ]
 
 
