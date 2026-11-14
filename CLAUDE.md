@@ -31,7 +31,7 @@
 
 | 모델·서비스 | component |
 |---|---|
-| Anthropic `claude-sonnet-5-5` (effort medium) — `claude -p`(eval 러너 · 제품 구독 CLI 엔진 `engines.ClaudeCliRunner`, HYO-99) · API(스파이크 · 제품 API 엔진 · 관문 주간 등급 재분류 `weekly-tiers`, HYO-122) | eval · product · pipeline |
+| Anthropic `claude-sonnet-5-5` (effort medium) — `claude -p`(eval 러너 · 제품 구독 CLI 엔진 `engines.ClaudeCliRunner`, HYO-99 · 자리 질의 `pipeline/slots.py` · 관심사 질의 `pipeline/interest.py`, HYO-187) · API(스파이크 · 제품 API 엔진 · 관문 주간 등급 재분류 `weekly-tiers`, HYO-122) | eval · product · pipeline |
 | Claude Code routines (스킬 실사용, HYO-21) | skill |
 | OpenAI `gpt-6-sol` — `codex exec` (judge, HYO-20) | eval |
 | OpenAI `gpt-6-luna` (tier-screen, ADR 0007) | eval |

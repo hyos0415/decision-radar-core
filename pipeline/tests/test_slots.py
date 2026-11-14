@@ -88,6 +88,60 @@ def test_validate_drops_bad_answers():
     assert got["reddit:nm"]["matches"] == [] and got["hf-model:org/Small-2B"]["matches"] == []
 
 
+SLOTS_V2 = {"version": 2, "slots": [
+    {"id": "gate-classifier", "name": "관문 분류", "repo": "decision-radar", "role": "분류", "current": ["OpenAI gpt-6.1-sol"],
+     "must": ["구조화된 답"], "now_via": ["OpenAI API 종량제"], "kinds": ["LLM", "판정 모델(decision model)"]},
+    {"id": "retrieval-dense", "name": "검색 임베딩", "repo": "decision-radar", "role": "의미 검색", "current": ["BAAI/bge-m3"],
+     "must": ["한국어 · 영어"], "now_via": ["로컬"], "kinds": ["임베딩 모델"]},
+]}
+
+
+def test_v2_roles_must_vs_now_via_and_switch_note():
+    """자리 프로필 v2 (2026-11-12): 역할 조건(must)만 거르고 지금 쓰는 방식(now_via)은 「바꾸려면 필요한 것」(switch)으로 — v1은 그대로."""
+    assert slots.system_for(SLOTS) is slots.SYSTEM and slots.system_for(SLOTS_V2) is slots.SYSTEM_V2
+    cands = slots.collect(ITEMS)
+    p1, p2 = slots.prompt(cands, SLOTS), slots.prompt(cands, SLOTS_V2)
+    assert "constraints:" in p1 and "must:" not in p1
+    assert "must:" in p2 and "now_via:" in p2 and "kinds:" in p2 and "constraints:" not in p2
+    assert "now_via" in slots.SYSTEM_V2 and "깎지 않는다" in slots.SYSTEM_V2 and "switch" in slots.SYSTEM_V2
+    so = {"judgments": [{"id": "hn:1", "release": True, "matches": [
+        {"slot": "gate-classifier", "fit": 2, "reason": "더 싸다", "switch": "OpenAI API 그대로"}]},
+        {"id": "hf-model:org/Small-2B", "release": True, "matches": [{"slot": "retrieval-dense", "fit": 2, "reason": "작은 임베딩"}]}]}
+    got, dropped = slots.validate(so, cands, SLOTS_V2)
+    per = slots.rank(cands, got, SLOTS_V2)
+    assert per["gate-classifier"][0]["switch"] == "OpenAI API 그대로" and per["retrieval-dense"][0]["switch"] == ""   # 안 쓰면 빈 칸
+    assert dropped == {"unknown_id": 0, "unknown_slot": 0, "bad_fit": 0}
+    # 상한 없음 + 같은 모델 묶기: Terra 세 소식(같은 model) → 한 줄, 다른 모델은 상위 3 밖이어도 보인다
+    many = {"judgments": [{"id": i, "release": True, "model": "GPT-6.1 Terra" if i in (TERRA_CL, "hn:1", "vendor:aws-bedrock:t") else f"m-{i}",
+                           "matches": [{"slot": "gate-classifier", "fit": 2, "reason": "r"}]} for i in [c["id"] for c in cands]]}
+    got, _ = slots.validate(many, cands, SLOTS_V2)
+    gc = slots.rank(cands, got, SLOTS_V2)["gate-classifier"]
+    assert len(gc) == len(cands) - 2, gc                                               # 5 후보 → Terra 3개가 1줄로, 나머지 2 = 3줄 (v1이면 상위 3에서 잘렸다)
+    terra = [x for x in gc if x["model"] == "GPT-6.1 Terra"]
+    assert len(terra) == 1 and terra[0]["id"] == TERRA_CL and sorted(terra[0]["also"]) == sorted(["hn:1", "vendor:aws-bedrock:t"]), terra
+    # 넓은 후보: HF 작업별 순위 상위 · LocalLLaMA 출시 낱말 없는 상위 글 · News 꼬리표
+    extra = [_it("hf-model:org/Decide-1B", "huggingface", "org/Decide-1B", "https://huggingface.co/org/Decide-1B",
+                 signals={"rank:trending": 70, "rank:task:token-classification": 1}),
+             _it("reddit:ll", "reddit", "New in llama.cpp: Decision Models", "https://www.reddit.com/r/LocalLLaMA/comments/z",
+                 channels=["r/LocalLLaMA:top-week"], signals={"rank:r/LocalLLaMA:top-week": 17}),
+             _it("reddit:news", "reddit", "llama, server: add /v1/systemone API", "https://www.reddit.com/r/LocalLLaMA/comments/w",
+                 channels=["r/LocalLLaMA:flair:News"], signals={"rank:r/LocalLLaMA:flair:News": 14})]
+    # 「확인 필요」: 최고 1점인 출시는 detect가 아니라 목록 한 줄 — 이미 2점 이상으로 보인 model은 빼고, 같은 model은 묶는다
+    mixed = {"judgments": [
+        {"id": "hn:1", "release": True, "model": "GPT-6.1 Terra", "matches": [{"slot": "gate-classifier", "fit": 2, "reason": "r"}]},
+        {"id": "vendor:aws-bedrock:t", "release": True, "model": "GPT-6.1 Terra", "matches": [{"slot": "retrieval-dense", "fit": 1, "reason": "약함"}]},
+        {"id": "reddit:nm", "release": True, "model": "Unlimited-OCR-2", "matches": [{"slot": "gate-classifier", "fit": 1, "reason": "정보 부족"}]},
+        {"id": "hf-model:org/Small-2B", "release": True, "model": "unlimited-ocr-2", "matches": [{"slot": "retrieval-dense", "fit": 1, "reason": "r"}]},
+        {"id": TERRA_CL, "release": False, "matches": []}]}
+    got, _ = slots.validate(mixed, cands, SLOTS_V2)
+    per = slots.rank(cands, got, SLOTS_V2)
+    chk = slots.check_list(cands, got, per)
+    assert [(x["id"], x.get("also")) for x in chk] == [("hf-model:org/Small-2B", ["reddit:nm"])], chk   # Terra는 2점으로 이미 보임 · 대표는 인기 순
+    assert all(x["id"] not in {"reddit:nm", "hf-model:org/Small-2B"} for xs in per.values() for x in xs)          # detect(per_slot)엔 없다
+    wide = {c["id"]: c["why"] for c in slots.collect(extra)}
+    assert wide == {"hf-model:org/Decide-1B": "hf-task:token-classification:1", "reddit:ll": "reddit:top-week:17", "reddit:news": "reddit:news"}, wide
+
+
 def test_rank_threshold_order_topk():
     cands = slots.collect(ITEMS)
     got, _ = slots.validate(judged_stub_terra(), cands, SLOTS)
@@ -167,7 +221,7 @@ TESTS = [(n, f) for n, f in globals().items() if n.startswith("test_")]
 
 
 def mutations():
-    orig_validate, orig_picks = slots.validate, detect_feed.slot_picks
+    orig_validate, orig_picks, orig_system_for, orig_fold = slots.validate, detect_feed.slot_picks, slots.system_for, slots.fold_same_model
 
     def trust(so, cands, sl):     # 모델 답을 검사 없이
         return {j["id"]: {"release": j["release"], "matches": j["matches"]} for j in so["judgments"]}, {"unknown_id": 0, "unknown_slot": 0, "bad_fit": 0}
@@ -181,6 +235,11 @@ def mutations():
         ("API 키를 안 지움", lambda: setattr(slots, "STRIP_ENV", ()), lambda: setattr(slots, "STRIP_ENV", ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"))),
         ("자리마다 1위만 detect로", lambda: setattr(detect_feed, "slot_picks", firsts_only), lambda: setattr(detect_feed, "slot_picks", orig_picks)),
         ("HN 점수 문턱 없음", lambda: setattr(slots, "HN_MIN_POINTS", 0), lambda: setattr(slots, "HN_MIN_POINTS", 100)),
+        ("v2 프로필인데 v1 지시문 (지금 방식이 아니면 깎는다)", lambda: setattr(slots, "system_for", lambda s: slots.SYSTEM),
+         lambda: setattr(slots, "system_for", orig_system_for)),
+        ("넓은 후보 끔 (HF 작업별 순위 · LocalLLaMA 출시 낱말 없는 글)", lambda: setattr(slots, "WIDE_CANDIDATES", False),
+         lambda: setattr(slots, "WIDE_CANDIDATES", True)),
+        ("같은 모델을 묶지 않음", lambda: setattr(slots, "fold_same_model", lambda xs: xs), lambda: setattr(slots, "fold_same_model", orig_fold)),
     ]
 
 
