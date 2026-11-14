@@ -113,6 +113,13 @@ tier-screen v2(`eval/tier-screen/results-v2.md`)에서 Elasticsearch·Neo4j 서�
 - **못 고치는 것**: 「우리 줄(39)이 이미 지원 밖」은 아무 소식도 말하지 않으면 알 수 없다. 다른 줄이라 뺀 eol 중 **우리보다 새 줄**의 지원 종료는 실행 요약에 「알림: electron 우리 39.2.6 < 지원 종료된 42 줄 — 우리 줄도 지원 밖일 수 있다」로 한 줄 남긴다(판정이 아니라 알림 — 「새 줄이 끝나면 옛 줄도 끝났다」는 Electron·Python에선 맞지만 Node LTS에선 틀린다). 지원 일정을 구조화된 출처(endoflife.date 등)로 읽는 것은 따로 정한다(사용자 결정 — 새 이슈)
 확인 (같은 날, API 없음): 정답지 W41 102 · W42 151 · 과거 릴리스 187에 정답 라벨을 그대로 넣고 전/후를 견주면 **남김/버림이 바뀌는 항목 0** — 빠지는 라벨 6개(전부 「Python 3.9 지원 중단」, 우리는 3.12)는 다른 종류(breaking)로 남거나 원래 버림이다. 남는 eol: plugin-react 6.0.0 「Vite 7 and below」(우리 vite 7.2.6 — 우리 줄, L7이라 버림) · torch 2.11·2.12(CUDA — 버전을 모름) · vllm 0.24.0(문장 못 뽑음). 정답지 은퇴 남김 2건(W41)은 둘 다 본문에 우리 모델이 있다 → C1 영향 없음. 저장된 관문 결과에 모델 라벨을 그대로 다시 걸면 W43은 바뀌는 것 없음 · W44는 남김 31 → 29(Electron 42 EOL 2건이 버림) · 은퇴 페이지 두 건은 L2 은퇴 행만 빠지고 deprecation으로 남는다 · 보이는 5칸 그대로 · 알림 1줄(electron 39 < 42)
 
+**변경 (2026-11-11, 사용자 — HYO-183, 결정표·분류 프롬프트·지표는 그대로)**: **공식 보안 채널 항목은 스크립트가 security를 붙인다** (규율 1, `pipeline/importance/gate.py` `official_advisory`). 공식 보안 채널 = 수집기 `collector/sources/security.py`가 `meta.kind: advisory`로 적는 OSV 공지 · Python `security-announce` · Node.js 보안 릴리스(HYO-170 다, W46부터). 계기: W46 Node.js 「Wednesday, November 11, 2026 Security Releases」(26.x · 24.x · 22.x 사전 공지)를 관문(gpt-6.1-sol)이 종류 없음(`[]`)으로 답해 minor·patch로 쳐졌고 `electron L1 × minor·patch = ❌`로 버려졌다. 같은 주 Python 공지 3건(CVE 번호가 제목에 있음)은 security로 남았다.
+- D1(security = 명시만)의 「글이 보안 문제라고 밝힌 것」을 **출처로** 집행한다 — 공식 보안 채널에 올라온 공지는 그 자체가 보안 명시다
+- 위 HYO-148의 「빼기만 한다 — 모델이 안 짚은 종류를 더하지 않는다」의 **예외**다. 후속 모델(HYO-129)처럼 스크립트가 더하는 것이고, 대상은 공식 보안 채널 항목뿐이다. 모델이 짚은 다른 종류는 그대로 두고 security만 더한다(덧붙은 minor·patch는 `normalize_changes`가 뺀다)
+- 남김은 결정표대로다 — security는 모든 등급에서 ✅라 공식 공지는 기술 등급이 있으면 남는다. OSV 공지의 우리 버전 해당 여부(목록만 / detect)는 그대로 칸 정리에서 나눈다
+- 기록: 관문 결과에 `official_security: true`(스크립트가 더했을 때만), 모델 원래 라벨은 `model_changes`에 그대로. trace 2b 줄에 「공식 보안 공지라 security (스크립트)」
+- 확인 (같은 날, API 없음 — 저장된 W46 모델 답으로 `trace --now`): W46 Node.js 공지 버림 → 「항상」 칸 · detect. 공식 채널 항목은 W46부터라 W41~W45 재생(HYO-164 포함)에는 영향이 없다
+
 ## 4. 결정표 — 등급 × 변화 → 남김(✅) / 버림(❌)
 
 초안을 그대로 확정했다.
