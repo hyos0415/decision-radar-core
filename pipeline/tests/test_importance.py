@@ -202,7 +202,7 @@ def test_topk_always_then_per_technology():
             _tcand("bedrock:pricing", "L2", "pricing", "Amazon Bedrock"),
             _tcand("anthropic:a", "L5", "breaking", "anthropic"), _tcand("anthropic:b", "L5", "deprecation", "anthropic"),
             _tcand("anthropic:c", "L5", "major", "anthropic"), _tcand("anthropic:d", "L5", "major", "anthropic")]
-    r = policy.apply_topk(w44)
+    r = policy.apply_topk(w44, k=3)      # 11/4~11/12 상한 (k를 주면 그대로 돈다)
     always = {e["id"] for e in r["always"]}
     assert always == {"e42.11.16", "e43.8.1", "e44.9.1", "e42.11.17", "e42.11.18", "e45b6", "lf3.225.14", "lf4.69.0", "lf4.70.0", "openai:deprecations"}, always
     # 접기: 다른 줄 5건 → 가장 새 v44.9.1 · 우리 줄 베타는 따로 · langfuse 4.x 둘 → v4.70.0 · 3.x는 따로 · 벤더 문서는 접지 않는다
@@ -218,6 +218,10 @@ def test_topk_always_then_per_technology():
     assert len(r["listed"]) == 10 + 3 + 1 + 3 and r["query"]["anthropic:b"] == "anthropic"
     one = policy.apply_topk(w44, k=1)
     assert {e["id"] for e in one["detect"]} - always == {e["id"] for e in one["listed"]} - always == {"e45", "bedrock:pricing", "anthropic:a"}
+    # 변경 (2026-11-13): 기본은 기술 질의 상한 없음 — 4위도 목록 · detect, 잘린 것 없음. 「항상」 접기는 그대로
+    full = policy.apply_topk(w44)
+    assert full["cut"] == [] and {"e452", "anthropic:d"} <= {e["id"] for e in full["detect"]} and full["rank"]["anthropic:d"] == 4
+    assert full["folded"] == r["folded"] and "e42.11.16" not in {e["id"] for e in full["detect"]}
     # 줄 기록이 없으면 주 버전(0.x는 부 버전)으로 · 패키지가 다르면 따로 (langchain-core ≠ langchain)
     assert policy.fold_key({"id": "u", "title": "astral-sh/uv 0.13.5"}) == ("uv", "line", (0, 13))
     assert policy.fold_key({"id": "c", "title": "langchain-ai/langchain langchain-core==1.7.4"}) != policy.fold_key({"id": "l", "title": "langchain-ai/langchain langchain==1.4.8"})
@@ -931,14 +935,23 @@ def test_lane_a_gate_wiring_and_cap():
     assert all(e["gate_status"] == "ok" and e["gate"] is not None for e in a.values())
     assert a["m"]["gate"]["keep"] is False and a["m"]["shown"] is None
     summ = res["gate_summary"]
-    # 질의별 top-3 (§4 변경 2026-11-04, HYO-168): security는 「항상」, 기술마다 top-3 목록 = detect
-    assert summ["mode"] == "topk" and summ["total_kept"] == 9 and summ["label"] == "5/9 · 목록 5", summ["label"]
+    # 질의별 top-k (§4 변경 2026-11-04, HYO-168) → 기술 질의 상한 없음 (변경 2026-11-13): security는 「항상」, 기술마다 전부 목록 = detect
+    assert summ["mode"] == "topk" and summ["total_kept"] == 9 and summ["label"] == "9/9 · 목록 9" and summ["k"] is None, summ["label"]
     assert [x["id"] for x in summ["always"]] == ["s"]
-    assert [(x["id"], x["rank"]) for x in summ["listed"]] == [("s", None), ("d0", 1), ("d1", 2), ("d2", 3), ("f", 1)], summ["listed"]
-    assert [x["id"] for x in summ["shown"]] == ["s", "d0", "d1", "d2", "f"], summ["shown"]
-    assert {c["id"] for c in summ["truncated"]} == {"d3", "d4", "d5", "d6"}
-    assert a["s"]["always"] is True and a["d1"]["listed"] is True and a["d1"]["shown"] is True and a["d3"]["listed"] is False and a["d3"]["shown"] is False
+    assert [(x["id"], x["rank"]) for x in summ["listed"]] == [("s", None)] + [(f"d{i}", i + 1) for i in range(7)] + [("f", 1)], summ["listed"]
+    assert [x["id"] for x in summ["shown"]] == ["s"] + [f"d{i}" for i in range(7)] + ["f"], summ["shown"]
+    assert summ["truncated"] == []
+    assert a["s"]["always"] is True and a["d6"]["listed"] is True and a["d6"]["shown"] is True and a["d6"]["rank"] == 7
     assert a["d0"]["query"] == "pydantic" and a["f"]["rank"] == 1
+    # 상한을 다시 두면(11/4~11/12 동작, k=3) 기술마다 3위까지만 — 배선은 그대로
+    old = policy.TOPK
+    policy.TOPK = 3
+    try:
+        summ3 = gate_mod.cap_lane_a(res["lane_a"])
+    finally:
+        policy.TOPK = old
+    assert summ3["label"] == "5/9 · 목록 5" and summ3["k"] == 3 and {c["id"] for c in summ3["truncated"]} == {"d3", "d4", "d5", "d6"}, summ3["label"]
+    assert a["d3"]["listed"] is False and a["d3"]["shown"] is False and a["d2"]["shown"] is True
     # 예전 동작(weekly5): 5/N · 기술당 1칸 먼저 (§4 변경 2026-10-27) — pydantic 7건이 칸을 다 채우지 않고 fastapi가 들어온다
     summ5 = gate_mod.cap_lane_a(res["lane_a"], 5, mode="weekly5")
     assert summ5["total_kept"] == 9 and summ5["label"] == "5/9" and len(summ5["truncated"]) == 4
@@ -2190,7 +2203,10 @@ def mutations():
         ("상한: 남은 칸을 안 채움", [(policy, "apply_cap", _cap_no_fill)], test_cap_one_slot_per_technology_then_fill),
         ("상한: 기술당 칸 제한 없음 (관문 배선)", [(policy, "PER_TECH", 0)], test_lane_a_gate_wiring_and_cap),
         ("top-k: 「항상」 칸 없음 (보안도 몫 경쟁)", [(policy, "ALWAYS_CHANGES", ())], test_topk_always_then_per_technology),
-        ("top-k: k를 무시 (전부 목록)", [(policy, "TOPK", 99)], test_topk_always_then_per_technology),
+        ("기술 질의 상한이 되살아남 (top-3)", [(policy, "TOPK", 3)], test_topk_always_then_per_technology),
+        ("기술 질의 상한이 되살아남 (관문 배선)", [(policy, "TOPK", 3)], test_lane_a_gate_wiring_and_cap),
+        ("top-k: k를 무시 (전부 목록)", [(policy, "apply_topk", lambda entries, k=None, _f=policy.apply_topk: _f(entries))],
+         test_topk_always_then_per_technology),
         ("top-k: 기술 대신 항목마다 따로 셈", [(policy, "cap_technology", lambda e: e["id"])], test_topk_always_then_per_technology),
         ("top-k: 관문 배선이 예전 5칸으로", [(policy, "CAP_MODE", "weekly5")], test_lane_a_gate_wiring_and_cap),
         ("스택에서 뺀 기술(retired)을 무시하고 판정", [(TierStore, "effective", _retired_ignored)], test_retired_technology_is_recorded_but_not_judged),

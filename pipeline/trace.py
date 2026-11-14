@@ -120,7 +120,7 @@ def gate_steps(g, entry, cap):
 def cap_step(entry, cap):
     cap = cap or {}
     if cap.get("mode") == "topk":
-        k = cap.get("k") or policy.TOPK
+        k = cap.get("k") or policy.TOPK or "∞"      # 2026-11-13부터 상한 없음(null) — 잘린 줄이 안 생긴다
         q = entry.get("query") or "?"
         if entry.get("shown"):
             return step("3", True, "「항상」 칸 — detect로" if entry.get("always") else f"기술 질의 {q} {entry.get('rank')}위 — detect로")
