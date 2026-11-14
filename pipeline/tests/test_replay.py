@@ -315,9 +315,24 @@ def test_weeks_registry():
     assert [rp.WEEKS[w]["pr"] for w in rp.WEEKS] == [8, 13, 16]
     assert [rp.WEEKS[w]["next"] for w in rp.WEEKS] == ["2026-W42", "2026-W43", "2026-W44"]
     assert rp.K == 3 and rp.MIN_RUNS == 2 and rp.CODE == "4eab096"
+    assert rp.SLOTS_REV == "97cdf63" and rp.TIERS_REV == "c01954c"     # 등록 시점 입력 (§7 변경 2026-11-11)
 
 
-TESTS = [(n, f) for n, f in globals().items() if n.startswith("test_")]
+def test_pinned_ignores_newer_head():
+    """입력 파일은 고정 커밋의 것 — HEAD에 새 버전이 들어와도(11/13 자리 프로필 v2) 바뀌지 않는다. 고정 커밋 · 파일이 없으면 멈춘다."""
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "adr"
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        c1 = commit(repo, "2026-11-04T00:00:00Z", {"radar-slots.yaml": "version: 1\n"})
+        commit(repo, "2026-11-12T00:00:00Z", {"radar-slots.yaml": "version: 2\n"})
+        full, text = rp.pinned(repo, c1[:7], "radar-slots.yaml", "자리 프로필")
+        assert full == c1 and text.strip() == "version: 1", (full, text)      # 변이: HEAD에서 고르면 version: 2
+        raises(lambda: rp.pinned(repo, "0000000", "radar-slots.yaml", "자리 프로필"))
+        raises(lambda: rp.pinned(repo, c1, "tiers.json", "등급 파일"))
+
+
+TESTS =[(n, f) for n, f in globals().items() if n.startswith("test_")]
 
 
 def main():

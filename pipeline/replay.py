@@ -42,6 +42,9 @@ from pipeline.importance.signals import norm  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 CODE = "4eab096"            # 제품 코드 고정 (§7 변경 2026-11-11 — 등록 429d9e5에서 바꿈, 결과 전)
+# 입력 파일도 등록 시점 커밋으로 고정 — HEAD에서 고르면 등록 뒤 커밋이 섞인다 (11/14 실행 전 수정: 11/13 adr 자리 프로필 v2가 v1 코드 4eab096에 들어갈 뻔했다)
+SLOTS_REV = "97cdf63"       # adr radar-slots.yaml 첫 버전(11/4) — §7 변경 2026-11-11 「세 주 모두」
+TIERS_REV = "c01954c"       # radar-snapshots tiers.json — §7 「지금 tiers.json(커밋된 것)」 = 등록(11/11) 때 마지막 커밋(11/4 litellm retired). 주간 재분류가 HEAD를 옮긴다
 GATE_MODEL = "gpt-6.1-sol"  # collector.weekly.DEFAULT_GATE와 같다
 TIERS_MODEL = "claude-sonnet-5-5"   # pipeline.importance.cli.WEEKLY_MODEL과 같다
 K = 3                        # 모델 단계 반복 (§7) — 「제품이 냄」 = K번 중 MIN_RUNS번 이상
@@ -184,6 +187,15 @@ def export_tree(repo, commit, dest):
 def show(repo, rev, path):
     ok, out = _git("show", f"{rev}:{path}", cwd=repo)
     return out if ok else None
+
+
+def pinned(repo, rev, path, what):
+    """고정 커밋의 파일 → (전체 해시, 내용). 커밋이나 파일이 없으면 멈춘다 — 지금 HEAD로 조용히 넘어가지 않는다."""
+    full = _need(_git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}", cwd=repo), f"{what} 고정 커밋 {rev}이 {repo}에 없다")
+    text = show(repo, full, path)
+    if text is None:
+        raise ReplayError(f"{what}: 고정 커밋 {rev}에 {path}가 없다")
+    return full, text
 
 
 # ---------------------------------------------------------------------------- 등급 파일
@@ -357,12 +369,12 @@ class Week:
         extra = json.loads(se.read_text(encoding="utf-8")) if se and se.exists() else []
         write_json(self.dir / "inputs" / "stack-extra.json", extra)
         # 자리 프로필 — 그 주엔 없었다(adr 97cdf63, 11/4). 사용자 결정 11/11: 켜고 결과에 표시
-        slots_rev = _need(_git("log", "-1", "--format=%H", "HEAD", "--", "radar-slots.yaml", cwd=adr_repo), "radar-slots.yaml 커밋")
+        slots_rev, slots_text = pinned(adr_repo, SLOTS_REV, "radar-slots.yaml", "자리 프로필")
         (self.dir / "inputs").mkdir(parents=True, exist_ok=True)
-        (self.dir / "inputs" / "radar-slots.yaml").write_text(show(adr_repo, slots_rev, "radar-slots.yaml") or "", encoding="utf-8", newline="\n")
-        # 등급 파일 — 지금 radar-snapshots tiers.json(커밋된 것)을 그 주 스택으로 자른다. 재분류는 tiers 단계
-        tiers_rev = _need(_git("log", "-1", "--format=%H", "HEAD", "--", "tiers.json", cwd=snaps), "tiers.json 커밋")
-        pruned, prune = prune_tiers(json.loads(show(snaps, tiers_rev, "tiers.json")), stack_names(derived, extra))
+        (self.dir / "inputs" / "radar-slots.yaml").write_text(slots_text, encoding="utf-8", newline="\n")
+        # 등급 파일 — 등록 때 radar-snapshots tiers.json(TIERS_REV)을 그 주 스택으로 자른다. 재분류는 tiers 단계
+        tiers_rev, tiers_text = pinned(snaps, TIERS_REV, "tiers.json", "등급 파일")
+        pruned, prune = prune_tiers(json.loads(tiers_text), stack_names(derived, extra))
         write_json(self.dir / "tiers.json", pruned)
         # 스킬 쪽 — 그 주 초안 파일과 사람 결정(status가 proposed에서 처음 바뀐 커밋)
         skill = self.skill_side(adr_repo, draft)
