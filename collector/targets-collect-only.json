@@ -1,12 +1,4 @@
 {
- "_note": "수집만 하는 대상 repo — 다른 사람의 repo. 결정 기록·알림은 그 사람의 ADR repo가 맡는다 (사용자 결정 2026-10-08 나안). path = 이 레포와 같은 부모 아래의 형제 폴더 이름. 수집 노트북에 그 폴더가 클론돼 있어야 한다. 내 스택은 adr/radar-targets.json — 여기에 넣지 않는다",
- "targets": [
-  {
-   "repo": "Andbread_Frontend",
-   "path": "Andbread_Frontend",
-   "owner": "프론트엔드 팀원 (HYO-49)",
-   "added": "2026-10-08",
-   "source": "https://github.com/andbread/Andbread_Frontend (develop)"
-  }
- ]
+ "_note": "수집만 하는 대상 repo — 다른 사람의 repo. 결정 기록·알림은 그 사람의 ADR repo가 맡는다 (사용자 결정 2026-10-08 나안). path = 이 레포와 같은 부모 아래의 형제 폴더 이름. 수집 노트북에 그 폴더가 클론돼 있어야 한다. 내 스택은 adr/radar-targets.json — 여기에 넣지 않는다. 2026-11-16: Andbread_Frontend(프론트엔드 팀원, 2026-10-08 추가)를 뺐다 — 내 작업물이 아니다, W48부터 (사용자 결정, HYO-182 · docs/decisions/real-use-changes.md)",
+ "targets": []
 }
