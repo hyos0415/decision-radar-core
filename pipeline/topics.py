@@ -46,7 +46,10 @@ def link_key(url):
     """URL → 같은 대상을 가리키면 같은 키 (없으면 None). 쿼리·조각은 버린다 (YouTube `v`만 예외)."""
     if not url:
         return None
-    p = urlparse(url.strip())
+    try:
+        p = urlparse(url.strip())
+    except ValueError:     # 본문에서 뽑은 깨진 링크(예: 난독화 `https://x[dot` → Invalid IPv6 URL) — 그 링크만 키 없음 (W47 trace, #305)
+        return None
     host = p.netloc.lower().split(":")[0].removeprefix("www.").removeprefix("m.")
     if not host or host in SKIP_HOSTS or host.endswith(".reddit.com") or "." not in host or LOCAL_HOST.match(host):
         return None                                            # 토론 페이지 · 미디어 업로더 · localhost · 사설 IP
