@@ -137,6 +137,23 @@ def test_slots_step_runs_when_profile_exists_and_failure_continues():
     assert [s["ok"] for s in w2.summary()["steps"] if s["name"] == "slots"] == [False]
 
 
+def test_interest_step_runs_when_profile_exists_and_failure_continues():
+    """HYO-187 — 관심사 프로필(radar-profile.yaml)이 있으면 자리 질의 다음 · feed 앞에 관심사 질의를 같은 run 폴더로 돌린다.
+    실패해도(구독 claude -p) detect 입력은 게시한다. 프로필이 없으면 건너뛴다 (위 test_order_and_args — World 기본은 프로필 없음)."""
+    w = World()
+    Path(w.env["RADAR_PROFILE"]).write_text("version: 1\ninterests: []\n", encoding="utf-8")
+    rc, _ = w.go("--no-push")
+    assert rc == 0 and w.mods()[3:6] == ["pipeline.profile_filter", "pipeline.interest", "pipeline.detect_feed"], w.mods()
+    it = w.calls[4]
+    assert it[1][0] == "run" and arg(it, "--snapshot") == str(w.snaps / WEEK) and arg(it, "--out") == str(w.pout / WEEK)
+    assert arg(it, "--profile") == w.env["RADAR_PROFILE"]
+    w2 = World(fail={"pipeline.interest"})
+    Path(w2.env["RADAR_PROFILE"]).write_text("version: 1\ninterests: []\n", encoding="utf-8")
+    rc, _ = w2.go()
+    assert rc == 0 and f"detect/{WEEK}/feed.json" in w2.remote_files()
+    assert [s["ok"] for s in w2.summary()["steps"] if s["name"] == "interest"] == [False]
+
+
 def test_health_step_alerts_after_freeze_and_failure_continues():
     """HYO-172 — 얼릴 때 쓴 <주>/source-health.json이 있으면 얼림 다음에 Linear 알림을 부른다. 실패해도 사슬은 간다.
     파일이 없으면(얼릴 때 검사가 죽었다) 건너뛴다 (위 test_order_and_args)."""
@@ -419,6 +436,78 @@ def test_plists():
     assert plistlib.loads(plistlib.dumps(w)) == w
     m = schedule_mac.plists(_ns(weekly_day="sunday", weekly_time="07:05"), repo)["weekly"]["StartCalendarInterval"]
     assert m == {"Weekday": 0, "Hour": 7, "Minute": 5}
+    assert w["EnvironmentVariables"] == {"PYTHONIOENCODING": "utf-8", "PATH": ":".join(schedule_mac.BASE_PATH)}, w["EnvironmentVariables"]
+
+
+def test_plist_claude_path():
+    """launchd는 셸 PATH를 안 읽는다 — 설치 때 찾은 claude를 RADAR_CLAUDE_BIN과 PATH 맨 앞에 넣는다 (HYO-182)."""
+    repo = Path("/r/jhs-decisions")
+    pl = schedule_mac.plists(_ns(), repo, "/Users/u/.local/bin/claude")
+    for kind in ("weekly", "aws"):
+        env = pl[kind]["EnvironmentVariables"]
+        assert env["RADAR_CLAUDE_BIN"] == "/Users/u/.local/bin/claude", env
+        dirs = env["PATH"].split(":")
+        assert dirs[0] == "/Users/u/.local/bin" and "/opt/homebrew/bin" in dirs and "/usr/bin" in dirs, dirs
+        assert plistlib.loads(plistlib.dumps(pl[kind])) == pl[kind]
+    same = schedule_mac.launch_env("/opt/homebrew/bin/claude")["PATH"]
+    assert same == ":".join(schedule_mac.BASE_PATH), same          # 겹치는 폴더는 한 번만
+
+
+def test_require_claude():
+    empty = tempfile.mkdtemp()
+    try:
+        schedule_mac.require_claude({"PATH": empty})
+    except SystemExit as e:
+        assert "RADAR_CLAUDE_BIN" in str(e), e
+    else:
+        raise AssertionError("claude가 없는데 통과했다")
+    assert schedule_mac.require_claude({"PATH": empty, "RADAR_CLAUDE_BIN": "/x/claude"}) == "/x/claude"
+
+
+def test_check_env_is_minimal():
+    """미리 확인은 예약 실행과 같은 환경으로 — 셸의 API 키 · RADAR_* 가 남으면 터미널에선 되고 예약에선 안 되는 것을 못 잡는다."""
+    base = {"HOME": "/Users/u", "USER": "u", "PATH": "/somewhere", "ANTHROPIC_API_KEY": "k", "RADAR_GATE": "g"}
+    env = schedule_mac.check_env("/x/bin/claude", base)
+    assert env["HOME"] == "/Users/u" and env["USER"] == "u", env
+    assert "ANTHROPIC_API_KEY" not in env and "RADAR_GATE" not in env, env
+    assert env["PATH"].split(":")[0] == "/x/bin" and "/somewhere" not in env["PATH"], env
+
+
+class _Done:
+    def __init__(self, rc, out):
+        self.returncode, self.stdout, self.stderr = rc, out, ""
+
+
+def _fake_runner(auth_method, calls):
+    def run(argv, env=None, **kw):
+        calls.append((list(argv), dict(env or {})))
+        if argv[0] == "git":
+            return _Done(0, "")
+        if argv[1:] == ["--version"]:
+            return _Done(0, "9.9.9 (Claude Code)")
+        if argv[1:3] == ["auth", "status"]:
+            return _Done(0, json.dumps({"authMethod": auth_method}))
+        if argv[1] == "-p":
+            return _Done(0, "ok")
+        return _Done(1, "")
+    return run
+
+
+def test_check_rows():
+    base = {"HOME": "/Users/u", "PATH": tempfile.mkdtemp(), "RADAR_CLAUDE_BIN": "/x/bin/claude", "ANTHROPIC_API_KEY": "k"}
+    repo = Path(tempfile.mkdtemp()) / "jhs-decisions"
+    calls = []
+    rows = {n: (ok, d) for n, ok, d in schedule_mac.check(repo, call=True, runner=_fake_runner("claude.ai", calls), base=base)}
+    for name in ("claude 경로", "claude --version", "구독 로그인", f"{schedule_mac.CHECK_MODEL} 호출 (구독 세션 1)"):
+        assert rows[name][0], (name, rows[name])
+    assert rows["git 원격: radar-snapshots"] == (False, f"폴더 없음 {repo.parent / 'radar-snapshots'}"), rows
+    claude_calls = [env for argv, env in calls if argv[0] == "/x/bin/claude"]
+    assert len(claude_calls) == 3 and all("ANTHROPIC_API_KEY" not in e and e["RADAR_CLAUDE_BIN"] == "/x/bin/claude" for e in claude_calls)
+    rows = {n: ok for n, ok, _ in schedule_mac.check(repo, runner=_fake_runner("console", []), base=base)}
+    assert rows["구독 로그인"] is False, rows                     # API 로그인이면 구독이 아니다 — 그대로 돌리면 과금
+    assert not any("호출" in n for n in rows), rows               # --call 없이는 claude -p를 부르지 않는다
+    rows = schedule_mac.check(repo, runner=_fake_runner("claude.ai", []), base={"PATH": tempfile.mkdtemp()})
+    assert rows[0][:2] == ("claude 경로", False) and not any(n.startswith("claude --") for n, _, _ in rows), rows
 
 
 def test_install_refused_off_darwin():

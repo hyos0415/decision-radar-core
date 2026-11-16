@@ -122,6 +122,25 @@ python pipeline/tests/test_trace.py                              # 「놓친 것
 - `--now` 재생: 쪼갠 changelog의 원래 항목 · 경보 그물 글처럼 그 주에 모델 답이 없는 것은 2b에서 「기록된 모델 답 없음」으로 멈춘다 (모델을 부르지 않는다). 자리 질의는 run 폴더(또는 `--slots`)의 결과를 그대로 쓴다
 - `--report <report.json>`이면 5 detect의 결과(초안 · 버림 + 이유 · 이미 반영됨)를 붙인다 — `list.json`에 되돌려 붙이는 건 화면(HYO-168) 뒤
 
+## 같은 주 재생 (HYO-164: `replay.py`)
+
+W41~W43 입력으로 제품 detect를 다시 돌려 그 주 스킬이 실제로 낸 detect 초안과 견준다. 등록: `docs/design/comparison-protocol.md` §7 「같은 주 재생」 + 변경 (2026-11-11). 보고: `docs/decisions/replay-W41-W43.md`.
+
+```bash
+export RADAR_ADR_REPO=../adr RADAR_SNAPSHOT_REPO=../radar-snapshots          # 둘 다 읽기만 한다
+python -m pipeline.replay plan    --out pipeline/out/replay-W41-W43            # 무료 — 날짜 기준 basis · ADR · 등급 파일 + 유료 호출 수
+python -m pipeline.replay run     --out pipeline/out/replay-stub --engine stub # 배관 확인 (모델 없음)
+python -m pipeline.replay run     --out pipeline/out/replay-W41-W43 --engine real --confirm-real   # 사용자 승인 뒤 (관문 API · 등급 API · 구독 claude -p)
+python -m pipeline.replay compare --out pipeline/out/replay-W41-W43            # 둘 다 · 스킬만 · 제품만 + 갈린 단계 → compare.json · compare.md
+python pipeline/tests/test_replay.py                                          # 오프라인 — 임시 git repo, 변이 포함
+```
+
+- **날짜 기준 basis**: `dated_tree(at)`를 `basis.materialize`의 tree 자리에 꽂는다 — 대상 레포 작업 사본의 원격 추적 기록에서 그 시각 이전 first-parent 마지막 커밋을 `git clone --shared` 사본으로. 원격은 부르지 않고, 기록이 그 시각을 덮지 못하면 멈춘다(`--allow-stale`로만 넘긴다)
+- 실제 실행(`--engine real`)은 제품 코드(pipeline · product · collector · 스킬 — 러너 자신 파일 제외)가 고정 커밋 `CODE`와 다르면 거부한다 (등록: 재생 중 코드 수정 금지)
+- `Guard`: ADR repo · radar-snapshots의 HEAD · 작업 트리 상태와 데스크톱 데이터 폴더의 `events.jsonl` 등을 단계마다 견준다. 출력 폴더가 그 안이나 대상 레포 작업 사본 안이면 거부
+- 단계는 주간 사슬처럼 제품 CLI를 자식 프로세스로 부른다 (`profile_filter run` → `slots run` → `detect_feed --no-fetch` → `run_detect.py --model claude-cli` × k). 자식 env에서 `RADAR_UNION` · `RADAR_EXPORT` · 실제 폴더 env를 지운다
+- 출력 `<out>/<주>/`: `week.json`(시각 · 커밋 · 자른 등급 · 사람 결정) · `basis.json` · `adr/`(그 시점 사본) · `tiers.json` · `gate/` · `feed/`(trace.jsonl 포함) · `detect/k1..k3/` · `skill/` · `steps.log`. 루트에 `plan.json` · `replay.json`(실행 기록) · `compare.json` · `compare.md`
+
 ## 레인 C 화제 (HYO-127: `topics.py`)
 
 분야를 가리지 않고 그 주에 인기 있던 소식을 토픽으로 묶어 상위 k (doc-pipeline §2-3 변경 2026-10-19). A·B와 점수를 합치지 않는다. 네트워크·모델 호출 없음.

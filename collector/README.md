@@ -20,7 +20,8 @@ powershell -ExecutionPolicy Bypass -File collector\schedule_windows.ps1 -Remove 
 ```bash
 # macOS (launchd — 잠자기 중 놓친 실행은 깨어날 때 돈다). --print는 plist만 보여 준다 (어느 OS에서나)
 .venv/bin/python -m collector.schedule_mac --print
-.venv/bin/python -m collector.schedule_mac --install      # ~/Library/LaunchAgents + launchctl bootstrap
+.venv/bin/python -m collector.schedule_mac --check [--call] # 예약 실행과 같은 최소 환경으로 claude · 구독 로그인 · git 원격 · 대상 폴더 확인 (등록 안 함, --call = Haiku claude -p 1회)
+.venv/bin/python -m collector.schedule_mac --install      # ~/Library/LaunchAgents + launchctl bootstrap. claude를 설치·로그인한 셸에서 — 찾은 경로를 plist RADAR_CLAUDE_BIN · PATH에 넣는다 (launchd는 셸 PATH를 안 읽는다, HYO-182)
 .venv/bin/python -m collector.schedule_mac --remove
 python -m collector.weekly --dry-run                      # 사슬이 부를 명령만 출력
 python -m collector.weekly --from gate --week 2026-W44 [--no-push]   # 중간부터 다시 (앞 단계는 건너뜀)

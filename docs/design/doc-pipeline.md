@@ -164,6 +164,11 @@ excludes:
 - 왜: W44 python 묶음에서 id 순 대표가 본문 없는 트윗 미러 링크(http2shell 186점)가 되고, 전용 사이트 · CVE 블로그가 붙은 Broccoli2Shell(400점)이 접혔다 — 둘은 같은 Aikido 발표 계열이라 접기는 맞고 대표가 틀렸다. 다른 사고가 같은 기술에 겹치는 주도 있을 수 있어 접힌 글을 detect가 보게 한다(사용자: 아니다 싶으면 경보 글은 접지 않는 쪽으로 튼다). http2shell 제목의 「Node」가 `Node.js`에 안 걸렸다
 - 오프라인(W41~W45, 모델 없이): `Node`로 그물에 새로 걸린 글 0건(http2shell에 `Node.js` 표시만 더해짐) · 대표가 바뀐 묶음은 W44 python 하나
 
+변경 (2026-11-12, 사용자 — HYO-185 후속): 런타임 이름에 **서버 OS** `Ubuntu` · `Linux` · `OpenSSH`를 더하고, 줄임 이름에 **`apt`(소문자만, 대소문자 구분)**를 더한다. 나머지(사고 낱말 · 문턱 · 묶기)는 그대로.
+- 왜: 사용자가 medical-mate AI 서버(AWS Lightsail · Ubuntu 24.04 · Docker Compose)를 직접 운영한다(11/12). 그런데 그물이 서버 OS 이름을 몰라 W45 「CVE-2026-98432: 9.8 CVE affecting all Ubuntu versions」 · W46 「Ubuntu still has not released patch for Linux 0day RCE」(HN 627) · 「Alpine Linux … OpenSSH-server password authentication bypass」(HN 627)가 운영 목록에서 「우리 스택 아님」으로 빠졌다 — 보안 위험도 골드셋(HYO-185, `eval/security/`)에서는 1급 × 닿음 · 모름인 사고다
+- `apt`를 대소문자 무시 이름으로 두지 않는 이유: 보안 기사의 대문자 「APT」는 국가 해킹 조직(advanced persistent threat)이다 — 「Chinese APT group exploits …」가 우리 것으로 걸린다(테스트 함정 · 변이)
+- 오프라인(W41~W46 얼린 스냅숏, 모델 없이 `pipeline.alarm.net`에 이름만 더해 봄): 새로 걸리는 글 — `Linux` 8(커널 취약점 3 · CVE-2026-98432 3 · Ubuntu 0-day · Alpine OpenSSH, 엉뚱한 것은 공유기 글 「… eCos, Linux」 1) · `Ubuntu` 2 · `OpenSSH` 2 · `apt` 2(Debian apt 중간자 공격). `OpenSSL` · `Lightsail`은 0건이라 넣지 않았다. 지금 코드로 다시 걸면(`pipeline.trace … --now`) W45 · W46 Ubuntu · OpenSSH 글이 목록 「경보」 칸 → detect(`security_alert`)로 간다
+
 ### 2-4. 주간 스냅숏 (HYO-72, 2026-10-06)
 
 - **저장 위치 = 새 private data repo `hyos0415/radar-snapshots`** (사용자 결정 2026-10-06). 기각: decision-radar(나중에 공개한다 — Reddit·HN 본문을 재배포하게 되고 git 이력에서 빼기 어렵다) · ADR repo(설정은 필요 없지만 사람이 쓴 결정 기록과 스킬 배포 대상 사이에 매주 기계 커밋이 섞인다). 대가: 클라우드 skill v2(HYO-75)가 읽으려면 GitHub App과 routine sources에 이 repo를 붙여야 한다

@@ -19,9 +19,14 @@ ALARM = re.compile(r"(?i)\bCVE-\d|vulnerab|exploit|backdoor|malware|infostealer|
                    r"\bPSA\b|yank|deprecat|retir|end.of.life|\bEOL\b|sunset|shut(?:ting)?.down|discontinu|security (?:fix|advisory|update|patch|release)")
 # 스택 manifest에 이름으로 안 나오지만 우리가 그 위에서 돈다 (Python 백엔드 · Electron 안의 Node · Chromium · 패키지 저장소 · 이미지 · CI ·
 # 구독 CLI 엔진 — eval 러너 · 자리 질의 · 제품 엔진이 claude -p, judge가 codex exec)
-RUNTIME_TERMS = ("Python", "CPython", "Node.js", "Chromium", "PyPI", "npm", "Docker", "GitHub Actions", "Claude Code", "Codex")
-# 줄임 이름 → 런타임 이름. 대소문자를 가려 본다 — 「Kubernetes node」 같은 보통 낱말은 안 걸리게 (W44 「http2shell is an RCE in Node, Python」, 2026-11-04)
-CASED_ALIASES = {"Node": "Node.js"}
+RUNTIME_TERMS = ("Python", "CPython", "Node.js", "Chromium", "PyPI", "npm", "Docker", "GitHub Actions", "Claude Code", "Codex",
+                 # 서버 OS (HYO-185 후속, 2026-11-12 사용자 「medical-mate AI 서버를 직접 운영」 — Lightsail Ubuntu 24.04 · Docker Compose).
+                 # 이 이름이 없어 W45 「CVE-2026-98432 … Ubuntu」 · W46 「Ubuntu … Linux 0day RCE」 · 「OpenSSH … bypass」가 「우리 스택 아님」으로 빠졌다.
+                 # W41~W46에 더해 보면 새로 걸리는 글 중 엉뚱한 것은 공유기 글(「… eCos, Linux」) 1건
+                 "Ubuntu", "Linux", "OpenSSH")
+# 줄임 이름 → 런타임 이름. 대소문자를 가려 본다 — 「Kubernetes node」 같은 보통 낱말은 안 걸리게 (W44 「http2shell is an RCE in Node, Python」, 2026-11-04).
+# apt(서버 패키지 관리자)는 소문자만 — 대문자 「APT」는 보안 기사에서 국가 해킹 조직(advanced persistent threat)이다 (W46 「Debian apt security update」, 2026-11-12)
+CASED_ALIASES = {"Node": "Node.js", "apt": "apt"}
 ALIAS_FLAGS = 0               # 대소문자 구분 (re.I로 바꾸면 「Kubernetes node」도 걸린다 — 테스트 변이)
 # 스택 이름이지만 영어 낱말로 더 흔하다 — 제목에서 이름으로 보지 않는다 (W43 「… in response to requests」)
 COMMON_WORDS = {"requests"}

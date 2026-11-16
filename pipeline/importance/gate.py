@@ -119,7 +119,11 @@ class Gate:
         except Exception as e:  # noqa: BLE001 — 안전 실패: 버리고 기록한다 (조용히 남기지도, 조용히 사라지게 두지도 않는다)
             return {**base, "status": "error", "tiers": {t: e2["tiers"] for t, e2 in effs.items()},
                     "reason": f"변화 분류 실패: {type(e).__name__}: {str(e)[:120]}"}
-        changes = policy.normalize_changes(ans.labels, item.get("title") or "", policy.item_tag(item))   # 프리릴리스 · x.0.0 아닌 major, 덧붙인 minor_patch 빼기 (§3 변경 2026-10-21 · 2026-11-11)
+        labels_in = list(ans.labels)
+        official = official_advisory(item) and "security" not in labels_in
+        if official:       # 공식 보안 채널 공지는 그 자체가 보안 명시(D1) — 모델이 종류를 비우거나 다른 것만 짚어도 security (§3 변경 2026-11-11, HYO-183)
+            labels_in.append("security")
+        changes = policy.normalize_changes(labels_in, item.get("title") or "", policy.item_tag(item))   # 프리릴리스 · x.0.0 아닌 major, 덧붙인 minor_patch 빼기 (§3 변경 2026-10-21 · 2026-11-11, HYO-131 · HYO-169)
         rows, kept_by, defaulted, scoped = [], [], False, []
         versions = self.versions
         for t, e in effs.items():
@@ -140,7 +144,12 @@ class Gate:
                "남기는 행 없음: " + ", ".join(sorted({f"{r['tier']}×{policy.CHANGE_LABEL[r['change']]}={r['base']}" for r in rows})))
         return {"keep": keep, "status": "ok", "technologies": techs, "tiers": {t: e["tiers"] for t, e in effs.items()}, "changes": changes, "model_changes": list(ans.labels),
                 "rows": rows, "kept_by": kept_by, "defaulted_change": defaulted, "skipped": base["skipped"], "successor": base["successor"],
-                "scope": scoped, "reason": why, **_advisory(item)}
+                "scope": scoped, "reason": why, **({"official_security": True} if official else {}), **_advisory(item)}
+
+
+def official_advisory(item):
+    """공식 보안 채널(OSV · Python security-announce · Node.js 보안 릴리스, collector/sources/security.py) 항목인가."""
+    return (item.get("meta") or {}).get("kind") == "advisory"
 
 
 def _advisory(item):
@@ -155,7 +164,7 @@ def cap_lane_a(entries, limit=policy.WEEKLY_LIMIT, mode=None):
     """레인 A 항목들(각각 `gate` 칸을 가짐)에서 detect로 갈 것을 고른다. 항목에 `shown`(= detect로 간다)을 쓰고 요약을 돌려준다.
     잘린 것은 summary["truncated"] — 로그용.
     - topk (기본, 2026-11-04 HYO-168): 「항상」 + 기술마다 top-k 목록(`listed` · `rank` · `always` · `query`), detect는 「항상」을 (패키지 × 줄)마다
-      최신 1건으로 접은 것(`folded_into` = 대표 id) + 기술마다 top-k
+      최신 1건으로 접은 것(`folded_into` = 대표 id) + 기술마다 top-k. 2026-11-13부터 k = policy.TOPK = None(상한 없음 — 요약의 "k"도 null)
     - weekly5 (그 전): 5/N 상한 · 기술당 1칸 먼저"""
     mode = mode or policy.CAP_MODE
     kept = [{"id": e["id"], "kept_by": e["gate"]["kept_by"], "title": e.get("title"), "release_line": _release_line(e),

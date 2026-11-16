@@ -49,7 +49,11 @@ WEEKLY_LIMIT = 5
 PER_TECH = 1
 # 질의별 top-k (§4 변경 2026-11-04, 사용자 — HYO-168, query-topk.md). "weekly5"면 위의 5칸 상한(2026-11-04 전 동작)
 CAP_MODE = "topk"
-TOPK = 3
+# TOPK = 3
+# 변경 (2026-11-13, 사용자 「바로 풀어버리고」 — HYO-187 PR): 기술 질의 상한을 없앤다 (None = 기술마다 전부 목록 · detect).
+# 얼린 W43~W46에 다시 걸어 보니 3위 밖으로 잘린 것은 FastAPI 연속 릴리스 8건(W43 3 · W44 5, 전부 breaking)뿐이었고,
+# 정렬 키가 id 순이라 옛 버전(0.145~0.147)이 남고 새 버전이 잘렸다. 풀어도 늘어나는 detect는 많아야 주 5건
+TOPK = None
 # 「항상」 칸 — 이 종류로 남긴 것은 몇 건이든 보이고 detect로 간다 (순위·몫 밖, 사용자 11/4 「아묻따 항상」)
 ALWAYS_CHANGES = ("security", "eol", "model_retirement")
 # 변경 (2026-11-04, 사용자 — W44 · W45 오프라인 비교 뒤): 「항상」은 목록에는 전부, detect로는 (패키지 × 줄)마다 최신 1건 (안 A').
@@ -260,9 +264,10 @@ def apply_topk(entries, k=None):
     """남긴 후보 → 질의별 top-k (§4 변경 2026-11-04). entries는 {"id", "kept_by", ...} (+ 접기에 쓰는 "title" · "release_line").
     「항상」(보안 · 우리 버전 EOL · 모델 은퇴)은 몫 밖에서 전부 목록, detect로는 fold_key마다 가장 새 버전 1건(경보 글은 가장 인기 있는 글 — "popularity", 같으면 정렬 순서 앞).
     OSV 공지는 패키지마다 1건(악성 기록 먼저), 우리 버전 해당 없는 공지(quiet_advisory)는 목록에만.
-    나머지는 기술(cap_technology)마다 정렬 순서로 k개까지 목록 · DETECT_TOPK개까지 detect.
+    나머지는 기술(cap_technology)마다 정렬 순서로 k개까지 목록 · DETECT_TOPK개까지 detect. k를 안 주면 TOPK — None이면 상한 없음 (2026-11-13부터).
     → {"always", "listed"(항상 포함, 정렬 순서), "detect", "cut", "rank": {id: 기술 안 순위}, "query": {id: 기술}, "folded": {접힌 id: 대표 id}}"""
     k = TOPK if k is None else k
+    k = float("inf") if k is None else k
     dk = k if DETECT_TOPK is None else DETECT_TOPK
     ordered = sorted(entries, key=rank_key)
     always = [e for e in ordered if is_always(e)]

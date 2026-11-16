@@ -132,6 +132,27 @@ def test_detect_feed_lists_alarm_unknown_and_not_ours():
         assert "경보 그물 7" in detect_feed.funnel_line(f)
 
 
+SERVER_ITEMS = [   # W45 · W46 실제 제목 (점수도 그대로) + 대문자 APT 함정
+    _it("hn:ubuntu0day", "hn", "Ubuntu still has not released patch for Linux 0day RCE in almost 3 weeks", 627),
+    dict(_it("hn:tcpuaf", "hn", "TCP Use-After-Free: CVE-2026-98432 / CVSS 9.8", 740), url="https://atlasum.net/blog/cve-2026-98432-linux-ipv4-tcp-uaf"),
+    _it("hn:openssh", "hn", "OpenSSH 10.6p2 has been released with a workaround for a critical vulnerability", 185),
+    _it("hn:debianapt", "hn", "Debian apt security update: man-in-the-middle arbitrary code execution", 101),
+    _it("hn:aptgroup", "hn", "Chinese APT group exploits a router zero-day", 300),
+]
+
+
+def test_net_catches_server_os_incidents():
+    """서버 OS 이름 (HYO-185 후속, 2026-11-12 사용자: medical-mate AI 서버를 Lightsail Ubuntu 24.04로 직접 운영).
+    W46 운영 목록은 이 글들을 「우리 스택 아님」으로 뺐다 — 이름이 없어서."""
+    hits = {it["id"]: m for it, m in alarm.net(SERVER_ITEMS, STACK)}
+    assert set(hits) == {"hn:ubuntu0day", "hn:tcpuaf", "hn:openssh", "hn:debianapt"}, sorted(hits)
+    assert hits["hn:ubuntu0day"] == ["Ubuntu", "Linux"], hits["hn:ubuntu0day"]
+    assert hits["hn:tcpuaf"] == ["Linux"], hits["hn:tcpuaf"]                              # 제목에 이름이 없고 URL에만 있다
+    assert hits["hn:openssh"] == ["OpenSSH"] and hits["hn:debianapt"] == ["apt"], hits     # apt는 소문자 줄임 이름으로
+    no = alarm.not_ours(SERVER_ITEMS, set(hits))
+    assert [x["id"] for x in no] == ["hn:aptgroup"], no                                   # 대문자 APT(해킹 조직)는 우리 이름이 아니다
+
+
 def test_retired_technology_stays_quiet():
     # LiteLLM 기각(2026-11-04): 등급 파일 사람 수정에 retired → PyPI 이름으로 그물에 걸려도 관문이 「스택에서 뺀 기술」로 빼고 경보 칸에도 안 간다
     st = _store()
@@ -164,12 +185,17 @@ def mutations():
         ("「우리 스택 아님」 인기 문턱 없음", lambda: setattr(alarm, "NOT_OURS_HN_POINTS", 0), lambda: setattr(alarm, "NOT_OURS_HN_POINTS", 100)),
         ("경보 대표를 id 순으로", lambda: setattr(alarm, "popularity", lambda it: (0,)), lambda: setattr(alarm, "popularity", orig_popularity)),
         ("접힌 경보를 detect 입력에 안 붙임", lambda: setattr(detect_feed, "kin_note", lambda items: ""), lambda: setattr(detect_feed, "kin_note", orig_kin_note)),
-        ("줄임 이름(Node) 없음", lambda: setattr(alarm, "CASED_ALIASES", {}), lambda: setattr(alarm, "CASED_ALIASES", {"Node": "Node.js"})),
+        ("줄임 이름(Node · apt) 없음", lambda: setattr(alarm, "CASED_ALIASES", {}), lambda: setattr(alarm, "CASED_ALIASES", orig_aliases)),
+        ("서버 OS 이름 없음 (HYO-185)", lambda: setattr(alarm, "RUNTIME_TERMS", tuple(t for t in orig_runtime if t not in ("Ubuntu", "Linux", "OpenSSH"))),
+         lambda: setattr(alarm, "RUNTIME_TERMS", orig_runtime)),
+        ("apt를 대소문자 무시 이름으로 (APT 해킹 조직이 걸림)", lambda: setattr(alarm, "RUNTIME_TERMS", orig_runtime + ("apt",)),
+         lambda: setattr(alarm, "RUNTIME_TERMS", orig_runtime)),
         ("줄임 이름을 대소문자 무시로", lambda: setattr(alarm, "ALIAS_FLAGS", re.I), lambda: setattr(alarm, "ALIAS_FLAGS", 0)),
     ]
 
 
 orig_runtime, orig_popularity, orig_kin_note = alarm.RUNTIME_TERMS, alarm.popularity, detect_feed.kin_note
+orig_aliases = dict(alarm.CASED_ALIASES)
 
 
 def run_mutations():

@@ -202,7 +202,7 @@ def test_topk_always_then_per_technology():
             _tcand("bedrock:pricing", "L2", "pricing", "Amazon Bedrock"),
             _tcand("anthropic:a", "L5", "breaking", "anthropic"), _tcand("anthropic:b", "L5", "deprecation", "anthropic"),
             _tcand("anthropic:c", "L5", "major", "anthropic"), _tcand("anthropic:d", "L5", "major", "anthropic")]
-    r = policy.apply_topk(w44)
+    r = policy.apply_topk(w44, k=3)      # 11/4~11/12 상한 (k를 주면 그대로 돈다)
     always = {e["id"] for e in r["always"]}
     assert always == {"e42.11.16", "e43.8.1", "e44.9.1", "e42.11.17", "e42.11.18", "e45b6", "lf3.225.14", "lf4.69.0", "lf4.70.0", "openai:deprecations"}, always
     # 접기: 다른 줄 5건 → 가장 새 v44.9.1 · 우리 줄 베타는 따로 · langfuse 4.x 둘 → v4.70.0 · 3.x는 따로 · 벤더 문서는 접지 않는다
@@ -218,6 +218,10 @@ def test_topk_always_then_per_technology():
     assert len(r["listed"]) == 10 + 3 + 1 + 3 and r["query"]["anthropic:b"] == "anthropic"
     one = policy.apply_topk(w44, k=1)
     assert {e["id"] for e in one["detect"]} - always == {e["id"] for e in one["listed"]} - always == {"e45", "bedrock:pricing", "anthropic:a"}
+    # 변경 (2026-11-13): 기본은 기술 질의 상한 없음 — 4위도 목록 · detect, 잘린 것 없음. 「항상」 접기는 그대로
+    full = policy.apply_topk(w44)
+    assert full["cut"] == [] and {"e452", "anthropic:d"} <= {e["id"] for e in full["detect"]} and full["rank"]["anthropic:d"] == 4
+    assert full["folded"] == r["folded"] and "e42.11.16" not in {e["id"] for e in full["detect"]}
     # 줄 기록이 없으면 주 버전(0.x는 부 버전)으로 · 패키지가 다르면 따로 (langchain-core ≠ langchain)
     assert policy.fold_key({"id": "u", "title": "astral-sh/uv 0.13.5"}) == ("uv", "line", (0, 13))
     assert policy.fold_key({"id": "c", "title": "langchain-ai/langchain langchain-core==1.7.4"}) != policy.fold_key({"id": "l", "title": "langchain-ai/langchain langchain==1.4.8"})
@@ -684,6 +688,34 @@ def test_retired_technology_is_recorded_but_not_judged():
     assert both["status"] == "ok" and both["keep"] and [k["technology"] for k in both["kept_by"]] == ["python", "python"], both   # 남은 기술은 그대로 판정
 
 
+def _advisory_item(iid, title="Node.js security: Wednesday, November 11, 2026 Security Releases", **meta):
+    return {"id": iid, "source": "nodejs", "title": title, "url": "", "text": "", "channels": ["runtime-security:nodejs"],
+            "meta": {"kind": "advisory", "runtime": "nodejs", "dependency": "electron", **meta}}
+
+
+def test_official_advisory_is_security_even_when_model_misses_it():
+    # HYO-183 (2026-11-11): W46 Node.js 11/11 보안 릴리스 사전 공지 — 모델이 종류를 비워 minor·patch로 쳐졌고 electron L1 ❌로 떨어졌다
+    st = _store(electron={"tiers": ["L1"]}, pytest={"tiers": ["L7"]})
+    g = gate_mod.Gate(StubBackend(changes={"node": [], "node2": ["minor_patch"], "node3": ["security"], "both": ["breaking"],
+                                           "osv": [], "rel": []}), st)
+    r = g(_advisory_item("node"))
+    assert r["keep"] and r["changes"] == ["security"] and r["model_changes"] == [] and r["official_security"], r
+    assert not r["defaulted_change"] and [k["change"] for k in r["kept_by"]] == ["security"], r
+    r2 = g(_advisory_item("node2"))       # 모델이 minor·patch만 짚어도 — 덧붙인 minor·patch는 normalize가 뺀다
+    assert r2["keep"] and r2["changes"] == ["security"] and r2["model_changes"] == ["minor_patch"] and r2["official_security"], r2
+    r3 = g(_advisory_item("node3"))       # 모델이 이미 security면 스크립트가 더한 것이 아니다
+    assert r3["keep"] and r3["changes"] == ["security"] and "official_security" not in r3, r3
+    r4 = g(_advisory_item("both"))        # 다른 종류는 그대로 두고 security를 더한다
+    assert r4["changes"] == ["breaking", "security"] and r4["official_security"], r4
+    # OSV 공지도 공식 채널 — 남김은 표(security는 모든 등급 ✅), 우리 버전 해당 여부는 그대로 실려 목록/detect 나누기에 쓰인다
+    r5 = g({**_advisory_item("osv", title="GHSA-xxxx pytest"), "source": "osv",
+            "meta": {"kind": "advisory", "dependency": "pytest", "osv_id": "GHSA-xxxx", "affects_ours": False}})
+    assert r5["keep"] and r5["changes"] == ["security"] and r5["official_security"] and r5["advisory"]["affects_ours"] is False, r5
+    # 공식 채널이 아닌 릴리스는 예전 그대로 (모델이 비우면 minor·patch)
+    r6 = g(_item("rel", "electron/electron electron v45.1.2", tech="electron"))
+    assert not r6["keep"] and r6["defaulted_change"] and "official_security" not in r6, r6
+
+
 def test_cli_run_reads_team_stack_from_collect_only_targets():
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
@@ -924,14 +956,23 @@ def test_lane_a_gate_wiring_and_cap():
     assert all(e["gate_status"] == "ok" and e["gate"] is not None for e in a.values())
     assert a["m"]["gate"]["keep"] is False and a["m"]["shown"] is None
     summ = res["gate_summary"]
-    # 질의별 top-3 (§4 변경 2026-11-04, HYO-168): security는 「항상」, 기술마다 top-3 목록 = detect
-    assert summ["mode"] == "topk" and summ["total_kept"] == 9 and summ["label"] == "5/9 · 목록 5", summ["label"]
+    # 질의별 top-k (§4 변경 2026-11-04, HYO-168) → 기술 질의 상한 없음 (변경 2026-11-13): security는 「항상」, 기술마다 전부 목록 = detect
+    assert summ["mode"] == "topk" and summ["total_kept"] == 9 and summ["label"] == "9/9 · 목록 9" and summ["k"] is None, summ["label"]
     assert [x["id"] for x in summ["always"]] == ["s"]
-    assert [(x["id"], x["rank"]) for x in summ["listed"]] == [("s", None), ("d0", 1), ("d1", 2), ("d2", 3), ("f", 1)], summ["listed"]
-    assert [x["id"] for x in summ["shown"]] == ["s", "d0", "d1", "d2", "f"], summ["shown"]
-    assert {c["id"] for c in summ["truncated"]} == {"d3", "d4", "d5", "d6"}
-    assert a["s"]["always"] is True and a["d1"]["listed"] is True and a["d1"]["shown"] is True and a["d3"]["listed"] is False and a["d3"]["shown"] is False
+    assert [(x["id"], x["rank"]) for x in summ["listed"]] == [("s", None)] + [(f"d{i}", i + 1) for i in range(7)] + [("f", 1)], summ["listed"]
+    assert [x["id"] for x in summ["shown"]] == ["s"] + [f"d{i}" for i in range(7)] + ["f"], summ["shown"]
+    assert summ["truncated"] == []
+    assert a["s"]["always"] is True and a["d6"]["listed"] is True and a["d6"]["shown"] is True and a["d6"]["rank"] == 7
     assert a["d0"]["query"] == "pydantic" and a["f"]["rank"] == 1
+    # 상한을 다시 두면(11/4~11/12 동작, k=3) 기술마다 3위까지만 — 배선은 그대로
+    old = policy.TOPK
+    policy.TOPK = 3
+    try:
+        summ3 = gate_mod.cap_lane_a(res["lane_a"])
+    finally:
+        policy.TOPK = old
+    assert summ3["label"] == "5/9 · 목록 5" and summ3["k"] == 3 and {c["id"] for c in summ3["truncated"]} == {"d3", "d4", "d5", "d6"}, summ3["label"]
+    assert a["d3"]["listed"] is False and a["d3"]["shown"] is False and a["d2"]["shown"] is True
     # 예전 동작(weekly5): 5/N · 기술당 1칸 먼저 (§4 변경 2026-10-27) — pydantic 7건이 칸을 다 채우지 않고 fastapi가 들어온다
     summ5 = gate_mod.cap_lane_a(res["lane_a"], 5, mode="weekly5")
     assert summ5["total_kept"] == 9 and summ5["label"] == "5/9" and len(summ5["truncated"]) == 4
@@ -2492,6 +2533,8 @@ def mutations():
         ("버전 못 읽은 major도 뺌 (HYO-169)", [(policy, "is_formal_major", lambda title: False)], test_normalize_changes_prerelease_major_and_lone_minor_patch),
         ("태그를 안 보고 제목(릴리스 이름)만 봄 (HYO-169)", [(policy, "item_tag", lambda item: None)], test_normalize_changes_prerelease_major_and_lone_minor_patch),
         ("관문이 변화 종류 정리를 안 함 (모델 라벨 그대로)", [(policy, "normalize_changes", lambda changes, title="": list(changes))], test_normalize_changes_prerelease_major_and_lone_minor_patch),
+        ("공식 보안 공지도 모델 종류만 봄 (W46 Node.js 놓침, HYO-183)", [(gate_mod, "official_advisory", lambda item: False)], test_official_advisory_is_security_even_when_model_misses_it),
+        ("모든 소식을 공식 보안 공지로 봄", [(gate_mod, "official_advisory", lambda item: True)], test_official_advisory_is_security_even_when_model_misses_it),
         ("두 등급인데 첫 등급 행만 적용 (관문)", [(policy, "decide", _first_tier_only)], test_lane_a_gate_wiring_and_cap),
         ("모델 은퇴 ✅를 ❌로", [(policy, "TABLE", _widened_table())], test_every_cell_default_context),
         ("모델 은퇴 ✅를 ❌로 (문서 대조)", [(policy, "TABLE", _widened_table())], test_table_matches_policy_doc),
@@ -2507,7 +2550,10 @@ def mutations():
         ("상한: 남은 칸을 안 채움", [(policy, "apply_cap", _cap_no_fill)], test_cap_one_slot_per_technology_then_fill),
         ("상한: 기술당 칸 제한 없음 (관문 배선)", [(policy, "PER_TECH", 0)], test_lane_a_gate_wiring_and_cap),
         ("top-k: 「항상」 칸 없음 (보안도 몫 경쟁)", [(policy, "ALWAYS_CHANGES", ())], test_topk_always_then_per_technology),
-        ("top-k: k를 무시 (전부 목록)", [(policy, "TOPK", 99)], test_topk_always_then_per_technology),
+        ("기술 질의 상한이 되살아남 (top-3)", [(policy, "TOPK", 3)], test_topk_always_then_per_technology),
+        ("기술 질의 상한이 되살아남 (관문 배선)", [(policy, "TOPK", 3)], test_lane_a_gate_wiring_and_cap),
+        ("top-k: k를 무시 (전부 목록)", [(policy, "apply_topk", lambda entries, k=None, _f=policy.apply_topk: _f(entries))],
+         test_topk_always_then_per_technology),
         ("top-k: 기술 대신 항목마다 따로 셈", [(policy, "cap_technology", lambda e: e["id"])], test_topk_always_then_per_technology),
         ("top-k: 관문 배선이 예전 5칸으로", [(policy, "CAP_MODE", "weekly5")], test_lane_a_gate_wiring_and_cap),
         ("스택에서 뺀 기술(retired)을 무시하고 판정", [(TierStore, "effective", _retired_ignored)], test_retired_technology_is_recorded_but_not_judged),
