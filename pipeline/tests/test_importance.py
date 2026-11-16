@@ -6,6 +6,8 @@
 통과는 증거가 아니다 — 두 등급 한쪽만 적용 · 모델 은퇴 ✅→❌ · C1을 k 중 하나만 · 스크립트 검증 무시 · 사람 수정 무시 · 상한 정렬 · 경로 보정 무시 · 허용 호스트 확대를 잡아야 한다.
 """
 import asyncio
+import contextlib
+import io
 import json
 import re
 import socket
@@ -2168,6 +2170,82 @@ def test_cli_backend_batch_shuffles_by_seed_maps_numbers_and_fails_safe():
         os.environ.pop("RADAR_FAKE_CLI", None) if saved is None else os.environ.__setitem__("RADAR_FAKE_CLI", saved)
 
 
+def _batch_answer(changes, n=10):
+    return {"structured": {"items": [{"n": i, "changes": list(changes), "reason": "r"} for i in range(1, n + 1)]}}
+
+
+def test_weekly_gate_path_batches_cli_calls_before_judging():
+    """주간 경로(profile_filter.run_filter → Gate)도 묶어 묻는다 (HYO-169 — 구독 CLI 관문, 묶음 10). 레인 A · 경보 그물 소식을 먼저 모아
+    10개씩 한 세션에 묻고, 판정은 쌓인 답으로 한다. 묶지 않으면 소식 하나 = 세션 하나(한 주 약 250세션)라 Pro 한도를 넘는다."""
+    saved = os.environ.get("RADAR_FAKE_CLI")
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            st = _store(pydantic={"tiers": ["L4"]})
+            items = [_item(f"p{i}", f"pydantic {i}", tech="pydantic") for i in range(12)] + [_item("u", "something else", tech="nope")]
+            be = _fake_cli(_batch_answer(["breaking"]), d, batch=cli_mod.GATE_BATCH)
+            res = profile_filter.run_filter(items, _profile(), ["kw"], gate=gate_mod.Gate(be, st))
+            flows = [c["flow"] for c in be.log.calls]
+            assert flows == ["changes-batch", "changes-batch"], flows                       # 12건 → 10 + 2. 모르는 기술(u)은 묻지 않는다
+            assert sorted(sum((c["batch_ids"] for c in be.log.calls), [])) == sorted(f"p{i}" for i in range(12))
+            a = {e["id"]: e for e in res["lane_a"]}
+            assert all(a[f"p{i}"]["gate"]["status"] == "ok" and a[f"p{i}"]["gate"]["changes"] == ["breaking"] for i in range(12))
+            assert a["u"]["gate"]["status"] == "unclassified"
+            assert gate_mod.Gate(StubBackend(), st).prefetch([(items[0], [])]) is None       # 묶음이 아닌 백엔드는 그대로 (소식 하나 = 호출 하나)
+    finally:
+        os.environ.pop("RADAR_FAKE_CLI", None) if saved is None else os.environ.__setitem__("RADAR_FAKE_CLI", saved)
+
+
+def test_build_gate_batches_only_cli_engines():
+    seen = []
+
+    def fake(model, **kw):
+        seen.append((model, kw.get("batch")))
+        return StubBackend()
+    with tempfile.TemporaryDirectory() as d, Mutation(cli_mod, "make_backend", fake):
+        st = TierStore(Path(d) / "t.json")
+        st.ensure([TechQuery("pydantic", usage="u")], StubBackend(tiers={"pydantic": ["L4"]}))
+        st.save()
+        for m in ("claude-cli/claude-haiku-5-5", "codex-cli/gpt-6-sol", "gpt-6.1-sol", "stub"):
+            cli_mod.build_gate(m, Path(d) / "t.json", other_stack=[], targets=Path(d) / "none.json")
+    assert seen == [("claude-cli/claude-haiku-5-5", 10), ("codex-cli/gpt-6-sol", 10), ("gpt-6.1-sol", None), ("stub", None)], seen
+
+
+def test_gate_that_judged_nothing_exits_3():
+    """구독 CLI 관문이 통째로 막히면(로그인 · 경로 · 한도) 소식마다 안전 실패라 종료 코드는 0이었다 → 빈 detect가 게시될 뻔했다.
+    모델에 물은 소식이 전부 오류면 종료 코드 3 — 주간 사슬이 멈춘다 (HYO-169). 일부 오류는 지금처럼 기록만."""
+    e = lambda s: {"gate": {"status": s}}  # noqa: E731
+    assert profile_filter.judged_nothing([e("error"), e("unclassified"), e("error")])
+    assert not profile_filter.judged_nothing([e("error"), e("ok")]) and not profile_filter.judged_nothing([e("unclassified")])
+    assert not profile_filter.judged_nothing([]) and not profile_filter.judged_nothing([{"gate": None}])
+    saved = {k: os.environ.get(k) for k in ("RADAR_FAKE_CLI", "RADAR_CLAUDE_BIN")}
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            _write(d / "p.yaml", "version: 1\ninterests:\n  - {topic: 하이브리드 검색, description: d}\n")
+            items = [_item("a1", "pydantic 3 breaking", tech="pydantic"), _item("a2", "pydantic 3.0.1", tech="pydantic")]
+            _write(d / "items.jsonl", "\n".join(json.dumps(i, ensure_ascii=False) for i in items) + "\n")
+            st = TierStore(d / "tiers.json")
+            st.ensure([TechQuery("pydantic", usage="u")], StubBackend(tiers={"pydantic": ["L4"]}))
+            st.save()
+            os.environ["RADAR_CLAUDE_BIN"] = str(FAKE_CLAUDE)
+            base = ["run", "--snapshot", str(d / "items.jsonl"), "--profile", str(d / "p.yaml"), "--no-stack", "--tiers", str(d / "tiers.json"),
+                    "--gate", "claude-cli/claude-haiku-5-5", "--real-api"]
+            (d / "s").mkdir()
+            _fake_cli({"is_error": True, "subtype": "error_during_execution", "structured": None}, d / "s")
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                assert profile_filter.main(base + ["--out", str(d / "bad")]) == 3
+            calls = [json.loads(x) for x in (d / "bad" / "gate-calls.jsonl").read_text(encoding="utf-8").splitlines()]
+            assert calls and all(c["flow"] == "changes-batch" and c.get("error") for c in calls)            # 묶어 물었고(2건 → 1묶음 × 시도) 다 실패
+            _fake_cli(_batch_answer(["breaking"]), d / "s")
+            with contextlib.redirect_stdout(io.StringIO()):
+                assert profile_filter.main(base + ["--out", str(d / "good")]) == 0
+            run = json.loads((d / "good" / "run.json").read_text(encoding="utf-8"))
+            assert run["lane_a_gate"]["calls"]["model_calls"] == 1 and run["lane_a_gate"]["model"] == "claude-cli/claude-haiku-5-5"
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+
 from pipeline.importance import codex_backend  # noqa: E402
 
 FAKE_CODEX = REPO / "pipeline" / "tests" / "fake_codex.py"
@@ -2582,6 +2660,12 @@ def mutations():
         ("창: 재배치 없이 앞에서 자르기만", [(prompts, "window_text", lambda text, text_max=3000: (text or "")[:text_max])], test_window_moves_only_risk_sections_from_outside_the_window),
         ("창: 굵은 라벨(R2)을 못 봄", [(prompts, "_R2_LABEL", re.compile(r"(?!x)x"))], test_window_moves_only_risk_sections_from_outside_the_window),
         ("창: 본문 위험 단어 줄도 옮김", [(prompts, "_R4_COMMIT", re.compile(r"(?i)\b(?:migrate|remove)\b"))], test_window_moves_only_risk_sections_from_outside_the_window),
+        ("주간 관문이 묶어 묻지 않음 (소식 하나 = 세션 하나)", [(gate_mod.Gate, "prefetch", lambda self, entries: None)], test_weekly_gate_path_batches_cli_calls_before_judging),
+        ("주간 관문 묶음 크기 10 → 1", [(cli_mod, "GATE_BATCH", 1)], test_build_gate_batches_only_cli_engines),
+        ("API 관문에도 묶음 인자 (gpt-*가 모르는 인자로 깨짐)", [(cli_mod, "CLI_ENGINES", ("claude-cli/", "codex-cli/", "gpt-"))], test_build_gate_batches_only_cli_engines),
+        ("관문 전부 오류여도 0으로 끝남 (빈 detect 게시)", [(profile_filter, "judged_nothing", lambda lane_a: False)], test_gate_that_judged_nothing_exits_3),
+        ("일부 오류만 있어도 멈춤", [(profile_filter, "judged_nothing", lambda lane_a: any(e["gate"]["status"] == "error" for e in lane_a if e.get("gate")))],
+         test_gate_that_judged_nothing_exits_3),
     ]
 
 

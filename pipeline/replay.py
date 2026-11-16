@@ -45,7 +45,7 @@ CODE = "4eab096"            # 제품 코드 고정 (§7 변경 2026-11-11 — �
 # 입력 파일도 등록 시점 커밋으로 고정 — HEAD에서 고르면 등록 뒤 커밋이 섞인다 (11/14 실행 전 수정: 11/13 adr 자리 프로필 v2가 v1 코드 4eab096에 들어갈 뻔했다)
 SLOTS_REV = "97cdf63"       # adr radar-slots.yaml 첫 버전(11/4) — §7 변경 2026-11-11 「세 주 모두」
 TIERS_REV = "c01954c"       # radar-snapshots tiers.json — §7 「지금 tiers.json(커밋된 것)」 = 등록(11/11) 때 마지막 커밋(11/4 litellm retired). 주간 재분류가 HEAD를 옮긴다
-GATE_MODEL = "gpt-6.1-sol"  # collector.weekly.DEFAULT_GATE와 같다
+GATE_MODEL = "gpt-6.1-sol"  # W41~W43 재생(§7 등록)은 그때 운영 관문 그대로 — collector.weekly.DEFAULT_GATE는 W48부터 claude-cli Haiku (HYO-169)
 TIERS_MODEL = "claude-sonnet-5-5"   # pipeline.importance.cli.WEEKLY_MODEL과 같다
 K = 3                        # 모델 단계 반복 (§7) — 「제품이 냄」 = K번 중 MIN_RUNS번 이상
 MIN_RUNS = 2

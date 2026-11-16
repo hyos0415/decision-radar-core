@@ -80,14 +80,16 @@ def run_filter(items, profile, strategies, stack_terms=(), only_new=False, gate=
             e["signals"] = it.get("signals") or {}       # 같은 기술 경보 글 중 대표를 인기 순으로 (alarm.popularity)
         return e
 
-    for it, reasons in lane_a:
-        a_out.append(gate_entry(it, reasons))
     # 경보 그물 (HYO-170 가): 레인 B 중 스택 · 런타임 이름 + 사고 낱말 → 관문에도 (레인 B 순위에도 그대로 남는다).
     # 관문이 이름을 알아보게 걸린 이름을 meta.alarm_terms로 넘긴다
     net = alarm.net(lane_b, stack_terms) if gate is not None else []
-    for it, terms in net:
-        hinted = dict(it, meta=dict(it.get("meta") or {}, alarm_terms=terms))
-        a_out.append(gate_entry(hinted, [f"alarm-net:{', '.join(terms)}"], terms))
+    hinted = [(dict(it, meta=dict(it.get("meta") or {}, alarm_terms=terms)), [f"alarm-net:{', '.join(terms)}"], terms) for it, terms in net]
+    if gate is not None and hasattr(gate, "prefetch"):     # 묶음 백엔드(구독 CLI)면 관문에 걸 소식 전부를 먼저 묶어 묻는다 (HYO-169)
+        gate.prefetch(list(lane_a) + [(h, r) for h, r, _ in hinted])
+    for it, reasons in lane_a:
+        a_out.append(gate_entry(it, reasons))
+    for h, r, terms in hinted:
+        a_out.append(gate_entry(h, r, terms))
     b_out = {s: keyword_match.rank_items(lane_b, profile, s) for s in strategies}
     mentions = {it["id"]: m for it in lane_b if (m := lanes.stack_mentions(it, stack_terms))}
     for ranked in b_out.values():
@@ -176,7 +178,18 @@ def cmd_run(a):
         for x in s.get("newer_line_eol") or []:      # 판정이 아니라 알림 (HYO-148) — 우리 줄도 지원 밖일 수 있다
             print(f"  알림: {x['technology']} 우리 {', '.join(x['ours'])} < 지원 종료된 {x['announced']} 줄 — 우리 줄도 지원 밖일 수 있다 (확인 필요)")
     print(f"-> {out}")
+    if gate is not None and judged_nothing(res["lane_a"]):
+        print(f"관문이 한 건도 판정하지 못했다 — 모델에 물은 소식 전부 오류 ({a.gate}). 빈 목록을 게시하지 않게 멈춘다: "
+              f"{out / 'gate-calls.jsonl'} 의 error를 본다", file=sys.stderr)
+        return 3
     return 0
+
+
+def judged_nothing(lane_a):
+    """모델에 물은 소식(status ok · error)이 있는데 전부 error — 로그인 · claude 경로 · 키처럼 관문 전체가 막힌 경우 (HYO-169).
+    일부 오류는 지금처럼 안전 실패로 기록만 한다(버림 + 기록)."""
+    st = [e["gate"]["status"] for e in lane_a if e.get("gate")]
+    return "error" in st and "ok" not in st
 
 
 def cmd_pool(a):
@@ -225,7 +238,8 @@ def main(argv=None):
     r.add_argument("--adr-dir", help="ADR 폴더 (기본: RADAR_ADR_DIR)")
     r.add_argument("--no-stack", action="store_true", help="스택 표시(stack_mentions)를 건너뛴다")
     r.add_argument("--only-new", action="store_true", help="스냅숏의 new: false 항목을 레인 B에서 뺀다")
-    r.add_argument("--gate", help="레인 A 관문 백엔드: stub | gpt-6-luna | gpt-6.1-sol (HYO-67). 없으면 관문 없이 gate: null")
+    r.add_argument("--gate", help="레인 A 관문 백엔드: stub | claude-cli/claude-haiku-5-5(주간 기본, 묶음 10) | gpt-6.1-sol (HYO-67 · HYO-169). 없으면 관문 없이 gate: null. "
+                                  "모델에 물은 소식이 전부 오류면 종료 코드 3")
     r.add_argument("--tiers", help="기술 등급 파일 (python -m pipeline.importance classify-stack으로 만든다)")
     r.add_argument("--real-api", action="store_true", help="실제 API 호출 허용 (stub 외 모델에 필요)")
     r.add_argument("--gate-limit", type=int, help="주당 표시 상한 (기본 5 — importance-policy §4)")
