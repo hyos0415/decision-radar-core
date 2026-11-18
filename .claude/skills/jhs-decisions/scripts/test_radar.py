@@ -571,6 +571,28 @@ def _(t):
     assert sorted(got) == sorted(urls), (len(got), [g for g in got if g not in urls][:3])
 
 
+@case("snapshot search: RADAR_CORPUS 없으면 search.json 그대로 · 있으면 BM25(제목 가중) · 찾은 항목은 fetch로 열린다 (HYO-201)")
+def _(t):
+    snap, _urls = _snap(t)
+    json.dump(["docs.example/page-00"], open(os.path.join(snap, "search.json"), "w", encoding="utf-8"))
+    env = {"RADAR_SNAPSHOT_DIR": snap, "RADAR_CORPUS": ""}
+    assert run("snapshot", "search", "anything", env=env)["results"] == [{"url": "docs.example/page-00"}]
+    w1, w2 = os.path.join(t, "w1.jsonl"), os.path.join(t, "w2.jsonl")
+    rows = lambda f, items: open(f, "w", encoding="utf-8").write("".join(json.dumps(i) + "\n" for i in items))
+    rows(w1, [{"url": "https://github.com/vllm-project/vllm/releases/tag/v1", "title": "vllm v1", "text": "old"},
+              {"url": "https://example.org/a", "title": "unrelated", "text": "mentions vllm once among many many other words here"}])
+    rows(w2, [{"url": "https://github.com/vllm-project/vllm/releases/tag/v1", "title": "vllm v1", "text": "Breaking: drop CUDA 12"},
+              {"url": "https://example.org/b", "title": "langchain-core 1.8", "text": "python 3.10 support dropped"}])
+    env["RADAR_CORPUS"] = os.pathsep.join([w1, w2])
+    r = run("snapshot", "search", "vllm", env=env)
+    assert r["from"] == "corpus" and [x["url"] for x in r["results"]] == ["github.com/vllm-project/vllm/releases/tag/v1", "example.org/a"], r
+    assert [x["url"] for x in run("snapshot", "search", "core", env=env)["results"]] == ["example.org/b"]   # langchain-core를 조각으로도
+    assert run("snapshot", "search", "", env=env)["results"] == []
+    f = run("snapshot", "fetch", "https://github.com/vllm-project/vllm/releases/tag/v1", env=env)
+    assert f["ok"] and f["from"] == "corpus" and "CUDA 12" in f["body"], f    # 같은 URL은 뒤 주차가 이긴다
+    assert run("snapshot", "fetch", "docs.example/page-01", env=env)["body"] == "body"   # 피드 항목은 예전대로
+
+
 @case("next-id")
 def _(t):
     assert run("next-id", os.path.join(t, "adr"))["next_id"] == "0006"

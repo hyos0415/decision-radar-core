@@ -22,6 +22,7 @@ import argparse
 import datetime as dt
 import glob
 import json
+import math
 import os
 import re
 import sys
@@ -463,12 +464,101 @@ def snapshot_dir():
     return d
 
 
+# ── 코퍼스 검색 (HYO-201) ────────────────────────────────────────────
+# RADAR_CORPUS = 얼린 코퍼스 items.jsonl 경로들(os.pathsep로 여럿). 없으면 search는 예전처럼 search.json을 돌려준다.
+# 표준 라이브러리 BM25 — 스킬 배포 단위라 의존성을 늘리지 않는다. 다른 검색 방식은 이 자리를 바꿔 끼운다.
+
+BM25_K1, BM25_B, TITLE_WEIGHT, SEARCH_K, SNIPPET = 1.2, 0.75, 3, 10, 240
+TOKEN_RE = re.compile(r"[0-9a-z]+(?:[._+-][0-9a-z]+)*|[가-힣]+")
+
+
+def corpus_files():
+    return [p for p in (os.environ.get("RADAR_CORPUS") or "").split(os.pathsep) if p]
+
+
+def tokens(text):
+    out_ = []
+    for t in TOKEN_RE.findall((text or "").lower()):
+        out_.append(t)
+        parts = re.split(r"[._+-]", t)
+        if len(parts) > 1:
+            out_ += [p for p in parts if p]                       # langchain-core → langchain · core 도
+        if "가" <= t[0] <= "힣" and len(t) > 2:
+            out_ += [t[i:i + 2] for i in range(len(t) - 1)]       # 한국어는 2글자 조각도 (조사가 붙어도 맞게)
+    return out_
+
+
+_CORPUS = None
+
+
+def load_corpus():
+    global _CORPUS
+    if _CORPUS is None:
+        items = {}
+        for p in corpus_files():
+            for line in open(p, encoding="utf-8"):
+                if line.strip():
+                    it = json.loads(line)
+                    items[re.sub(r"^https?://", "", it.get("url") or "").rstrip("/")] = it   # 같은 URL은 뒤 주차가 이긴다
+        _CORPUS = items
+    return _CORPUS
+
+
+def corpus_item(url):
+    return load_corpus().get(url) if corpus_files() else None
+
+
+def corpus_search(query, k=SEARCH_K):
+    items = load_corpus()
+    q = set(tokens(query))
+    if not q:
+        return []
+    docs, df = [], {}
+    for url, it in items.items():
+        tf, title = {}, tokens(it.get("title"))
+        body = tokens(it.get("text"))
+        for t in title * TITLE_WEIGHT + body:
+            if t in q:
+                tf[t] = tf.get(t, 0) + 1
+        n = len(title) * TITLE_WEIGHT + len(body)
+        docs.append((url, it, tf, n))
+        for t in tf:
+            df[t] = df.get(t, 0) + 1
+    N = len(docs) or 1
+    avg = sum(d[3] for d in docs) / N or 1
+    scored = []
+    for url, it, tf, n in docs:
+        s = 0.0
+        for t, f in tf.items():
+            idf = math.log(1 + (N - df[t] + 0.5) / (df[t] + 0.5))
+            s += idf * f * (BM25_K1 + 1) / (f + BM25_K1 * (1 - BM25_B + BM25_B * n / avg))
+        if s > 0:
+            scored.append((s, url, it))
+    scored.sort(key=lambda x: -x[0])
+    res = []
+    for s, url, it in scored[:k]:
+        text = it.get("text") or ""
+        low = text.lower()
+        hit = min([i for i in (low.find(t) for t in q) if i >= 0] or [0])
+        res.append({"url": url, "title": it.get("title"), "created_at": it.get("created_at"), "source": it.get("source"),
+                    "score": round(s, 3), "snippet": text[max(0, hit - 60):max(0, hit - 60) + SNIPPET]})
+    return res
+
+
 def cmd_snapshot(a):
     d = snapshot_dir()
     if a.op == "fetch":
         idx = json.load(open(os.path.join(d, "index.json"), encoding="utf-8"))
         url = re.sub(r"^https?://", "", a.arg or "").rstrip("/")
         ent = idx.get(url)
+        item = corpus_item(url) if ent is None else None
+        if item is not None:  # 코퍼스 검색으로 찾은 항목 — 얼린 코퍼스의 본문 (HYO-201)
+            log = os.environ.get("RADAR_SERVED_LOG")
+            if log:
+                append_line(log, url)
+            out({"url": url, "ok": True, "status": 200, "source_type_hint": None, "from": "corpus",
+                 "body": f"# {item.get('title') or ''}\n\n{item.get('text') or ''}"})
+            return
         if ent is None:
             out({"url": url, "ok": False, "status": 404, "error": "not in snapshot index"})
             return
@@ -481,6 +571,9 @@ def cmd_snapshot(a):
             append_line(log, url)
         out({"url": url, "ok": True, "status": 200, "source_type_hint": ent.get("source_type"), "body": body})
     elif a.op == "search":
+        if corpus_files():
+            out({"query": a.arg, "from": "corpus", "results": corpus_search(a.arg or "")})
+            return
         p = os.path.join(d, "search.json")
         urls = json.load(open(p, encoding="utf-8")) if os.path.exists(p) else []
         out({"query": a.arg, "results": [{"url": u} for u in urls]})
