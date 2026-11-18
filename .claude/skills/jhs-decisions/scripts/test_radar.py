@@ -593,6 +593,21 @@ def _(t):
     assert run("snapshot", "fetch", "docs.example/page-01", env=env)["body"] == "body"   # 피드 항목은 예전대로
 
 
+@case("snapshot grep: 코퍼스 끔이면 거부 · 정규식(대소문자 무시) 많이 맞은 순 · 잘못된 정규식은 오류 (DCI, HYO-201)")
+def _(t):
+    snap, _urls = _snap(t)
+    env = {"RADAR_SNAPSHOT_DIR": snap, "RADAR_CORPUS": ""}
+    assert run("snapshot", "grep", "x", env=env)["ok"] is False
+    w = os.path.join(t, "w.jsonl")
+    open(w, "w", encoding="utf-8").write("".join(json.dumps(i) + "\n" for i in [
+        {"url": "https://a.example/1", "title": "one", "text": "CUDA 12 dropped"},
+        {"url": "https://a.example/2", "title": "cuda two", "text": "cuda 13 only\nno cuda 12"}]))
+    env["RADAR_CORPUS"] = w
+    r = run("snapshot", "grep", "cuda 1[23]", env=env)
+    assert r["ok"] and [x["url"] for x in r["results"]] == ["a.example/2", "a.example/1"] and r["results"][1]["lines"] == ["CUDA 12 dropped"], r
+    assert run("snapshot", "grep", "(", env=env)["ok"] is False
+
+
 @case("next-id")
 def _(t):
     assert run("next-id", os.path.join(t, "adr"))["next_id"] == "0006"

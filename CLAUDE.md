@@ -40,7 +40,7 @@
 ### 평가셋
 
 - 스킬 회귀: 53케이스 정답지(`eval/cases/`)는 비공개다 — 공개 사본에는 없다
-- 스크립트 테스트: `test_radar.py` 39/39 · `eval/runner/test_leak.py` · `collector/tests/test_collector.py` · `collector/tests/test_snapshot.py` · `collector/tests/test_health.py` · `infra/smoke.py`
+- 스크립트 테스트: `test_radar.py` 40/40 · `eval/runner/test_leak.py` · `collector/tests/test_collector.py` · `collector/tests/test_snapshot.py` · `collector/tests/test_health.py` · `infra/smoke.py`
 
 ### 알려진 병목
 

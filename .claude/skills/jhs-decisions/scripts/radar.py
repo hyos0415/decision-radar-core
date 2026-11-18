@@ -13,7 +13,7 @@
   radar.py decide    <adr_dir> <results.json|-> [--now ISO] [--apply]
   radar.py apply     <adr_dir> <decision.json>
   radar.py next-id   <adr_dir>
-  radar.py snapshot  fetch <url> | search <query> | feed
+  radar.py snapshot  fetch <url> | search <query> | grep <regex> | feed
 
 출력은 전부 stdout JSON. 표준 라이브러리 + PyYAML.
 """
@@ -545,6 +545,29 @@ def corpus_search(query, k=SEARCH_K):
     return res
 
 
+GREP_MAX, GREP_LINES, GREP_LINE_CHARS = 30, 3, 200
+
+
+def corpus_grep(pattern):
+    """DCI(직접 코퍼스 탐색, HYO-201 2단계) — 정규식(대소문자 무시)이 제목·본문에 맞는 항목. 많이 맞은 순, 맞은 줄 몇 개."""
+    try:
+        rx = re.compile(pattern or "", re.IGNORECASE)
+    except re.error as e:
+        return {"pattern": pattern, "ok": False, "error": f"bad regex: {e}"}
+    if not pattern:
+        return {"pattern": pattern, "ok": False, "error": "empty pattern"}
+    hits = []
+    for url, it in load_corpus().items():
+        lines = [ln for ln in [it.get("title") or ""] + (it.get("text") or "").splitlines() if rx.search(ln)]
+        if lines:
+            hits.append((len(lines), url, it, lines))
+    hits.sort(key=lambda h: (-h[0], h[1]))
+    return {"pattern": pattern, "ok": True, "total": len(hits), "truncated": len(hits) > GREP_MAX,
+            "results": [{"url": url, "title": it.get("title"), "created_at": it.get("created_at"), "hits": n,
+                         "lines": [ln.strip()[:GREP_LINE_CHARS] for ln in lines[:GREP_LINES]]}
+                        for n, url, it, lines in hits[:GREP_MAX]]}
+
+
 def cmd_snapshot(a):
     d = snapshot_dir()
     if a.op == "fetch":
@@ -570,6 +593,8 @@ def cmd_snapshot(a):
         if log:
             append_line(log, url)
         out({"url": url, "ok": True, "status": 200, "source_type_hint": ent.get("source_type"), "body": body})
+    elif a.op == "grep":
+        out(corpus_grep(a.arg) if corpus_files() else {"pattern": a.arg, "ok": False, "error": "RADAR_CORPUS 없음 — 코퍼스 grep이 꺼져 있다"})
     elif a.op == "search":
         if corpus_files():
             out({"query": a.arg, "from": "corpus", "results": corpus_search(a.arg or "")})
@@ -595,7 +620,7 @@ def main():
     s.add_argument("--apply", action="store_true", help="updates를 바로 ADR에 쓴다 (decide+apply 원자화)"); s.set_defaults(f=cmd_decide)
     s = sp.add_parser("apply"); s.add_argument("adr_dir"); s.add_argument("decision"); s.set_defaults(f=cmd_apply)
     s = sp.add_parser("next-id"); s.add_argument("adr_dir"); s.set_defaults(f=cmd_next_id)
-    s = sp.add_parser("snapshot"); s.add_argument("op", choices=["fetch", "search", "feed"]); s.add_argument("arg", nargs="?"); s.set_defaults(f=cmd_snapshot)
+    s = sp.add_parser("snapshot"); s.add_argument("op", choices=["fetch", "search", "grep", "feed"]); s.add_argument("arg", nargs="?"); s.set_defaults(f=cmd_snapshot)
     a = p.parse_args()
     a.f(a)
 

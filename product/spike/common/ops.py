@@ -28,6 +28,11 @@ def snapshot_search(c, query):
     return json.dumps(radar(c, "snapshot", "search", query), ensure_ascii=False)
 
 
+def corpus_grep(c, pattern):
+    c.calls += 1
+    return json.dumps(radar(c, "snapshot", "grep", pattern), ensure_ascii=False)
+
+
 def read_repo_file(c, repo, path):
     c.calls += 1
     root = c.targets.get(repo)
@@ -52,6 +57,8 @@ def match_adr(c, technology, repo, component, use):
 DOCS = {  # 도구 설명 — 두 런타임이 같은 글자로 모델에게 보인다
     "snapshot_fetch": "URL 하나를 연다 (스냅숏 모드). ok=false면 접근 실패다 — status에 이유가 있다.",
     "snapshot_search": "1차 출처를 검색한다 (스냅숏 모드). 결과는 URL 목록 — 내용은 snapshot_fetch로 연다.",
+    "corpus_grep": "이번 주까지 얼린 수집 코퍼스 전체에 정규식(대소문자 무시)을 돌린다. 피드에 없는 소식 · 같은 기술의 다른 글을 찾을 때 쓴다. "
+                   "결과는 많이 맞은 순 30건(url · 제목 · 날짜 · 맞은 줄) — 본문은 snapshot_fetch로 연다.",
     "read_repo_file": "대상 repo 안의 파일 하나를 읽는다. 근거 URL은 결과의 url(`repo:<repo>/<path>`)을 그대로 쓴다.",
     "match_adr": "같은 결정이 이미 있는지 본다. exact = (technology, component, use) 일치, related = 기술이나 component가 같은 ADR.",
     "propose_adr": "ADR 초안을 제안한다. 사람이 승인해야 실행된다 — 실행되면 다음 번호로 파일을 쓰고 validate한다.",
