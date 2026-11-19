@@ -13,7 +13,7 @@ import re
 
 from .. import alarm
 from . import policy, scope, successor
-from .backends import BoundaryError, NewsQuery
+from .backends import BoundaryError, NewsQuery, StubBackend
 from .signals import norm
 
 
@@ -123,7 +123,7 @@ class Gate:
         official = official_advisory(item) and "security" not in labels_in
         if official:       # 공식 보안 채널 공지는 그 자체가 보안 명시(D1) — 모델이 종류를 비우거나 다른 것만 짚어도 security (§3 변경 2026-11-11, HYO-183)
             labels_in.append("security")
-        changes = policy.normalize_changes(labels_in, item.get("title") or "")   # 프리릴리스 major · 덧붙인 minor_patch 빼기 (§3 변경 2026-10-21, HYO-131)
+        changes = policy.normalize_changes(labels_in, item.get("title") or "", policy.item_tag(item))   # 프리릴리스 · x.0.0 아닌 major, 덧붙인 minor_patch 빼기 (§3 변경 2026-10-21 · 2026-11-11, HYO-131 · HYO-169)
         rows, kept_by, defaulted, scoped = [], [], False, []
         versions = self.versions
         for t, e in effs.items():
@@ -145,6 +145,20 @@ class Gate:
         return {"keep": keep, "status": "ok", "technologies": techs, "tiers": {t: e["tiers"] for t, e in effs.items()}, "changes": changes, "model_changes": list(ans.labels),
                 "rows": rows, "kept_by": kept_by, "defaulted_change": defaulted, "skipped": base["skipped"], "successor": base["successor"],
                 "scope": scoped, "reason": why, **({"official_security": True} if official else {}), **_advisory(item)}
+
+    def prefetch(self, entries):
+        """묶음 모드 백엔드(구독 CLI, 묶음 10 — HYO-169)면 이번 판정에서 모델에 물을 질문을 먼저 모아 한꺼번에 묻는다.
+        같은 관문을 모델 없이 한 번 걸어 질문만 모으고(evaluate._gate_items와 같은 방법), 실제 판정은 그 뒤 __call__이 쌓인 답을 읽는다.
+        entries: [(item, reasons)] → 모은 질문 수. 묶음이 아니면 아무것도 안 하고 None (소식 하나 = 호출 하나 그대로)."""
+        if not (getattr(self.backend, "batch", None) and hasattr(self.backend, "prefetch_changes")):
+            return None
+        asked = []
+        dry = Gate(StubBackend(changes=lambda q: asked.append(q) or []), self.store, self.vendor_terms, self.limit,
+                   self.other_stack, self.auto_versions)
+        for item, reasons in entries:
+            dry(item, reasons)
+        self.backend.prefetch_changes(asked)
+        return len(asked)
 
 
 def official_advisory(item):

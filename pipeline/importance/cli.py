@@ -118,7 +118,8 @@ def build_gate(model, tiers_path, *, real_api=False, call_log=None, limit=None, 
         other_stack, info = other_stack_names(targets, store.names() + [o.get("technology", k) for k, o in store.data["overrides"].items()])
     else:
         info = {"given": True}
-    backend = backend or make_backend(model, allow_real=real_api, log=CallLog(call_log))
+    batch = {"batch": GATE_BATCH} if model.startswith(CLI_ENGINES) else {}    # 구독 CLI는 묶어 묻는다 — Gate.prefetch (HYO-169)
+    backend = backend or make_backend(model, allow_real=real_api, log=CallLog(call_log), **batch)
     versions, vinfo = stack_versions(targets)
     gate = Gate(backend, store, load_vendor_terms(), limit or policy.WEEKLY_LIMIT, other_stack=other_stack, versions=versions)
     gate.other_info = {**info, "names": len(other_stack)}
@@ -217,6 +218,8 @@ def cmd_classify(a):
 # 주간 예약이 쓰는 고정 등급 파일 (HYO-122 PR 3) — 주마다 새로 만들지 않고 이어 쓴다(사람 overrides가 남게). 수집 스냅숏 repo(private,
 # 매주 push)에 둔다: 기계가 쓰는 상태이고 기기를 옮겨도 따라온다. RADAR_TIERS로 바꿀 수 있다
 WEEKLY_MODEL = "claude-sonnet-5-5"     # 재분류 모델 (사용자 2026-10-15: API · Sonnet 5.5)
+CLI_ENGINES = ("claude-cli/", "codex-cli/")
+GATE_BATCH = 10    # 구독 CLI 관문은 소식 10개를 한 세션에 (확정 시트 precondition-hyo169 §7 · importance-policy §8 변경 2026-11-11 밤 — Pro 한도)
 STACK_EXTRA = Path(__file__).resolve().parent / "stack-extra.json"
 
 

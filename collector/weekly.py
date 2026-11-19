@@ -37,7 +37,16 @@ REPO = Path(__file__).resolve().parents[1]
 STEP_LOG = "last-weekly-steps.log"  # 예약 작업 콘솔 로그(last-weekly.log)와 달라야 한다 — 위 머리말
 STEPS = ["collect", "freeze", "health", "tiers", "skill", "gate", "slots", "interest", "feed", "revisit", "publish"]
 PUBLISHED = {"detect": "feed.json", "revisit": "index.json"}  # 게시하는 폴더 → 다 만들어졌다는 표시 파일
-DEFAULT_GATE = "gpt-6.1-sol"
+DEFAULT_GATE = "claude-cli/claude-haiku-5-5"  # W48(11/24)부터 구독 claude -p, 묶음 10 (HYO-169 — 11/22 뒤 Claude Pro만). W47까지 gpt-6.1-sol API
+
+
+def gate_hint(gate):
+    """관문 실패 때 볼 곳 — 엔진마다 다르다."""
+    if gate.startswith("claude-cli/"):
+        return "claude 로그인(`claude auth status`) · 경로(RADAR_CLAUDE_BIN — 맥은 `python -m collector.schedule_mac --check`) · 구독 한도"
+    if gate.startswith("codex-cli/"):
+        return "codex 로그인 · 구독 한도"
+    return "OPENAI_API_KEY(.env) · 모델 이름"
 
 
 def run_step(module, args, log, cwd=REPO):
@@ -215,7 +224,7 @@ def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None
                     stop("관문 입력이 없다")
                     continue
                 rc = runner("pipeline.profile_filter", gate_args(p["snapshots"] / week, gate, {**p, "targets": targets()}, run_out), log)
-                record(name, rc == 0, f"백엔드 {gate}" if rc == 0 else f"관문({gate}) 실패, 종료 코드 {rc} — OPENAI_API_KEY(.env) · 모델 이름 · {log} 를 본다", t0=t0)
+                record(name, rc == 0, f"백엔드 {gate}" if rc == 0 else f"관문({gate}) 실패, 종료 코드 {rc}" + (" (모델에 물은 소식 전부 오류)" if rc == 3 else "") + f" — {gate_hint(gate)} · {log} 를 본다", t0=t0)
                 if rc != 0:
                     stop("관문 실패 — feed·게시를 하지 않는다")
                 elif state["targets"]:  # 관문이 읽은 기준 — detect_feed가 detect/<주>/로 옮긴다

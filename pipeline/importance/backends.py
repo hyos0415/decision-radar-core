@@ -9,7 +9,7 @@ speculative fan-out). 판정 근거 텍스트(reason)가 없다. 그래서 결�
   LabelAnswer.reason     근거 텍스트 — 선택 (Jev는 None)
   LabelAnswer.calls      호출 기록 (모델·토큰·비용·시도 횟수 — llm_call 형식)
 
-백엔드를 고르는 곳은 `make_backend(model)` 하나다. 지금: `stub` · `gpt-*`(Agents SDK) · `jev-1.13.0`(urllib 직접 — jev_backend.py) · `claude-*`(Anthropic SDK — claude_backend.py).
+백엔드를 고르는 곳은 `make_backend(model)` 하나다. 지금: `stub` · `gpt-*`(Agents SDK) · `jev-1.13.0`(urllib 직접 — jev_backend.py) · `claude-*`(Anthropic SDK — claude_backend.py) · `claude-cli/<모델>`(구독 `claude -p` — cli_backend.py, HYO-169).
 """
 import json
 from abc import ABC, abstractmethod
@@ -174,12 +174,22 @@ def make_backend(model, *, allow_real=False, **kw):
             raise PermissionError(f"{model}: 실제 API 실행은 --real-api 없이는 거부한다")    # 키 파일도 읽기 전에 거부
         from .jev_backend import JevBackend
         return JevBackend(model, **{k: v for k, v in kw.items() if k in ("key", "log", "base_url", "opener", "guard", "timeout")})
+    if model.startswith("codex-cli/"):       # 구독 `codex exec` (HYO-169 — Sol을 Claude CLI 후보와 같은 조건으로)
+        if not allow_real:
+            raise PermissionError(f"{model}: 실제 모델 실행(구독 CLI)은 --real-api 없이는 거부한다")
+        from .codex_backend import CodexCliBackend
+        return CodexCliBackend(model, **{k: v for k, v in kw.items() if k in ("log", "effort", "bin", "timeout", "batch", "seed")})
+    if model.startswith("claude-cli/"):      # 구독 `claude -p` (HYO-169) — API 키를 읽지 않지만 실제 모델이라 같은 문으로 막는다
+        if not allow_real:
+            raise PermissionError(f"{model}: 실제 모델 실행(구독 CLI)은 --real-api 없이는 거부한다")
+        from .cli_backend import ClaudeCliBackend
+        return ClaudeCliBackend(model, **{k: v for k, v in kw.items() if k in ("log", "effort", "bin", "timeout", "batch", "seed")})
     if model.startswith("claude-"):
         if not allow_real:
             raise PermissionError(f"{model}: 실제 API 실행은 --real-api 없이는 거부한다")    # 키 파일도 읽기 전에 거부
         from .claude_backend import ClaudeBackend
         return ClaudeBackend(model, **{k: v for k, v in kw.items() if k in ("key", "log", "effort", "guard", "client")})
-    raise ValueError(f"모르는 모델 {model!r} (stub · gpt-6-luna · gpt-6.1-sol · jev-1.13.0 · claude-sonnet-5-5 · claude-haiku-5-5)")
+    raise ValueError(f"모르는 모델 {model!r} (stub · gpt-6-luna · gpt-6.1-sol · jev-1.13.0 · claude-sonnet-5-5 · claude-haiku-5-5 · claude-cli/claude-sonnet-5-5)")
 
 
 def check_labels(labels, universe, what):

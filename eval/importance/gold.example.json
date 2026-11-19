@@ -19,7 +19,7 @@
      "gold_changes": ["security"], "gold_keep": true, "basis": "(예시) L7 × security = ✅ (개발 도구도 security는 남긴다)"},
     {"id": "ex-4", "technology": "gpt-6-luna", "title": "Deprecations: gpt-6-luna will be retired on 2027-03-01", "text": "Shutdown date and recommended replacement.",
      "gold_changes": ["model_retirement", "deprecation"], "gold_keep": true, "basis": "(예시) L2 × 모델 은퇴 = ✅"},
-    {"id": "ex-5", "technology": "python:3.12-slim", "title": "python 3.14.0 released", "text": "New major features.",
-     "gold_changes": ["major"], "gold_keep": true, "basis": "(예시) L1 × major = ✅ — 정책 표 그대로; 소음이면 사용자가 ❌로 고친다"}
+    {"id": "ex-5", "technology": "python:3.12-slim", "title": "python 4.0.0 released", "text": "New major features.",
+     "gold_changes": ["major"], "gold_keep": true, "basis": "(예시) L1 × major = ✅ — 정책 표 그대로; 소음이면 사용자가 ❌로 고친다. 제목 3.14.0 → 4.0.0 (2026-11-11, HYO-169: major는 정식 x.0.0만 — §3 ③ · D2를 코드가 집행)"}
   ]
 }

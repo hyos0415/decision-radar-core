@@ -106,7 +106,7 @@ def test_order_and_args():
     assert w.mods() == ["collector.run", "collector.snapshot", "pipeline.importance", "pipeline.profile_filter", "pipeline.detect_feed", "pipeline.revisit_feed"], w.mods()
     gate = w.calls[3]
     assert arg(gate, "--snapshot") == str(w.snaps / WEEK)
-    assert arg(gate, "--gate") == "gpt-6.1-sol" and "--real-api" in gate[1]
+    assert arg(gate, "--gate") == "claude-cli/claude-haiku-5-5" and "--real-api" in gate[1]   # W48부터 구독 CLI (HYO-169)
     assert arg(gate, "--tiers") == str(w.snaps / "tiers.json")
     assert arg(gate, "--out") == str(w.pout / WEEK)
     assert arg(gate, "--profile") == w.env["RADAR_PROFILE"] and arg(gate, "--targets") == w.env["RADAR_TARGETS"] and arg(gate, "--adr-dir") == w.env["RADAR_ADR_DIR"]
@@ -265,6 +265,22 @@ def test_gate_fail_stops():
     assert "feed" not in names and "publish" not in names, names
     assert "관문" in out
     assert not (w.snaps / "detect").exists() and w.remote_files() == [f"{WEEK}/manifest.json", "tiers.json"]
+    gate = next(s for s in w.summary()["steps"] if s["name"] == "gate")
+    assert "claude 로그인" in gate["detail"] and "OPENAI_API_KEY" not in gate["detail"], gate["detail"]   # 기본 관문은 구독 CLI (HYO-169)
+    assert "전부 오류" not in gate["detail"]
+
+
+def test_gate_judged_nothing_stops_with_hint():
+    """관문이 모델에 물은 소식 전부 오류(종료 코드 3 — profile_filter.judged_nothing) → 멈추고 그 사실과 엔진별 볼 곳을 남긴다 (HYO-169)."""
+    w = World()
+    rc, _ = w.go("--no-push", runner=lambda m, a, log: (w.calls.append((m, list(a))) or 3) if m == "pipeline.profile_filter" else w.runner(m, a, log))
+    gate = next(s for s in w.summary()["steps"] if s["name"] == "gate")
+    assert rc == 1 and not gate["ok"] and "전부 오류" in gate["detail"] and "RADAR_CLAUDE_BIN" in gate["detail"], gate["detail"]
+    w2 = World(fail={"pipeline.profile_filter"})
+    w2.env["RADAR_GATE"] = "gpt-6.1-sol"
+    w2.go("--no-push")
+    g2 = next(s for s in w2.summary()["steps"] if s["name"] == "gate")
+    assert "OPENAI_API_KEY" in g2["detail"] and "claude" not in g2["detail"], g2["detail"]
 
 
 def test_feed_fail_stops():

@@ -49,6 +49,9 @@ async def call_tools(cfg_path, calls, allowed):
 
 def main():
     argv = sys.argv[1:]
+    if argv == ["--version"]:          # 진짜 CLI처럼 버전 한 줄 (관문 CLI 백엔드가 실행마다 기록한다, HYO-169)
+        print("0.0.0-fake (Claude Code)")
+        return
     prompt = sys.stdin.read()
     script = {}
     if os.environ.get("RADAR_FAKE_CLI"):
