@@ -17,6 +17,9 @@ class Candidate(BaseModel):
 class Excluded(BaseModel):
     url: str
     reason: str
+    # 「안 쓴다」는 말을 코드가 repo_grep 기록과 대조한다 (HYO-205) — W47을 세 번 돌리니 코드를 안 열고 「미사용」이라 적었고 판정이 갈렸다
+    unused_claim: bool = Field(default=False, description="버린 이유가 「우리 코드가 그 모듈 · 함수 · 기능을 쓰지 않는다」에 기대면 true. 그러면 checked를 채운다")
+    checked: list[str] = Field(default_factory=list, description="unused_claim이 true일 때 — 이번에 repo_grep에 넣어 0곳이 나온 패턴을 넣은 글자 그대로")
 
 
 class Triage(BaseModel):

@@ -31,7 +31,8 @@ from .detect_schemas import DraftBody, Triage
 from .engines import as_runner
 from .tools import detect_tools
 
-DETECT_MAX_TURNS = 8  # 소식 몇 건을 열어 보고 답 한 번이면 끝난다. 넘으면 루프로 보고 오류로 센다 (P3)
+DETECT_MAX_TURNS = 8  # draft · repair — 소식 몇 건을 열어 보고 답 한 번이면 끝난다. 넘으면 루프로 보고 오류로 센다 (P3)
+TRIAGE_MAX_TURNS = 24  # triage는 소식 전체(주 20~40건)를 본다 — 8이면 열기·코드 찾기를 합쳐 8번뿐이라 찾아볼 여유가 없었다 (HYO-205, W47 세 번 모두 검색 0회)
 
 
 class DetectState(TypedDict, total=False):
@@ -57,7 +58,8 @@ def detect_graph(ctx, model):
     runner = as_runner(model)  # 에이전트 셋(triage·draft·repair)을 돌리는 실행 엔진 (engines.py, HYO-99)
 
     def agent(name, system, schema, user):
-        return runner.run(name=name, system=system, user=user, schema=schema, tools=detect_tools(ctx), ctx=ctx, max_turns=DETECT_MAX_TURNS)
+        return runner.run(name=name, system=system, user=user, schema=schema, tools=detect_tools(ctx), ctx=ctx,
+                          max_turns=TRIAGE_MAX_TURNS if name == "detect-triage" else DETECT_MAX_TURNS)
 
     run = {"id": None}
 
@@ -80,7 +82,8 @@ def detect_graph(ctx, model):
         t = r.structured
         cands = [c.model_dump() for c in t.candidates]
         kept, skipped, dropped = detect_ops.screen(ctx, cands, state["feed"])
-        return {"kept": kept, "skipped": skipped, "dropped": dropped, "excluded": rejected + [e.model_dump() for e in t.excluded]}
+        excluded = detect_ops.check_unused(ctx, [e.model_dump() for e in t.excluded])  # 「안 쓴다」는 말을 repo_grep 기록과 대조 (HYO-205)
+        return {"kept": kept, "skipped": skipped, "dropped": dropped, "excluded": rejected + excluded}
 
     def fan_out(state):
         sends = [Send("draft", {"now": state["now"], "w": w, "item": _item_for(state["feed"], w["candidate"]["source_urls"])})

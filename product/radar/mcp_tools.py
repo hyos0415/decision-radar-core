@@ -26,7 +26,7 @@ from common import ops  # noqa: E402
 from common.core import SKILL_RADAR, Ctx  # noqa: E402
 from radar.tools import GUARDED_DOCS, LOOKUPS, _SCHEME, check_lookup  # noqa: E402
 
-READ_TOOLS = ("snapshot_fetch", "snapshot_search", "corpus_grep", "read_repo_file")
+READ_TOOLS = ("snapshot_fetch", "snapshot_search", "corpus_grep", "repo_grep", "read_repo_file")
 
 
 class Session:
@@ -74,6 +74,11 @@ def build(allow, guard, env=None):
         @app.tool(name="corpus_grep", description=docs["corpus_grep"])
         def corpus_grep(pattern: str) -> str:
             return s.call("corpus_grep", {"pattern": pattern}, lambda: ops.corpus_grep(s.ctx, pattern))
+
+    if "repo_grep" in allow:
+        @app.tool(name="repo_grep", description=docs["repo_grep"])
+        def repo_grep(pattern: str) -> str:
+            return s.call("repo_grep", {"pattern": pattern}, lambda: ops.repo_grep(s.ctx, pattern))
 
     if "read_repo_file" in allow:
         @app.tool(name="read_repo_file", description=docs["read_repo_file"])

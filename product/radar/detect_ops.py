@@ -107,6 +107,37 @@ def screen(c, candidates, feed=None):
     return kept, skipped, dropped
 
 
+def grep_log(c):
+    """이번 실행에서 실제로 돈 repo_grep → {패턴: 기록}. 같은 패턴을 여러 번 돌렸으면 마지막 것."""
+    out = {}
+    for e in c.events:
+        if e.get("type") != "assistant":
+            continue
+        t = e["message"]["content"][0]
+        if t.get("name") == "Grep" and t["input"].get("ok"):
+            out[t["input"]["pattern"]] = t["input"]
+    return out
+
+
+def check_unused(c, excluded):
+    """「우리 코드가 안 쓴다」며 버린 소식을 repo_grep 기록과 대조한다 (HYO-205, 규율 1 — 모델의 말이 아니라 기록으로).
+    확인됨 = checked가 하나 이상 있고, 그 패턴이 전부 이번 실행에서 실제로 돌았고, 전부 0곳이며, 코드를 못 읽은 repo가 없다.
+    excluded의 해당 항목에 usage_check를 붙여 돌려준다 — 버림은 그대로 두고, 확인 안 된 것은 보고서가 따로 센다(조용히 믿지 않는다)."""
+    log, out = grep_log(c), []
+    for e in excluded:
+        if not e.get("unused_claim"):
+            out.append(e)
+            continue
+        rows = [{"pattern": p, "ran": p in log, "total": (log.get(p) or {}).get("total"), "by_repo": (log.get(p) or {}).get("by_repo"),
+                 "unread": (log.get(p) or {}).get("unread") or []} for p in e.get("checked") or []]
+        ok = bool(rows) and all(r["ran"] and r["total"] == 0 and not r["unread"] for r in rows)
+        why = None if ok else ("찾아본 패턴을 적지 않았다" if not rows else
+                               "적은 패턴을 실제로 돌린 기록이 없다" if not all(r["ran"] for r in rows) else
+                               "코드를 못 읽은 repo가 있다" if any(r["unread"] for r in rows) else "쓰는 곳이 나왔다")
+        out.append({**e, "usage_check": {"verified": ok, "patterns": rows, **({"why": why} if why else {})}})
+    return out
+
+
 def detect_report(c, now, *, skipped, dropped, excluded, written, failed):
     """run_report (references/schema.md). pr.needed는 이번 실행에서 초안을 쓴 것이 1개 이상일 때 (detect).
 
@@ -125,6 +156,11 @@ def detect_report(c, now, *, skipped, dropped, excluded, written, failed):
         "files_written": files, "remote_side_effects": [],
         "adrs_checked": [], "results": [], "alerts": [], "link_candidates": [], "overrides": [],
         "tool_calls": c.tool_calls(),
+        # 「안 쓴다」며 버린 소식 (HYO-205) — verified: 찾아보니 0곳 · unverified: 찾아본 기록과 안 맞는다(사람이 본다)
+        "unused": {"verified": [e["url"] for e in excluded if (e.get("usage_check") or {}).get("verified")],
+                   "unverified": [{"url": e["url"], "why": e["usage_check"].get("why")} for e in excluded
+                                  if e.get("usage_check") and not e["usage_check"]["verified"]],
+                   "greps": len(grep_log(c))},
     }
 
 

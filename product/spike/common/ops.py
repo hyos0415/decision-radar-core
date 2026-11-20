@@ -48,6 +48,62 @@ def read_repo_file(c, repo, path):
     return json.dumps({"ok": True, "url": f"repo:{repo}/{path}", "source_type_hint": "repo", "body": body}, ensure_ascii=False)
 
 
+CODE_SUFFIXES = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".sh", ".ps1", ".sql", ".toml", ".cfg", ".ini", ".yml", ".yaml")
+CODE_NAMES = ("Dockerfile", "Makefile")
+GREP_SHOWN = 20          # 돌려주는 줄 수 — 개수(total · by_repo)는 다 센다
+GREP_MAX_BYTES = 1_000_000
+
+
+def _code_files(root, exclude=()):
+    """대상 repo의 「우리 코드」 — git이 추적하는 코드 · 설정 파일 (문서 · 데이터 · 잠금 파일 · 설치된 의존성은 아니다). git이 아니면 [].
+    exclude = radar-targets.json의 exclude(폴더 접두) — 내 스택이 아닌 폴더(eval 픽스처의 가짜 repo 등)는 뺀다."""
+    import subprocess
+    try:
+        p = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if p.returncode != 0:
+        return []
+    rels = [s for s in p.stdout.decode("utf-8", "replace").split("\0") if s]
+    skip = tuple(x.rstrip("/") + "/" for x in exclude)
+    return [r for r in rels if (r.endswith(CODE_SUFFIXES) or os.path.basename(r).startswith(CODE_NAMES)) and not r.startswith(skip)]
+
+
+def repo_grep(c, pattern):
+    """대상 repo 전부의 코드에서 정규식을 찾는다 (HYO-205). 기록에 패턴과 개수를 남긴다 — detect가 「안 쓴다」고 적은 것을 코드가 이 기록과 대조한다."""
+    c.calls += 1
+    try:
+        rx = re.compile(pattern)
+    except re.error as e:
+        c.record("Grep", {"pattern": pattern, "ok": False})
+        return json.dumps({"ok": False, "pattern": pattern, "error": f"정규식 오류: {e}"}, ensure_ascii=False)
+    by_repo, hits, unread = {}, [], []
+    for repo, root in sorted(c.targets.items()):
+        files = _code_files(root, getattr(c, "excludes", {}).get(repo) or ())
+        if not files:
+            unread.append(repo)            # 코드를 못 읽은 repo는 0곳이 아니라 「모름」이다
+            continue
+        n = 0
+        for rel in files:
+            full = os.path.join(root, rel)
+            try:
+                if os.path.getsize(full) > GREP_MAX_BYTES:
+                    continue
+                text = open(full, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            for i, line in enumerate(text.splitlines(), 1):
+                if rx.search(line):
+                    n += 1
+                    if len(hits) < GREP_SHOWN:
+                        hits.append({"repo": repo, "path": rel, "line": i, "text": line.strip()[:200]})
+        by_repo[repo] = n
+    total = sum(by_repo.values())
+    c.record("Grep", {"pattern": pattern, "ok": True, "total": total, "by_repo": by_repo, "unread": unread})
+    return json.dumps({"ok": True, "pattern": pattern, "total": total, "by_repo": by_repo, "unread_repos": unread,
+                       "hits": hits, "scope": "대상 repo의 추적되는 코드 · 설정 파일 (설치된 의존성 안은 보지 않는다)"}, ensure_ascii=False)
+
+
 def match_adr(c, technology, repo, component, use):
     c.calls += 1
     return json.dumps(radar(c, "match", c.adr_dir, "--technology", technology, "--repo", repo,
@@ -59,6 +115,9 @@ DOCS = {  # 도구 설명 — 두 런타임이 같은 글자로 모델에게 보
     "snapshot_search": "1차 출처를 검색한다 (스냅숏 모드). 결과는 URL 목록 — 내용은 snapshot_fetch로 연다.",
     "corpus_grep": "이번 주까지 얼린 수집 코퍼스 전체에 정규식(대소문자 무시)을 돌린다. 피드에 없는 소식 · 같은 기술의 다른 글을 찾을 때 쓴다. "
                    "결과는 많이 맞은 순 30건(url · 제목 · 날짜 · 맞은 줄) — 본문은 snapshot_fetch로 연다.",
+    "repo_grep": "대상 repo 전부의 **우리 코드**(추적되는 코드 · 설정 파일)에서 정규식을 찾는다 (대소문자 구분). 소식이 가리키는 모듈 · 함수 · 옵션을 "
+                 "우리가 쓰는지 볼 때 쓴다 — 예: `http\\.cookies|SimpleCookie`, `get_server_certificate`. 결과는 repo별 개수와 맞은 줄 20개까지. "
+                 "설치된 의존성 안은 보지 않는다.",
     "read_repo_file": "대상 repo 안의 파일 하나를 읽는다. 근거 URL은 결과의 url(`repo:<repo>/<path>`)을 그대로 쓴다.",
     "match_adr": "같은 결정이 이미 있는지 본다. exact = (technology, component, use) 일치, related = 기술이나 component가 같은 ADR.",
     "propose_adr": "ADR 초안을 제안한다. 사람이 승인해야 실행된다 — 실행되면 다음 번호로 파일을 쓰고 validate한다.",

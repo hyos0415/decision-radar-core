@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import sys
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -121,14 +122,14 @@ async def main():
         check("detect: 허용 밖 도구는 안 불린다 (도구 수 0)", res.tool_calls == 0, res)
 
         # 3 코퍼스가 켜지면 detect에 corpus_grep이 붙고 MCP로 실제로 돈다 (DCI, HYO-201) — 꺼지면 예전 두 개
-        check("detect 도구: 코퍼스 끔 = snapshot 두 개", [t.name for t in detect_tools(ctx)] == ["snapshot_fetch", "snapshot_search"])
+        check("detect 도구: 코퍼스 끔 = snapshot 두 개 + repo_grep", [t.name for t in detect_tools(ctx)] == ["snapshot_fetch", "snapshot_search", "repo_grep"])
         corpus, snap = Path(td) / "items.jsonl", Path(td) / "snap"
         snap.mkdir()
         corpus.write_text(json.dumps({"url": "https://github.com/vllm-project/vllm/releases/tag/v1", "title": "vllm v1",
                                       "text": "Breaking: drop CUDA 12"}) + "\n", encoding="utf-8")
         ctx.env.update({"RADAR_CORPUS": str(corpus), "RADAR_SNAPSHOT_DIR": str(snap)})
         tools = detect_tools(ctx)
-        check("detect 도구: 코퍼스 켬 = + corpus_grep", [t.name for t in tools] == ["snapshot_fetch", "snapshot_search", "corpus_grep"])
+        check("detect 도구: 코퍼스 켬 = + corpus_grep", [t.name for t in tools] == ["snapshot_fetch", "snapshot_search", "repo_grep", "corpus_grep"])
         script(td, "grep", {"calls": [{"tool": "corpus_grep", "args": {"pattern": "cuda 1[23]"}}],
                             "structured": {"candidates": [], "excluded": []}})
         res = await r.run(name="detect-triage", system="s", user="u", schema=Triage, tools=tools, ctx=ctx, max_turns=8)
@@ -138,6 +139,50 @@ async def main():
         check("corpus_grep은 맞은 항목 · 줄을 돌려준다", out["ok"] and out["results"][0]["lines"] == ["Breaking: drop CUDA 12"], out)
         for k in ("RADAR_CORPUS", "RADAR_SNAPSHOT_DIR"):
             ctx.env.pop(k)
+
+        # 3b 우리 코드 찾기 (HYO-205) — repo_grep이 MCP로 돌고, 「안 쓴다」는 말은 그 기록과 대조된다
+        from radar import detect_ops
+        code = Path(td) / "code"
+        (code / "src").mkdir(parents=True)
+        (code / "fixture").mkdir()
+        (code / "src" / "app.py").write_text("import zz_widget\n\nzz_widget.spin()\n", encoding="utf-8")
+        (code / "README.md").write_text("zz_gadget 을 쓴다고 적힌 문서", encoding="utf-8")               # 문서는 코드가 아니다
+        (code / "fixture" / "fake.py").write_text("import zz_gadget\n", encoding="utf-8")              # exclude — 내 스택이 아닌 폴더
+        subprocess.run(["git", "init", "-q", str(code)], check=True)
+        subprocess.run(["git", "-C", str(code), "add", "-A"], check=True)
+        ctx.targets, ctx.excludes = {"mine": str(code), "nogit": str(Path(td) / "repo")}, {"mine": ["fixture"]}
+        out = json.loads(ops.repo_grep(ctx, "zz_widget"))
+        check("repo_grep: 쓰는 곳을 줄 단위로 센다", out["ok"] and out["by_repo"] == {"mine": 2} and out["hits"][0]["path"] == "src/app.py", out)
+        check("repo_grep: git이 아닌 repo는 0곳이 아니라 못 읽음", out["unread_repos"] == ["nogit"], out)
+        ctx.targets = {"mine": str(code)}
+        out = json.loads(ops.repo_grep(ctx, "zz_gadget"))
+        check("repo_grep: 문서 · exclude 폴더는 우리 코드가 아니다 (0곳)", out["ok"] and out["total"] == 0 and not out["unread_repos"], out)
+        check("repo_grep: 정규식 오류는 ok=false", json.loads(ops.repo_grep(ctx, "zz_(")).get("ok") is False)
+        tmap = Path(td) / "targets-code.json"
+        tmap.write_text(json.dumps([{"repo": "mine", "path": str(code), "exclude": ["fixture"]}]), encoding="utf-8")
+        ctx.env["RADAR_TARGETS"] = str(tmap)
+        n0 = len(ctx.events)
+        script(td, "rgrep", {"calls": [{"tool": "repo_grep", "args": {"pattern": "zz_absent"}}], "structured": {"candidates": [], "excluded": []}})
+        res = await r.run(name="detect-triage", system="s", user="u", schema=Triage, tools=DETECT_TOOLS, ctx=ctx, max_turns=8)
+        rec = [e["message"]["content"][0] for e in ctx.events[n0:] if e.get("type") == "assistant" and e["message"]["content"][0]["name"] == "Grep"]
+        check("repo_grep이 MCP로 불리고 기록(패턴 · 개수)이 부모에 남는다", res.tool_calls == 1 and rec and rec[0]["input"]["pattern"] == "zz_absent"
+              and rec[0]["input"]["total"] == 0, rec)
+        ex = lambda **kw: {"url": "u", "reason": "미사용", **kw}   # noqa: E731
+        cu = lambda e: detect_ops.check_unused(ctx, [e])[0].get("usage_check")   # noqa: E731
+        check("대조: 주장이 없으면 건드리지 않는다", cu(ex()) is None)
+        check("대조: 돌린 패턴이 0곳이면 확인됨", cu(ex(unused_claim=True, checked=["zz_absent"]))["verified"] is True)
+        check("대조: 패턴을 안 적으면 확인 안 됨", cu(ex(unused_claim=True))["verified"] is False)
+        check("대조: 돌린 적 없는 패턴이면 확인 안 됨", cu(ex(unused_claim=True, checked=["zz_never_ran"]))["why"] == "적은 패턴을 실제로 돌린 기록이 없다")
+        ops.repo_grep(ctx, "zz_widget")   # 지금 대상(mine만)으로 다시 — 기록은 패턴마다 마지막 것
+        check("대조: 쓰는 곳이 나온 패턴이면 확인 안 됨", cu(ex(unused_claim=True, checked=["zz_widget"]))["why"] == "쓰는 곳이 나왔다")
+        ctx.targets = {"mine": str(code), "nogit": str(Path(td) / "repo")}
+        ops.repo_grep(ctx, "zz_absent2")
+        check("대조: 코드를 못 읽은 repo가 있으면 확인 안 됨", cu(ex(unused_claim=True, checked=["zz_absent2"]))["why"] == "코드를 못 읽은 repo가 있다")
+        rep = detect_ops.detect_report(ctx, "2026-11-20T00:00:00+09:00", skipped=[], dropped=[], written=[], failed=[],
+                                       excluded=detect_ops.check_unused(ctx, [ex(unused_claim=True, checked=["zz_absent"]), ex(unused_claim=True)]))
+        check("보고서: 확인된 것과 안 된 것을 따로 센다", rep["unused"]["verified"] == ["u"] and rep["unused"]["unverified"][0]["why"] == "찾아본 패턴을 적지 않았다", rep["unused"])
+        ctx.targets, ctx.excludes = {"medical-mate": str(Path(td) / "repo")}, {}
+        ctx.env["RADAR_TARGETS"] = str(Path(td) / "radar-targets.json")
 
         # 4 실패
         for nm, sc, kw in [("is_error(로그인·한도)", {"is_error": True, "subtype": "error_during_execution", "structured": None}, {}),

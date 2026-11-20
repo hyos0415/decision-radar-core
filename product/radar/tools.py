@@ -37,7 +37,12 @@ def corpus_grep(pattern: str, runtime: ToolRuntime[Ctx]) -> str:
     return ops.corpus_grep(runtime.context, pattern)
 
 
-LOOKUP_BUDGET = 4  # source_hint 열기 1 + 검색 1 + 검색 결과 열기 2. 스킬은 403 케이스 실행 전체가 도구 6~7회다
+@tool("repo_grep", description=ops.DOCS["repo_grep"])
+def repo_grep(pattern: str, runtime: ToolRuntime[Ctx]) -> str:
+    return ops.repo_grep(runtime.context, pattern)
+
+
+LOOKUP_BUDGET = 4 # source_hint 열기 1 + 검색 1 + 검색 결과 열기 2. 스킬은 403 케이스 실행 전체가 도구 6~7회다
 LOOKUPS = ("snapshot_fetch", "snapshot_search")
 _SCHEME = re.compile(r"https?://")
 
@@ -121,7 +126,7 @@ def propose_adr(draft: AdrDraft, runtime: ToolRuntime[Ctx]) -> str:
 
 REVISIT_TOOLS = [guarded_fetch, guarded_search, read_repo_file]
 CAPTURE_TOOLS = [guarded_fetch, match_adr, propose_adr]  # 대화에 인용된 1차 출처를 열어 R17 basis를 확인한다 — 스킬과 같은 조건 (HYO-137, JHS-033)
-DETECT_TOOLS = [snapshot_fetch, snapshot_search]  # 읽기만
+DETECT_TOOLS = [snapshot_fetch, snapshot_search, repo_grep]  # 읽기만. repo_grep = 우리 코드가 그것을 쓰는지 (HYO-205)
 
 
 def detect_tools(ctx):
