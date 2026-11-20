@@ -26,8 +26,9 @@ from common.core import check_scope
 from common.schemas import AdrDraft
 
 from . import detect_ops, hitl
-from .detect_prompts import DRAFT_INSTRUCTIONS, REPAIR_INSTRUCTIONS, TRIAGE_INSTRUCTIONS, draft_prompt, repair_prompt, triage_prompt
-from .detect_schemas import DraftBody, Triage
+from .detect_prompts import (DRAFT_INSTRUCTIONS, REPAIR_INSTRUCTIONS, RESCUE_INSTRUCTIONS, TRIAGE_INSTRUCTIONS, draft_prompt, repair_prompt,
+                             rescue_prompt, triage_prompt)
+from .detect_schemas import DraftBody, Rescued, Triage
 from .engines import as_runner
 from .tools import detect_tools
 
@@ -41,6 +42,7 @@ class DetectState(TypedDict, total=False):
     feed: list
     rejected: list  # 모델에 넘기지 않고 excluded 앞에 붙이는 소식 — 사람이 전에 거부한 것(HYO-142) · 관문 판정 뒤 이미 반영된 것(HYO-162)
     excluded: list
+    security: dict  # 관문이 security로 남긴 소식의 결과 (HYO-205)
     kept: list
     skipped: list
     dropped: list
@@ -68,6 +70,8 @@ def detect_graph(ctx, model):
         run["id"] = f"detect-{state['now']}-{uuid.uuid4().hex[:8]}"  # 이 실행의 초안들이 같이 갖는 기록 — 같은 실행의 내보내기를 지문에서 넘기는 근거 (hitl._own_exports)
         feed, rejected = detect_ops.drop_rejected(ctx, detect_ops.snapshot_feed(ctx))
         feed, applied = detect_ops.drop_applied(ctx, feed)
+        sec = detect_ops.security_urls(ctx)  # 관문이 security로 남긴 소식 — 모델에게 표시해 주고, 「안 쓴다」며 버리면 코드가 되돌린다 (HYO-205)
+        feed = [{**it, "security": True} if it.get("url") in sec else it for it in feed]
         return {"stack": detect_ops.read_stack(ctx), "feed": feed, "rejected": rejected + applied}
 
     async def triage_node(state):
@@ -81,9 +85,30 @@ def detect_graph(ctx, model):
                     "p3": [{"kind": "model_error", "stage": "triage", "type": type(e).__name__, "message": str(e)[:300]}]}
         t = r.structured
         cands = [c.model_dump() for c in t.candidates]
+        excluded, p3 = [e.model_dump() for e in t.excluded], []
+        # 보안 소식은 「우리 코드에 없다」는 이유로 빼지 않는다 — 찾아본 결과를 적어 올리고 사람이 정한다 (HYO-205, 사용자 2026-11-20)
+        sec = {it["url"] for it in feed if it.get("security")}
+        back = detect_ops.unused_security(excluded, sec)
+        rescued = []
+        if back:
+            urls = [e["url"] for e in back]
+            try:
+                rr = await agent("detect-rescue", RESCUE_INSTRUCTIONS, Rescued,
+                                 rescue_prompt(state["now"], state["stack"], [it for it in feed if it.get("url") in urls], back))
+                got = [c.model_dump() for c in rr.structured.candidates]
+                for c in got:  # 버릴 때 적은 패턴을 후보로 옮긴다 — 초안에 찾아본 결과가 남는다
+                    mine = [p for e in back if e["url"] in c["source_urls"] for p in e.get("checked") or []]
+                    c["checked"] = list(dict.fromkeys(list(c.get("checked") or []) + mine))
+                rescued = sorted({u for c in got for u in c["source_urls"] if u in urls})
+                cands += got
+                excluded = [e for e in excluded if e["url"] not in rescued]
+            except Exception as e:  # 되돌리기에 실패하면 버린 채로 두되 오류로 센다 — 보고서의 security.excluded에 남는다
+                p3.append({"kind": "model_error", "stage": "rescue", "type": type(e).__name__, "message": str(e)[:300]})
         kept, skipped, dropped = detect_ops.screen(ctx, cands, state["feed"])
-        excluded = detect_ops.check_unused(ctx, [e.model_dump() for e in t.excluded])  # 「안 쓴다」는 말을 repo_grep 기록과 대조 (HYO-205)
-        return {"kept": kept, "skipped": skipped, "dropped": dropped, "excluded": rejected + excluded}
+        excluded = detect_ops.check_unused(ctx, excluded)  # 「안 쓴다」는 말을 repo_grep 기록과 대조 (HYO-205)
+        security = {"total": len(sec), "rescued": rescued,
+                    "excluded": [{"url": e["url"], "reason": e["reason"]} for e in excluded if e["url"] in sec]} if sec else None
+        return {"kept": kept, "skipped": skipped, "dropped": dropped, "excluded": rejected + excluded, "security": security, "p3": p3}
 
     def fan_out(state):
         sends = [Send("draft", {"now": state["now"], "w": w, "item": _item_for(state["feed"], w["candidate"]["source_urls"])})
@@ -95,7 +120,8 @@ def detect_graph(ctx, model):
         cand = w["candidate"]
         related = [{k: r[k] for k in ("id", "status", "technology", "use")} for r in w["related"]]
         try:
-            r = await agent("detect-draft", DRAFT_INSTRUCTIONS, DraftBody, draft_prompt(inp["now"], cand, inp["item"], related))
+            r = await agent("detect-draft", DRAFT_INSTRUCTIONS, DraftBody,
+                            draft_prompt(inp["now"], cand, inp["item"], related, detect_ops.usage_lines(ctx, cand.get("checked"))))
         except Exception as e:
             return {"p3": [{"kind": "model_error", "stage": "draft", "technology": cand["technology"], "source_urls": cand.get("source_urls") or [],
                             "type": type(e).__name__, "message": str(e)[:300]}]}
@@ -105,7 +131,7 @@ def detect_graph(ctx, model):
         written = []
         for d in sorted(state.get("drafts") or [], key=lambda x: x["w"]["idx"]):  # 병렬 가지의 도착 순서와 무관하게 소식 순서대로 번호를 받는다
             w, cand = d["w"], d["w"]["candidate"]
-            body = detect_ops.compose(d["draft"], w)  # 후보의 정체·related는 코드가 덮어쓴다 — draft는 서술만 한다
+            body = detect_ops.compose(detect_ops.with_usage(ctx, d["draft"], cand), w)  # 후보의 정체·related · 코드 찾기 결과는 코드가 적는다 — draft는 서술만 한다
             ctx.calls += 1
             item_id = hitl.new_item_id(ctx, "detect", cand["technology"])  # 별도 파일은 초안 파일을 쓰는 순간에 생긴다 (설계 §3-1)
             sources = [it["id"] for it in state["feed"] if it.get("id") and it.get("url") in cand["source_urls"]]
@@ -135,14 +161,16 @@ def detect_graph(ctx, model):
                 p3.append({"kind": "model_error", "stage": "repair", "adr": x["id"], "type": type(e).__name__, "message": str(e)[:300]})
                 out.append(x)
                 continue
-            errs = detect_ops.rewrite(ctx, x["path"], x["id"], AdrDraft.model_validate(detect_ops.compose(body, x["w"])), item_id=x.get("item"))
+            fixed = detect_ops.compose(detect_ops.with_usage(ctx, body, x["candidate"]), x["w"])
+            errs = detect_ops.rewrite(ctx, x["path"], x["id"], AdrDraft.model_validate(fixed), item_id=x.get("item"))
             out.append({**x, "body": body, "validate_errors": errs, "repaired": True})
         return {"written": out, "p3": p3}
 
     def report_node(state):
         failed = [p for p in state.get("p3") or [] if p.get("stage") == "draft"]
         rep = detect_ops.detect_report(ctx, state["now"], skipped=state.get("skipped") or [], dropped=state.get("dropped") or [],
-                                       excluded=state.get("excluded") or [], written=state.get("written") or [], failed=failed)
+                                       excluded=state.get("excluded") or [], written=state.get("written") or [], failed=failed,
+                                       security=state.get("security"))
         return {"report": rep}
 
     g = StateGraph(DetectState)

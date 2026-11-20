@@ -181,6 +181,30 @@ async def main():
         rep = detect_ops.detect_report(ctx, "2026-11-20T00:00:00+09:00", skipped=[], dropped=[], written=[], failed=[],
                                        excluded=detect_ops.check_unused(ctx, [ex(unused_claim=True, checked=["zz_absent"]), ex(unused_claim=True)]))
         check("보고서: 확인된 것과 안 된 것을 따로 센다", rep["unused"]["verified"] == ["u"] and rep["unused"]["unverified"][0]["why"] == "찾아본 패턴을 적지 않았다", rep["unused"])
+        # 3c 보안 소식은 「안 쓴다」로 못 뺀다 — 관문의 security 표시 · 되돌릴 것 고르기 · 초안에 적는 줄 (사용자 2026-11-20)
+        snapd = Path(td) / "snap-sec"
+        snapd.mkdir()
+        (snapd / "gate.json").write_text(json.dumps({
+            "https://x/sec": {"kept_by": [{"technology": "python", "tier": "L0", "change": "security"}]},
+            "https://x/brk": {"kept_by": [{"technology": "fastapi", "tier": "L4", "change": "breaking"}]}}), encoding="utf-8")
+        check("보안 표시: gate.json이 없으면 빈 집합 (예전 입력 · 픽스처는 그대로)", detect_ops.security_urls(ctx) == set())
+        ctx.env["RADAR_SNAPSHOT_DIR"] = str(snapd)
+        sec = detect_ops.security_urls(ctx)
+        check("보안 표시: 관문이 security로 남긴 url만", sec == {"https://x/sec"}, sec)
+        exs = [{"url": "https://x/sec", "reason": "문제 모듈 미사용", "unused_claim": True, "checked": ["zz_absent"]},
+               {"url": "https://x/sec", "reason": "HTTP/2 서버를 열지 않는다"},                      # 표시 없이 버린 것도 말로 잡는다 (W47)
+               {"url": "https://x/sec", "reason": "스택에 없는 기술의 권고"},
+               {"url": "https://x/brk", "reason": "미사용", "unused_claim": True, "checked": ["zz_absent"]}]
+        back = detect_ops.unused_security(exs, sec)
+        check("되돌릴 것: 보안 소식을 안 쓴다는 이유로 버린 것만 (표시 · 말 둘 다)", back == exs[:2], back)
+        ctx.targets = {"mine": str(code)}
+        ops.repo_grep(ctx, "zz_absent")
+        lines = detect_ops.usage_lines(ctx, ["zz_absent", "zz_widget", "zz_never_ran"])
+        check("초안에 적는 줄: 개수는 기록에서 읽는다", "mine 0곳" in lines[0] and "mine 2곳" in lines[1] and "돌린 기록 없음" in lines[2], lines)
+        body = detect_ops.with_usage(ctx, {"research_note": ["a"]}, {"checked": ["zz_absent"]})
+        check("초안 서술에 코드 찾기 줄을 코드가 덧붙인다", body["research_note"][0] == "a" and "zz_absent" in body["research_note"][1], body)
+        check("찾아본 것이 없으면 서술은 그대로", detect_ops.with_usage(ctx, {"research_note": ["a"]}, {}) == {"research_note": ["a"]})
+        ctx.env.pop("RADAR_SNAPSHOT_DIR")
         ctx.targets, ctx.excludes = {"medical-mate": str(Path(td) / "repo")}, {}
         ctx.env["RADAR_TARGETS"] = str(Path(td) / "radar-targets.json")
 

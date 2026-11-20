@@ -5,6 +5,7 @@
 
 import json
 import os
+import re
 
 from common import ops
 from common.core import radar
@@ -119,6 +120,49 @@ def grep_log(c):
     return out
 
 
+def security_urls(c):
+    """관문이 security로 남긴 소식의 url들 (입력 폴더의 gate.json — detect_feed가 옮겨 둔다). 없으면 빈 집합 — 예전 입력 · eval 픽스처는 그대로 돈다."""
+    snap = c.env.get("RADAR_SNAPSHOT_DIR")
+    path = os.path.join(snap, "gate.json") if snap else None
+    if not path or not os.path.exists(path):
+        return set()
+    try:
+        gate = json.load(open(path, encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {url for url, v in gate.items() if isinstance(v, dict) and any(k.get("change") == "security" for k in v.get("kept_by") or [])}
+
+
+# 「우리 코드가 안 쓴다」는 뜻의 말 — unused_claim을 안 붙이고 버린 보안 소식을 잡는 뒷문 (W47: 「HTTP/2 서버를 열지 않는다」가 표시 없이 빠졌다)
+_UNUSED_WORDS = re.compile(r"미사용|안 쓴|안 씀|쓰지 않|쓰는 곳(이)? 없|사용(하지| 안| 코드 없| 흔적 없|처 없)|열지 않|호출(하지| 안)|not used|unused|no usage", re.I)
+
+
+def unused_security(excluded, sec):
+    """버린 것 가운데 「보안 소식인데 안 쓴다는 이유」인 것 (HYO-205 사용자 2026-11-20: 보안 소식은 코드에 없다고 빼지 않는다 — 찾아본 결과를 적어 올린다).
+    이유가 사용 여부가 아닌 것(스택 밖 · 내용 없음 · 다른 줄의 백포트)은 그대로 둔다 — 보고서가 따로 센다."""
+    return [e for e in excluded if e.get("url") in sec and (e.get("unused_claim") or _UNUSED_WORDS.search(e.get("reason") or ""))]
+
+
+def usage_lines(c, patterns):
+    """찾아본 패턴 → 초안에 적을 줄. 개수는 모델의 말이 아니라 repo_grep 기록에서 읽는다. 돌린 기록이 없는 패턴은 그렇게 적는다."""
+    log, out = grep_log(c), []
+    for p in dict.fromkeys(patterns or []):
+        r = log.get(p)
+        if not r:
+            out.append(f"코드 찾기 `{p}`: 돌린 기록 없음")
+            continue
+        per = " · ".join(f"{repo} {n}곳" for repo, n in sorted((r.get("by_repo") or {}).items()))
+        out.append(f"코드 찾기 `{p}`: {per or '대상 없음'}" + (f" · 못 읽은 repo {', '.join(r['unread'])}" if r.get("unread") else "")
+                   + " (우리 코드만 — 의존성 안은 보지 않았다)")
+    return out
+
+
+def with_usage(c, body, cand):
+    """초안 서술에 코드 찾기 결과를 덧붙인다 — 코드가 적는다 (모델이 옮겨 적다 틀리지 않게)."""
+    lines = usage_lines(c, cand.get("checked"))
+    return {**body, "research_note": list(body.get("research_note") or []) + lines} if lines else body
+
+
 def check_unused(c, excluded):
     """「우리 코드가 안 쓴다」며 버린 소식을 repo_grep 기록과 대조한다 (HYO-205, 규율 1 — 모델의 말이 아니라 기록으로).
     확인됨 = checked가 하나 이상 있고, 그 패턴이 전부 이번 실행에서 실제로 돌았고, 전부 0곳이며, 코드를 못 읽은 repo가 없다.
@@ -138,7 +182,7 @@ def check_unused(c, excluded):
     return out
 
 
-def detect_report(c, now, *, skipped, dropped, excluded, written, failed):
+def detect_report(c, now, *, skipped, dropped, excluded, written, failed, security=None):
     """run_report (references/schema.md). pr.needed는 이번 실행에서 초안을 쓴 것이 1개 이상일 때 (detect).
 
     report의 candidates는 **초안을 쓴 후보**다 — 거른 뒤 남아 초안이 된 것. skipped_existing·dropped·excluded는 따로 둔다.
@@ -161,6 +205,8 @@ def detect_report(c, now, *, skipped, dropped, excluded, written, failed):
                    "unverified": [{"url": e["url"], "why": e["usage_check"].get("why")} for e in excluded
                                   if e.get("usage_check") and not e["usage_check"]["verified"]],
                    "greps": len(grep_log(c))},
+        # 관문이 security로 남긴 소식이 어떻게 됐나 (HYO-205) — rescued: 「안 쓴다」며 버린 것을 코드가 후보로 되돌림 · excluded: 다른 이유로 버림(사람이 본다)
+        **({"security": security} if security else {}),
     }
 
 

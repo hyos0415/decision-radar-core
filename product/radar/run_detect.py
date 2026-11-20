@@ -54,6 +54,9 @@ def summarize(rep, funnel, adr_dir):
     un = rep.get("unused") or {}
     if un.get("verified") or un.get("unverified"):  # 「안 쓴다」며 버린 소식 — 찾아보니 0곳 / 찾아본 기록과 안 맞음 (HYO-205)
         lines.append(f"코드에 없어 뺀 소식 {len(un.get('verified') or [])}건 (찾아봄) · 확인 안 된 「미사용」 {len(un.get('unverified') or [])}건 — 사람이 본다")
+    sec = rep.get("security") or {}
+    if sec:  # 관문이 security로 남긴 소식 — 「안 쓴다」로는 못 뺀다 (HYO-205)
+        lines.append(f"보안 소식 {sec.get('total', 0)}건 · 「안 쓴다」며 버린 것을 되돌림 {len(sec.get('rescued') or [])}건 · 다른 이유로 뺌 {len(sec.get('excluded') or [])}건")
     drafts = []
     for c in cands:
         f = next(iter(sorted(p for p in os.listdir(adr_dir) if p.startswith(f"{c['adr']}-"))), None) if c.get("adr") else None
