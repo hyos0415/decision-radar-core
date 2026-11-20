@@ -20,10 +20,11 @@ from pathlib import Path
 sys.path[0] = str(Path(__file__).resolve().parents[1])  # product/
 
 from radar import engines, mcp_tools  # noqa: E402  — 먼저: spike/common을 import 경로에 올린다
+from common import ops  # noqa: E402
 from common.core import SKILL_RADAR, Ctx  # noqa: E402
 from common.schemas import Verdict  # noqa: E402
 from radar.detect_schemas import Triage  # noqa: E402
-from radar.tools import DETECT_TOOLS, LOOKUP_BUDGET, REVISIT_TOOLS  # noqa: E402
+from radar.tools import DETECT_TOOLS, LOOKUP_BUDGET, REVISIT_TOOLS, detect_tools  # noqa: E402
 
 FAKE = str(Path(__file__).resolve().parent / "fake_cli.py")
 fails = []
@@ -118,6 +119,25 @@ async def main():
                               "structured": {"candidates": [], "excluded": []}})
         res = await r.run(name="detect-triage", system="s", user="u", schema=Triage, tools=DETECT_TOOLS, ctx=ctx, max_turns=8)
         check("detect: 허용 밖 도구는 안 불린다 (도구 수 0)", res.tool_calls == 0, res)
+
+        # 3 코퍼스가 켜지면 detect에 corpus_grep이 붙고 MCP로 실제로 돈다 (DCI, HYO-201) — 꺼지면 예전 두 개
+        check("detect 도구: 코퍼스 끔 = snapshot 두 개", [t.name for t in detect_tools(ctx)] == ["snapshot_fetch", "snapshot_search"])
+        corpus, snap = Path(td) / "items.jsonl", Path(td) / "snap"
+        snap.mkdir()
+        corpus.write_text(json.dumps({"url": "https://github.com/vllm-project/vllm/releases/tag/v1", "title": "vllm v1",
+                                      "text": "Breaking: drop CUDA 12"}) + "\n", encoding="utf-8")
+        ctx.env.update({"RADAR_CORPUS": str(corpus), "RADAR_SNAPSHOT_DIR": str(snap)})
+        tools = detect_tools(ctx)
+        check("detect 도구: 코퍼스 켬 = + corpus_grep", [t.name for t in tools] == ["snapshot_fetch", "snapshot_search", "corpus_grep"])
+        script(td, "grep", {"calls": [{"tool": "corpus_grep", "args": {"pattern": "cuda 1[23]"}}],
+                            "structured": {"candidates": [], "excluded": []}})
+        res = await r.run(name="detect-triage", system="s", user="u", schema=Triage, tools=tools, ctx=ctx, max_turns=8)
+        cmd = [e for e in ctx.events if "snapshot grep" in json.dumps(e)]
+        check("corpus_grep이 MCP로 불린다 (radar.py snapshot grep)", res.tool_calls == 1 and cmd, res)
+        out = json.loads(ops.corpus_grep(ctx, "cuda 1[23]"))
+        check("corpus_grep은 맞은 항목 · 줄을 돌려준다", out["ok"] and out["results"][0]["lines"] == ["Breaking: drop CUDA 12"], out)
+        for k in ("RADAR_CORPUS", "RADAR_SNAPSHOT_DIR"):
+            ctx.env.pop(k)
 
         # 4 실패
         for nm, sc, kw in [("is_error(로그인·한도)", {"is_error": True, "subtype": "error_during_execution", "structured": None}, {}),

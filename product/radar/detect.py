@@ -29,7 +29,7 @@ from . import detect_ops, hitl
 from .detect_prompts import DRAFT_INSTRUCTIONS, REPAIR_INSTRUCTIONS, TRIAGE_INSTRUCTIONS, draft_prompt, repair_prompt, triage_prompt
 from .detect_schemas import DraftBody, Triage
 from .engines import as_runner
-from .tools import DETECT_TOOLS
+from .tools import detect_tools
 
 DETECT_MAX_TURNS = 8  # 소식 몇 건을 열어 보고 답 한 번이면 끝난다. 넘으면 루프로 보고 오류로 센다 (P3)
 
@@ -57,7 +57,7 @@ def detect_graph(ctx, model):
     runner = as_runner(model)  # 에이전트 셋(triage·draft·repair)을 돌리는 실행 엔진 (engines.py, HYO-99)
 
     def agent(name, system, schema, user):
-        return runner.run(name=name, system=system, user=user, schema=schema, tools=DETECT_TOOLS, ctx=ctx, max_turns=DETECT_MAX_TURNS)
+        return runner.run(name=name, system=system, user=user, schema=schema, tools=detect_tools(ctx), ctx=ctx, max_turns=DETECT_MAX_TURNS)
 
     run = {"id": None}
 
