@@ -60,7 +60,8 @@ def detect_graph(ctx, model):
     runner = as_runner(model)  # 에이전트 셋(triage·draft·repair)을 돌리는 실행 엔진 (engines.py, HYO-99)
 
     def agent(name, system, schema, user):
-        return runner.run(name=name, system=system, user=user, schema=schema, tools=detect_tools(ctx), ctx=ctx,
+        first = name in ("detect-triage", "detect-rescue")  # 우리 코드를 찾아보는 것은 거르기 쪽만 — 초안 쪽은 그 결과를 받는다
+        return runner.run(name=name, system=system, user=user, schema=schema, tools=detect_tools(ctx, "triage" if first else "draft"), ctx=ctx,
                           max_turns=TRIAGE_MAX_TURNS if name == "detect-triage" else DETECT_MAX_TURNS)
 
     run = {"id": None}

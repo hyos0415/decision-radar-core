@@ -50,7 +50,7 @@ def read_repo_file(c, repo, path):
 
 CODE_SUFFIXES = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".sh", ".ps1", ".sql", ".toml", ".cfg", ".ini", ".yml", ".yaml")
 CODE_NAMES = ("Dockerfile", "Makefile")
-GREP_SHOWN = 20          # 돌려주는 줄 수 — 개수(total · by_repo)는 다 센다
+GREP_SHOWN = 8           # 돌려주는 줄 수 — 개수(total · by_repo · 파일별)는 다 센다. 20이면 넓은 패턴마다 4천 자씩 돌아왔다
 GREP_MAX_BYTES = 1_000_000
 
 
@@ -77,7 +77,7 @@ def repo_grep(c, pattern):
     except re.error as e:
         c.record("Grep", {"pattern": pattern, "ok": False})
         return json.dumps({"ok": False, "pattern": pattern, "error": f"정규식 오류: {e}"}, ensure_ascii=False)
-    by_repo, hits, unread = {}, [], []
+    by_repo, hits, unread, by_file = {}, [], [], {}
     for repo, root in sorted(c.targets.items()):
         files = _code_files(root, getattr(c, "excludes", {}).get(repo) or ())
         if not files:
@@ -95,12 +95,15 @@ def repo_grep(c, pattern):
             for i, line in enumerate(text.splitlines(), 1):
                 if rx.search(line):
                     n += 1
+                    by_file[f"{repo}/{rel}"] = by_file.get(f"{repo}/{rel}", 0) + 1
                     if len(hits) < GREP_SHOWN:
-                        hits.append({"repo": repo, "path": rel, "line": i, "text": line.strip()[:200]})
+                        hits.append({"repo": repo, "path": rel, "line": i, "text": line.strip()[:160]})
         by_repo[repo] = n
     total = sum(by_repo.values())
     c.record("Grep", {"pattern": pattern, "ok": True, "total": total, "by_repo": by_repo, "unread": unread})
+    files = sorted(by_file.items(), key=lambda kv: -kv[1])
     return json.dumps({"ok": True, "pattern": pattern, "total": total, "by_repo": by_repo, "unread_repos": unread,
+                       "files": [{"file": f, "lines": k} for f, k in files[:8]], "more_files": max(0, len(files) - 8),
                        "hits": hits, "scope": "대상 repo의 추적되는 코드 · 설정 파일 (설치된 의존성 안은 보지 않는다)"}, ensure_ascii=False)
 
 
@@ -116,7 +119,8 @@ DOCS = {  # 도구 설명 — 두 런타임이 같은 글자로 모델에게 보
     "corpus_grep": "이번 주까지 얼린 수집 코퍼스 전체에 정규식(대소문자 무시)을 돌린다. 피드에 없는 소식 · 같은 기술의 다른 글을 찾을 때 쓴다. "
                    "결과는 많이 맞은 순 30건(url · 제목 · 날짜 · 맞은 줄) — 본문은 snapshot_fetch로 연다.",
     "repo_grep": "대상 repo 전부의 **우리 코드**(추적되는 코드 · 설정 파일)에서 정규식을 찾는다 (대소문자 구분). 소식이 가리키는 모듈 · 함수 · 옵션을 "
-                 "우리가 쓰는지 볼 때 쓴다 — 예: `http\\.cookies|SimpleCookie`, `get_server_certificate`. 결과는 repo별 개수와 맞은 줄 20개까지. "
+                 "우리가 쓰는지 볼 때 쓴다 — 예: `http\\.cookies|SimpleCookie`, `get_server_certificate`. 결과는 repo별 · 파일별 개수와 맞은 줄 8개까지 — 좁은 패턴으로 찾는다(`eval` · `usage`처럼 넓으면 수백 곳이 걸려 쓸모가 없다). "
+                 "찾을 것이 여럿이면 한 번에 여러 개를 함께 부른다. "
                  "설치된 의존성 안은 보지 않는다.",
     "read_repo_file": "대상 repo 안의 파일 하나를 읽는다. 근거 URL은 결과의 url(`repo:<repo>/<path>`)을 그대로 쓴다.",
     "match_adr": "같은 결정이 이미 있는지 본다. exact = (technology, component, use) 일치, related = 기술이나 component가 같은 ADR.",

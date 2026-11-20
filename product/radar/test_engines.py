@@ -123,6 +123,8 @@ async def main():
 
         # 3 코퍼스가 켜지면 detect에 corpus_grep이 붙고 MCP로 실제로 돈다 (DCI, HYO-201) — 꺼지면 예전 두 개
         check("detect 도구: 코퍼스 끔 = snapshot 두 개 + repo_grep", [t.name for t in detect_tools(ctx)] == ["snapshot_fetch", "snapshot_search", "repo_grep"])
+        check("detect 도구: 초안 단계에는 repo_grep이 없다 (거르기가 찾아본 결과를 받는다)",
+              [t.name for t in detect_tools(ctx, "draft")] == ["snapshot_fetch", "snapshot_search"])
         corpus, snap = Path(td) / "items.jsonl", Path(td) / "snap"
         snap.mkdir()
         corpus.write_text(json.dumps({"url": "https://github.com/vllm-project/vllm/releases/tag/v1", "title": "vllm v1",
