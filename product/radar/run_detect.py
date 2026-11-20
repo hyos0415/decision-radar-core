@@ -14,6 +14,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import re
 import sys
 
 # 스크립트 폴더(product/radar)를 경로에서 빼고 product/를 넣는다 (resume.py와 같다)
@@ -27,6 +28,20 @@ from radar import script as stub_scripts  # noqa: E402
 from common.core import SKILL_RADAR, Ctx  # noqa: E402
 from common.eval_adapter import ANTHROPIC  # noqa: E402
 from common.guard import NetGuard  # noqa: E402
+
+
+def corpus_files(snap, weeks):
+    """detect 입력 `<snapshots>/detect/<주>`에서 같은 주까지의 코퍼스 `<snapshots>/<주>/items.jsonl` 최근 weeks개 (HYO-201).
+    radar.py `snapshot search`가 RADAR_CORPUS로 읽는다 — 0이면 끈다(예전처럼 search.json)."""
+    if weeks <= 0:
+        return []
+    week = os.path.basename(os.path.normpath(snap))
+    root = os.path.dirname(os.path.dirname(os.path.normpath(snap)))
+    have = sorted(w for w in os.listdir(root) if re.fullmatch(r"\d{4}-W\d{2}", w) and w <= week
+                  and os.path.exists(os.path.join(root, w, "items.jsonl")))
+    if week not in have:
+        raise SystemExit(f"--corpus-weeks: {root}/{week}/items.jsonl이 없다 — --snapshot은 radar-snapshots/detect/<주>여야 한다")
+    return [os.path.join(root, w, "items.jsonl") for w in have[-weeks:]]
 
 
 def summarize(rep, funnel, adr_dir):
@@ -56,6 +71,8 @@ def main(argv=None):
     ap.add_argument("--model", choices=["stub", "anthropic", "claude-cli"], default="stub",
                     help="claude-cli = 구독 `claude -p` 엔진 (HYO-99) — API 과금 없음, 구독 사용량을 쓴다")
     ap.add_argument("--real-api", action="store_true", help="실제 API 호출 허용 (--model anthropic에 필요)")
+    ap.add_argument("--corpus-weeks", type=int, default=0,
+                    help="snapshot_search가 얼린 코퍼스 최근 N주를 BM25로 검색한다 (HYO-201, 기본 0 = 끔)")
     ap.add_argument("--now", help="ISO 시각 (기본: 지금)")
     a = ap.parse_args(argv)
     if a.model == "anthropic" and not a.real_api:
@@ -71,7 +88,8 @@ def main(argv=None):
 
     env = {k: v for k, v in os.environ.items() if k != "RADAR_EXPORT"}
     env.update({"RADAR_ADR_DIR": adr_dir, "RADAR_TARGETS": targets, "RADAR_DRY_RUN": "1", "RADAR_SNAPSHOT_DIR": snap,
-                "RADAR_SERVED_LOG": os.path.join(out, "served.log"), "LANGSMITH_TRACING": "false", "LANGCHAIN_TRACING_V2": "false"})
+                "RADAR_SERVED_LOG": os.path.join(out, "served.log"), "LANGSMITH_TRACING": "false", "LANGCHAIN_TRACING_V2": "false",
+                "RADAR_CORPUS": os.pathsep.join(corpus_files(snap, a.corpus_weeks))})
     ctx = Ctx.from_env(env, radar_py=SKILL_RADAR)
     now = a.now or dt.datetime.now().astimezone().isoformat(timespec="seconds")
     rt = runtime.Runtime()
