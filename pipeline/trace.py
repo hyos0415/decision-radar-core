@@ -69,6 +69,9 @@ def _scope_removed(g):
                 if n["change"] == "eol":
                     ev = "; ".join(f"{e['technology']} {e['announced']} (우리 {', '.join(e['ours']) or '?'})" for e in n.get("evidence") or [])
                     why = f"지원 종료 줄이 우리 줄이 아니다 — {ev}"
+                elif n["change"] == "breaking":
+                    ev = "; ".join(f"{e['technology']} {e['announced']} (우리 {', '.join(e['ours']) or '?'})" for e in n.get("evidence") or [])
+                    why = f"Breaking 절이 런타임 버전 지원 중단뿐이고 우리는 더 새 줄이다 — {ev}"
                 else:
                     why = "은퇴하는 모델이 우리 모델이 아니다"
                 out.append((s["technology"], n["change"], why))

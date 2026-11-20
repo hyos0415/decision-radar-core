@@ -638,6 +638,88 @@ def test_gate_eol_scoped_to_our_line_and_newer_line_alert():
     assert gate_mod.cap_lane_a(entries)["newer_line_eol"] == [{"technology": "electron", "ours": ["39.2.6"], "announced": "42", "ids": ["e42", "e42b"]}]
 
 
+FASTAPI_DROP = ("> FastAPI includes an official skill.\n\n### Breaking Changes\n\n"
+                "* 💥 Drop support for Python 3.10. PR [#16737](https://github.com/fastapi/fastapi/pull/16737) by [@tiangolo](https://github.com/tiangolo).\n")
+LANGCHAIN_DROP = ("**`langchain-core` 1.8.0 drops support for Python 3.10**, which has reached end-of-life.\n\nChanges since langchain-core==1.7.7\n\n"
+                  "feat(core): Remove EOL Python 3.10 support (#41267)\nfeat(core): add decision models (#41765)\n")
+
+
+def _vers(py, fastapi=("a", "b")):
+    """fastapi를 쓰는 repo들 + repo별 python 버전 ({repo: 버전})."""
+    return {"fastapi": [{"version": "0.115", "repo": r} for r in fastapi], "python": [{"version": v, "repo": r} for r, v in py.items()]}
+
+
+def test_scope_breaking_section_entries():
+    """Breaking 절의 항목만 뽑는다 (HYO-202) — 절이 없으면 None(무엇이 breaking인지 스크립트가 모른다)."""
+    be = scope.breaking_entries
+    assert be(FASTAPI_DROP) == ["💥 Drop support for Python 3.10. PR [#16737](https://github.com/fastapi/fastapi/pull/16737) by [@tiangolo](https://github.com/tiangolo)."]
+    assert be(LANGCHAIN_DROP) is None and be("") is None and be("## Breaking changes\n\n## Features\n* x") is None   # 절이 없다 · 비었다
+    assert be("## ⚠ BREAKING CHANGES\r\n\r\n* **client:** drop support for Python 3.9\r\n* rename `a` to `b`\r\n\r\n### Features\r\n* f") == \
+        ["**client:** drop support for Python 3.9", "rename `a` to `b`", "Features", "f"]     # 더 깊은 제목과 그 아래도 같은 절이다
+    assert be("## Breaking\n- one\n  continues\n\nplain paragraph\n# Next\n- no") == ["one continues", "plain paragraph"]
+    assert be("**Breaking changes**\n- Drop Python 3.9\n## Fixes\n- y") == ["Drop Python 3.9"]   # 굵은 글씨 제목
+    assert be("## Breaking\n### Python 3.9 is no longer supported\ntext") == ["Python 3.9 is no longer supported", "text"]
+
+
+def test_runtime_versions_from_ci_and_dotfiles():
+    """manifest 밖의 런타임 버전 (HYO-202): `.python-version` · `.nvmrc` · GitHub Actions `python-version` · `node-version`. 줄을 모르는 값은 버린다."""
+    ci = signals._ci_runtimes
+    assert ci('      - uses: actions/setup-python@v5\n        with:\n          python-version: "3.12"\n') == [("python", "3.12")]
+    assert ci("matrix:\n  python-version: [3.11, '3.12']\n  node-version:\n    - 22\n    - 24.x   # lts\n  os: [a]\n") == [("python", "3.11"), ("python", "3.12"), ("node", "22"), ("node", "24")]
+    assert ci("python-version: ${{ matrix.python-version }}\npython-version: 3.x\npython-version: '3'\n") == []   # 모르는 것을 지어내지 않는다
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        _write(d / ".python-version", "# pyenv\n3.12.4\n")
+        _write(d / ".nvmrc", "v22.11.0\n")
+        _write(d / ".github" / "workflows" / "ci.yml", "jobs:\n  t:\n    steps:\n      - with:\n          python-version: '3.13'\n")
+        _write(d / "skip" / ".github" / "workflows" / "x.yml", "python-version: '3.9'\n")
+        v = signals.read_runtime_versions(d, label="r")
+        ex = signals.read_runtime_versions(d, exclude=(".github",), label="r")
+    assert [(x["version"], x["repo"]) for x in v["python"]] == [("3.12.4", "r"), ("3.13", "r")] and [x["version"] for x in v["node"]] == ["22.11.0"]
+    assert [x["version"] for x in ex["python"]] == ["3.12.4"]                                  # exclude를 지킨다
+
+
+def test_gate_breaking_runtime_drop_only_scoped_per_repo():
+    """W47: 「Breaking Changes — Drop support for Python 3.10」뿐인 FastAPI 0.162.6이 L4 × breaking으로 남아 초안까지 갔다 (HYO-202).
+    Breaking 절이 런타임 지원 중단뿐 + 이 기술을 쓰는 repo 전부의 런타임 버전을 알고 모두 더 새 줄 → breaking을 뺀다. 하나라도 모자라면 남긴다."""
+    st = _store(fastapi={"tiers": ["L4"]}, python={"tiers": ["L0"]})
+    be = lambda: StubBackend(changes=lambda q: ["breaking"])   # noqa: E731
+    it = lambda text, tech="fastapi": _item("f", "fastapi/fastapi 0.162.6", tech=tech, text=text)   # noqa: E731
+    r = gate_mod.Gate(be(), st, versions=_vers({"a": "3.12", "b": "3.12.4"}))(it(FASTAPI_DROP))
+    assert not r["keep"] and r["changes"] == ["breaking"] and r["model_changes"] == ["breaking"], r   # 모델 라벨은 그대로
+    note = r["scope"][0]["notes"][0]
+    assert note["change"] == "breaking" and note["verdict"] == "other" and note["runtime_only"]
+    assert note["evidence"] == [{"technology": "python", "announced": "3.10", "op": "eq", "ours": ["3.12", "3.12.4"], "match": False,
+                                 "repos": {"a": ["3.12"], "b": ["3.12.4"]}}]
+    from pipeline import trace
+    assert trace._scope_removed(r)[0][:2] == ("fastapi", "breaking") and "python 3.10" in trace._scope_removed(r)[0][2]
+    keep = lambda vers, text=FASTAPI_DROP: gate_mod.Gate(be(), st, versions=vers)(it(text))   # noqa: E731
+    for why, vers in (("repo b의 python을 모른다", _vers({"a": "3.12"})), ("repo b가 그 줄이다", _vers({"a": "3.12", "b": "3.10"})),
+                      ("repo b가 더 옛 줄이다", _vers({"a": "3.12", "b": "3.9"})), ("버전이 그 자릿수까지 없다", _vers({"a": "3", "b": "3.12"})),
+                      ("fastapi를 어느 repo가 쓰는지 모른다", {"fastapi": [{"version": "0.115"}], "python": [{"version": "3.12"}]}),
+                      ("우리 버전이 없다", {})):
+        k = keep(vers)
+        assert k["keep"] and [x["change"] for x in k["kept_by"]] == ["breaking"], (why, k)
+        assert k["scope"][0]["notes"][0]["verdict"] == "unknown", (why, k)
+    ok = _vers({"a": "3.12", "b": "3.12"})
+    mixed = keep(ok, FASTAPI_DROP + "* 💥 Remove `foo()`.\n")
+    assert mixed["keep"] and mixed["scope"][0]["notes"][0]["verdict"] == "unknown"              # 절에 다른 항목이 있다
+    same = keep(ok, "### Breaking Changes\n\n* Drop support for Python 3.10 and rename `Depends` to `Inject`.\n")
+    assert same["keep"] and same["scope"][0]["notes"][0]["verdict"] == "unknown"                # 한 항목에 다른 변경이 같이 적혔다
+    noted = lambda g: [n for s in g.get("scope") or [] for n in s["notes"]]   # noqa: E731
+    lead = keep(ok, LANGCHAIN_DROP)
+    assert lead["keep"] and not noted(lead), lead                                               # 절이 없는 꼴은 보지 않는다 (남긴다)
+    plain = keep(ok, "### Breaking Changes\n\n* Remove `foo()`.\n")
+    assert plain["keep"] and not noted(plain), plain                                            # 런타임 문장이 없으면 기록도 없다
+    st.data["overrides"]["python"] = {"technology": "python", "version": ["3.10"]}              # 사람이 적은 버전이 이긴다
+    assert keep(ok)["keep"]
+    del st.data["overrides"]["python"]
+    both = gate_mod.Gate(StubBackend(changes=lambda q: ["breaking", "deprecation"]), st, versions=ok)(it(FASTAPI_DROP))
+    assert both["keep"] and [x["change"] for x in both["kept_by"]] == ["deprecation"], both     # 다른 종류는 그대로 남긴다
+    own = gate_mod.Gate(be(), st, versions=ok)(_item("p", "python/cpython v3.15.0", tech="python", text="## Breaking\n* Drop support for Python 3.10 ABI\n"))
+    assert own["keep"] and not noted(own), own                                           # 런타임 자신의 소식은 건드리지 않는다
+
+
 def test_gate_model_retirement_needs_our_model_mentioned():
     """댓글(2026-10-27): W44 OpenAI deprecations diff(gpt-6-* 없음)의 모델 은퇴가 gpt-6-luna에 붙었다 → L2는 같은 계열·같은 버전이 글에 있어야 남긴다."""
     st = _store(**{"gpt-6-luna": {"tiers": ["L2"]}, "openai-agents": {"tiers": ["L4"]}, "amazon bedrock": {"tiers": ["L2"]}})
@@ -2603,6 +2685,12 @@ def mutations():
         ("우리 것: 줄 비교가 늘 다른 줄 (우리 줄 EOL도 뺌)", [(scope, "line_match", lambda ours, ann, op="eq": False)], test_gate_eol_scoped_to_our_line_and_newer_line_alert),
         ("우리 것: 「and below」를 안 봄", [(scope, "_LE", r"()")], test_scope_eol_targets_and_line_match),
         ("우리 것: 사람 overrides 버전을 무시", [(scope.Versions, "__call__", lambda self, name: self.auto.get(signals.norm(name)) or [])], test_gate_eol_scoped_to_our_line_and_newer_line_alert),
+        ("우리 것: 런타임뿐인 breaking을 안 좁힘 (W47 FastAPI 0.162.6)", [(scope, "_runtime_only", lambda tech, text, ours_of: None)], test_gate_breaking_runtime_drop_only_scoped_per_repo),
+        ("우리 것: breaking을 repo별로 안 보고 아는 버전 아무거나로 견줌", [(scope.Versions, "in_repo", lambda self, name, repo: self(name))], test_gate_breaking_runtime_drop_only_scoped_per_repo),
+        ("우리 것: Breaking 절이 아니라 글 전체를 항목으로 봄", [(scope, "breaking_entries", lambda text: [x for x in (text or "").splitlines() if x.strip()] or None)], test_gate_breaking_runtime_drop_only_scoped_per_repo),
+        ("우리 것: 한 항목에 같이 적힌 다른 변경을 안 봄", [(scope, "_OTHER_BREAK", re.compile(r"(?!)"))], test_gate_breaking_runtime_drop_only_scoped_per_repo),
+        ("우리 것: 런타임 줄 비교가 늘 더 새 줄", [(scope, "vtuple", lambda s: (99, 99, 99) if str(s or "")[:1].isdigit() and "." in str(s) and str(s) != "3.10" else ((3, 10) if s else None))], test_gate_breaking_runtime_drop_only_scoped_per_repo),
+        ("런타임 버전: CI 워크플로를 안 읽음", [(signals, "_ci_runtimes", lambda text: [])], test_runtime_versions_from_ci_and_dotfiles),
         ("우리 것: 은퇴 언급 검사가 늘 언급 있음", [(successor, "mentions", lambda text, name: ["x"])], test_gate_model_retirement_needs_our_model_mentioned),
         ("우리 것: 은퇴 언급을 버전 없이 계열로만", [(successor, "_version", lambda parts: (0,))], test_gate_model_retirement_needs_our_model_mentioned),        ("후속 모델: L2가 아닌 기술도 봄", [(gate_mod.Gate, "_successors", lambda self, item, names: successor.find(item.get("title") or "", names))], test_gate_successor_model_is_script_judged_l2_only_and_last),
         ("후속 모델을 심각도 「나머지」와 같게", [(policy, "SEVERITY", {k: v for k, v in policy.SEVERITY.items() if k != "successor_model"})], test_gate_successor_model_is_script_judged_l2_only_and_last),

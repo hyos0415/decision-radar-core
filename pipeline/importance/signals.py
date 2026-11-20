@@ -195,6 +195,53 @@ def _add_version(out, name, manifest, spec, version, repo):
             out[norm(name)].append(row)
 
 
+_CI_RUNTIME = re.compile(r"^\s*(?:-\s*)?(python|node)-version:\s*(.*)$")
+_CI_ITEM = re.compile(r"^\s*-\s*(.+)$")
+_RUNTIME_VER = {"python": re.compile(r"(?<![\w.])(\d+\.\d+(?:\.\d+)?)(?![\w.])"), "node": re.compile(r"(?<![\d.])(\d+(?:\.\d+){0,2})(?![\w])")}   # node는 `v22.11.0` · `24.x`도 적는다
+
+
+def _ci_runtimes(text):
+    """워크플로 글 → [(런타임, 버전)]. `python-version: "3.12"` · `[3.11, "3.12"]` · 아래 줄 목록. `${{ … }}`·`3.x`처럼 줄을 모르는 값은 버린다."""
+    out, lines = [], text.splitlines()
+    for i, line in enumerate(lines):
+        m = _CI_RUNTIME.match(line)
+        if not m:
+            continue
+        vals = [m.group(2).split(" #")[0]]
+        if not vals[0].strip():                              # 값이 아래 줄 목록이다
+            vals = []
+            for nxt in lines[i + 1:]:
+                it = _CI_ITEM.match(nxt)
+                if not it:
+                    break
+                vals.append(it.group(1).split(" #")[0])
+        for v in vals:
+            if "${{" not in v:
+                out += [(m.group(1), x) for x in _RUNTIME_VER[m.group(1)].findall(v)]
+    return out
+
+
+def read_runtime_versions(repo, exclude=(), label=None, out=None):
+    """repo가 manifest 밖에 적어 둔 언어 런타임 버전을 read_repo_versions와 같은 모양으로 더한다 (HYO-202) — `.python-version` · `.nvmrc` ·
+    GitHub Actions의 `python-version` · `node-version`. 추적 파일만 (git이 아니면 있는 파일). 관문의 범위 정리만 쓴다 — 보안 공지 대조 · basis는 그대로."""
+    repo, out = Path(repo), {} if out is None else out
+    label = label or repo.name
+    tracked, _ = stack._git_files(repo)
+    ok = lambda rel: (tracked is None or rel in tracked) and not stack._excluded(rel, exclude) and (repo / rel).is_file()   # noqa: E731
+    for rel, name in ((".python-version", "python"), (".nvmrc", "node")):
+        if ok(rel):
+            first = next((s.strip() for s in (repo / rel).read_text(encoding="utf-8", errors="replace").splitlines() if s.strip() and not s.lstrip().startswith("#")), "")
+            m = _RUNTIME_VER[name].search(first)
+            _add_version(out, name, rel, first, m.group(1) if m else None, label)
+    wf = repo / ".github" / "workflows"
+    for f in sorted(wf.glob("*.y*ml")) if wf.is_dir() else []:
+        rel = f.relative_to(repo).as_posix()
+        if ok(rel):
+            for name, v in _ci_runtimes(f.read_text(encoding="utf-8", errors="replace")):
+                _add_version(out, name, f"{rel} {name}-version", v, v, label)
+    return out
+
+
 def read_repo_versions(repo, exclude=(), label=None, out=None):
     """repo 폴더 → {정규화 이름: [{name, manifest, spec, version, repo}]}. 대상 repo가 여럿이면 out에 이어 쓴다 — 한 기술에 버전이 여럿일 수 있다.
     읽는 곳: requirements*.txt · pyproject(dependencies · optional · groups · poetry · requires-python → python) · package.json ·

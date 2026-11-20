@@ -130,7 +130,7 @@ def build_gate(model, tiers_path, *, real_api=False, call_log=None, limit=None, 
 def stack_versions(targets_path=None):
     """내 대상 전부의 manifest → 우리 버전 {정규화 이름: [{name, manifest, spec, version, repo}]} (HYO-148). 등급 파일에 넣지 않고 매번 읽는다.
     → (versions, info {"file", "technologies", "missing", "error"?}). 대상을 못 읽으면 빈 버전 + error — eol은 확인 불가로 남는다 (조용히 넘기지 않는다)."""
-    from .signals import read_repo_versions
+    from .signals import read_repo_versions, read_runtime_versions
     try:
         found, missing, path = load_targets(targets_path)
     except SystemExit as e:
@@ -138,6 +138,7 @@ def stack_versions(targets_path=None):
     out = {}
     for name, root, ex in found:
         read_repo_versions(root, ex, name, out)
+        read_runtime_versions(root, ex, name, out)       # CI · .python-version에만 적힌 런타임 버전 (HYO-202)
     return out, {"file": str(path), "technologies": len(out), "missing": [n for n, _ in missing]}
 
 
