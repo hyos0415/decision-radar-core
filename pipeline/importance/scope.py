@@ -9,6 +9,9 @@
                    이름 없는 줄 표기(「42.x.y has reached end-of-support」)는 그 행의 기술로 본다
                    우리 줄 → 유지 · 다른 줄만 → 뺌 · 못 뽑았거나 우리 버전을 모름 → 유지하고 unknown으로 남긴다 (사용자 Q1, 2026-10-27)
   model_retirement L2 기술의 계열 + 같은 버전이 제목·본문에 나와야 유지 (successor.mentions). 이름에 버전이 없는 기술(Amazon Bedrock)은 → 유지 · unknown
+  breaking         릴리스 노트의 Breaking 절이 「언어 런타임 버전 지원 중단」(RUNTIMES) 줄뿐이고, 이 기술을 쓰는 대상 repo 전부의 런타임 버전을 알며
+                   모두 그 버전보다 새 줄이면 → 뺌 (HYO-202, W47 「Drop support for Python 3.10」 3건). repo 하나라도 런타임 버전을 모르거나,
+                   절에 다른 항목이 있거나, 절이 없으면(첫 문장에만 적힌 꼴 — 무엇이 breaking인지 스크립트가 모른다) → 유지
 그 밖의 종류(security 포함)는 빼지 않는다. 의존성 릴리스가 우리 줄인지(release_line)는 기록만 한다 (사용자 Q2).
 비교 깊이: 문장에 적힌 버전의 자릿수만큼 (「42」 → 첫 숫자, 「3.9」 → 둘째 숫자까지). 릴리스 버전에는 semver 줄(첫 숫자, 0.x면 둘째까지) + LINE_DEPTH.
 """
@@ -17,7 +20,7 @@ import re
 from . import successor
 from .signals import norm
 
-SCOPED = ("eol", "model_retirement")
+SCOPED = ("eol", "model_retirement", "breaking")
 LINE_DEPTH = {"python": 2}      # 줄이 둘째 숫자까지인 기술 (Python 3.12 → 3.13은 다른 줄). 나머지는 semver 줄
 
 _VER = r"v?(\d+(?:\.\d+)*)(?:\.[xX*])*(?:\.y)?(?!\d)"
@@ -25,6 +28,10 @@ _LE = r"(?:\s*(?:and|or)\s+(below|older|earlier|lower|prior))?"
 _GONE = r"(?:end[- ]of[- ](?:life|support)|\bEOL\w*|no longer supported|unsupported)"
 _BE = r"[^.;\n]{0,40}?\b(?:is|are|was|were|has|have)\b[^.;\n]{0,25}?" + _GONE
 _DROP = r"\b(?:drop(?:s|ped|ping)?|remov(?:e|es|ed|ing)|end(?:s|ed)?)\s+(?:support\s+for\s+|the\s+)?"
+RUNTIMES = ("python", "node")   # 언어 런타임 — 「이 버전 지원 중단」뿐인 breaking을 우리 버전과 견줄 때 보는 이름 (HYO-202)
+_HEAD = re.compile(r"^\s{0,3}(?:(#{1,6})\s*(.+?)\s*#*|(?:\*\*|__)(?P<b>[^*_].*?)(?:\*\*|__):?)\s*$")
+_BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+_OTHER_BREAK = re.compile(r"\b(?:remov|renam|replac|chang|deprecat|delet|migrat|no longer|must\b|instead)\w*", re.I)   # 런타임 문장을 뺀 나머지에 다른 변경 말이 있나
 _BARE = re.compile(r"(?<![\w.])" + r"v?(\d+(?:\.\d+)*)(?:\.[xX*])+(?:\.y)?(?!\d)" + _LE + _BE, re.I)
 
 
@@ -42,19 +49,26 @@ def _name_rx(name):
     return r"(?<![\w@/.-])" + r"[\s._-]?".join(toks) if toks else None
 
 
-def eol_targets(text, names, own):
-    """글 → [(기술 이름, 버전 튜플, "eq"|"le")]. names = 견줄 기술 이름(버전을 아는 것) · own = 이 행의 기술 (이름 없는 줄 표기용)."""
+def _eol_matches(text, names):
+    """글 → [(기술 이름, re.Match)] — 이름 붙은 지원 종료 문장 (주어 꼴 · 목적어 꼴). group(1) = 버전 · group(2) = 「이하」."""
     out = []
-    for n in dict.fromkeys(norm(x) for x in list(names) + ([own] if own else [])):
+    for n in dict.fromkeys(norm(x) for x in names):
         rx = _name_rx(n)
         if not rx:
             continue
         nv = rx + r"[\s-]?" + _VER + _LE
         for pat in (nv + _BE, _DROP + nv):
-            for m in re.finditer(pat, text or "", re.I):
-                t = (n, vtuple(m.group(1)), "le" if m.group(2) else "eq")
-                if t not in out:
-                    out.append(t)
+            out += [(n, m) for m in re.finditer(pat, text or "", re.I)]
+    return out
+
+
+def eol_targets(text, names, own):
+    """글 → [(기술 이름, 버전 튜플, "eq"|"le")]. names = 견줄 기술 이름(버전을 아는 것) · own = 이 행의 기술 (이름 없는 줄 표기용)."""
+    out = []
+    for n, m in _eol_matches(text, list(names) + ([own] if own else [])):
+        t = (n, vtuple(m.group(1)), "le" if m.group(2) else "eq")
+        if t not in out:
+            out.append(t)
     if own:
         for m in _BARE.finditer(text or ""):
             t = (norm(own), vtuple(m.group(1)), "le" if m.group(2) else "eq")
@@ -106,12 +120,76 @@ def _all_older(ours, announced):
     return bool(vs) and all(v and v[:len(announced)] < announced for v in vs)
 
 
+def breaking_entries(text):
+    """릴리스 노트의 Breaking 절 항목들 → [항목 글] | None (절이 없거나 비었다 — 무엇이 breaking인지 스크립트가 모른다).
+    절 = 제목 줄(`## Breaking Changes` · `**Breaking changes**`)부터 같은 깊이 이하의 다음 제목 줄까지. 굵은 글씨뿐인 줄은 가장 깊은 제목으로 본다.
+    항목 = 글머리표 한 개(이어지는 줄 포함) · 글머리표 없는 문단 · 절 안의 더 깊은 제목 줄."""
+    entries, depth, cur = [], None, None
+    for line in (text or "").splitlines():
+        m = _HEAD.match(line)
+        if m:
+            level, title, cur = len(m.group(1) or "") or 7, m.group(2) or m.group("b"), None
+            if depth is not None and level > depth:
+                entries.append(title)                    # 절 안의 더 깊은 제목도 breaking 내용이다
+            else:
+                depth = level if re.search(r"\bbreaking\b", title, re.I) else None
+            continue
+        if depth is None:
+            continue
+        if not line.strip():
+            cur = None
+        elif _BULLET.match(line) or cur is None:
+            entries.append(_BULLET.sub("", line, count=1).strip())
+            cur = len(entries) - 1
+        else:
+            entries[cur] += " " + line.strip()
+    return entries or None
+
+
+def _runtime_only(tech, text, ours_of):
+    """breaking이 「런타임 버전 지원 중단」뿐이고 우리는 더 새 줄인가 (HYO-202) → (verdict "other"|"unknown", 근거 목록) | None(볼 것이 없다).
+    other = Breaking 절의 항목이 전부 런타임 지원 중단 문장이고, 이 기술을 쓰는 대상 repo 전부의 런타임 버전을 알며 모두 그 버전보다 새 줄이다.
+    하나라도 모자라면 unknown — 남긴다. 절이 없는 글(첫 문장에만 적힌 꼴)은 무엇이 breaking인지 알 수 없어 보지 않는다."""
+    if norm(tech) in RUNTIMES:
+        return None
+    entries = breaking_entries(text)
+    if not entries:
+        return None
+    found = [(e, _eol_matches(e, RUNTIMES)) for e in entries]
+    if not any(ms for _, ms in found):
+        return None
+    repos, ev, ok = ours_of.repos(tech), [], bool(ours_of.repos(tech))
+    for entry, ms in found:
+        rest = entry
+        for _, m in ms:
+            rest = rest.replace(m.group(0), " ")
+        if not ms or _OTHER_BREAK.search(rest):          # 런타임 문장이 아닌 항목 · 한 항목에 다른 변경이 같이 적혔다
+            ok = False
+        for n, m in ms:
+            ann = vtuple(m.group(1))
+            by_repo = {r: ours_of.in_repo(n, r) for r in repos}
+            newer = bool(by_repo) and all(vs and all((v := vtuple(x)) and len(v) >= len(ann) and v[:len(ann)] > ann for x in vs)
+                                          for vs in by_repo.values())
+            row = {"technology": n, "announced": ".".join(map(str, ann)), "op": "le" if m.group(2) else "eq",
+                   "ours": list(dict.fromkeys(x for vs in by_repo.values() for x in vs)), "match": False if newer else None, "repos": by_repo}
+            if row not in ev:
+                ev.append(row)
+            ok = ok and newer
+    return ("other" if ok else "unknown"), ev
+
+
 def narrow(labels, tech, tiers, item, ours_of):
     """한 기술의 변화 라벨 → (정리한 라벨, 기록 목록). 기록 = [{change, verdict, ...}] — 무엇을 왜 뺐나/남겼나.
     ours_of(name) → 우리 버전 문자열 목록 · ours_of.names() → 버전을 아는 기술 이름들."""
     text = (item.get("title") or "") + "\n" + (item.get("text") or "")
     out, notes = [], []
     for c in labels:
+        if c == "breaking":
+            res = _runtime_only(tech, item.get("text") or "", ours_of)
+            if res:
+                notes.append({"change": c, "verdict": res[0], "runtime_only": True, "evidence": res[1]})
+                if res[0] == "other":
+                    continue
         if c == "eol":
             verdict, ev = _eol(tech, text, ours_of)
             note = {"change": c, "verdict": verdict, "evidence": ev}
@@ -147,7 +225,17 @@ class Versions:
 
     def __init__(self, versions=None, human=None):
         self.auto = {norm(k): list(dict.fromkeys(r["version"] for r in v if r.get("version"))) for k, v in (versions or {}).items()}
+        self.rows = {norm(k): [r for r in v if r.get("version") and r.get("repo")] for k, v in (versions or {}).items()}
         self.human = {norm(k): list(dict.fromkeys(v)) for k, v in (human or {}).items() if v}
+
+    def repos(self, name):
+        """이 기술의 버전이 적힌 대상 repo 이름들 — 어느 repo가 쓰는지 모르면 [] (HYO-202)."""
+        return list(dict.fromkeys(r["repo"] for r in self.rows.get(norm(name), [])))
+
+    def in_repo(self, name, repo):
+        """그 repo의 이 기술 버전들. 사람이 적은 버전은 repo를 가리지 않고 이긴다."""
+        k = norm(name)
+        return self.human.get(k) or list(dict.fromkeys(r["version"] for r in self.rows.get(k, []) if r["repo"] == repo))
 
     def __call__(self, name):
         k = norm(name)
