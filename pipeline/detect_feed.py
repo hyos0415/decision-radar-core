@@ -11,7 +11,10 @@
   items/F01-L1.md  커뮤니티 항목(자리 질의 · 경보 그물)이 가리키는 1차 출처 — 그 주에 받아 얼린 것 (HYO-174). 못 받은 링크는 index에 상태만
   search.json  빈 목록 (snapshot search는 질의를 무시한다 — 알려진 병목)
   funnel.json  건수 (수집 → 레인 A → 관문 남김 → 표시). 실행 요약 한 줄의 재료
-  gate.json    url → 왜 남았나(관문 kept_by). detect 입력에는 넣지 않는다 — 모델 판단을 흔들지 않게 화면(HYO-85)만 읽는다
+  gate.json    url → 왜 남았나(관문 kept_by · 자리 질의가 고른 자리 slots). 화면(HYO-85)이 읽는다. feed.json에는 넣지 않는다.
+               변경 (2026-11-20, HYO-205): 제품 detect가 여기서 두 가지만 읽는다 — security 표시와 자리 질의가 고른 자리(repo · 역할 · 이유).
+               처음(10/8)엔 「모델 판단을 흔들지 않게」 아무것도 안 넘겼는데, W47을 아홉 번 돌리니 detect가 「어디에 쓰나」를 처음부터
+               다시 판단해 모델 후보가 실행마다 갈렸다 (임베딩 3건 · Kimi). 관문의 등급 × 변화 이유는 지금도 넘기지 않는다
   basis.json   관문의 판정 기준 — 대상 레포별 커밋·우리 버전 (pipeline.basis, HYO-162). run 폴더에 있으면 그대로 옮긴다.
                detect가 지금 기준과 대조해 이미 반영된 릴리스를 뺀다 (모델에는 안 보인다)
   list.json    이번 주 목록 — 「항상」 · 기술 질의 top-k · 자리 질의 top-k (HYO-168, docs/design/query-topk.md). 화면이 읽는다
@@ -342,6 +345,17 @@ def links_note(rows):
     return "\n".join(lines)
 
 
+def slot_hits(slots, item_id):
+    """항목이 든 자리 전부 → [{slot, name, repo, role, fit, reason}] (자리 순). slot_picks는 처음 자리 하나만 남긴다 — detect에는 전부 넘긴다 (HYO-205)."""
+    out = []
+    for slot, xs in ((slots or {}).get("per_slot") or {}).items():
+        for x in xs:
+            if x["id"] == item_id:
+                out.append({"slot": slot, "name": (slots.get("slot_names") or {}).get(slot), "repo": (slots.get("slot_repos") or {}).get(slot),
+                            "role": (slots.get("slot_roles") or {}).get(slot), "fit": x["fit"], "reason": x["reason"]})
+    return out
+
+
 def choose(lane_a, slots, all_kept=False, interest=None):
     """detect로 갈 항목 — 관문 몫(select) + 자리 질의 top-k + 관심사 질의 주 10건 + 경보 그물의 관문이 모르는 기술.
     탈락 추적의 재생(pipeline.trace --now)도 이 함수를 쓴다."""
@@ -421,6 +435,9 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False, fetcher=None):
         else:
             g = e["gate"]
             why[item["url"]] = {"id": e["id"], "reason": g.get("reason"), "kept_by": g.get("kept_by") or [], "shown": e.get("shown")}
+        hits = slot_hits(slots, e["id"])
+        if hits:  # 이 소식을 후보로 고른 자리 전부 (관문으로 온 소식이 자리에도 들었으면 같이) — detect가 읽는다 (HYO-205)
+            why[item["url"]]["slots"] = hits
     f = funnel(manifest, lane_a, chosen, slots, alarm_info, interest)
     if links:
         f["links"] = {"total": len(links), "fetched": sum(1 for r in links if r["status"] == 200)}

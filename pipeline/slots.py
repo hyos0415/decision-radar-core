@@ -349,6 +349,8 @@ def run(items, slots, engine="claude", out=None, reuse=False, model=None):
             "unjudged": sorted({c["id"] for c in cands} - set(judged)), "dropped": dropped,
             "slot_names": {s["id"]: s.get("name") for s in slots["slots"]},
             "slot_current": {s["id"]: s.get("current") or [] for s in slots["slots"]},
+            "slot_repos": {s["id"]: s.get("repo") for s in slots["slots"]},       # detect가 「어느 repo의 어느 역할 후보인가」를 받게 (HYO-205)
+            "slot_roles": {s["id"]: s.get("role") for s in slots["slots"]},
             "per_slot": per, "to_detect": to_detect, "candidate_list": cands,
             "check": check_list(cands, judged, per) if is_v2(slots) else []}     # 「확인 필요」 — 목록에만, detect 아님 (v2)
 

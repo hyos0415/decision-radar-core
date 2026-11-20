@@ -120,17 +120,29 @@ def grep_log(c):
     return out
 
 
-def security_urls(c):
-    """관문이 security로 남긴 소식의 url들 (입력 폴더의 gate.json — detect_feed가 옮겨 둔다). 없으면 빈 집합 — 예전 입력 · eval 픽스처는 그대로 돈다."""
+def _why(c):
+    """입력 폴더의 gate.json(url → 왜 왔나 — detect_feed가 쓴다). 없으면 {} — 예전 입력 · eval 픽스처는 그대로 돈다."""
     snap = c.env.get("RADAR_SNAPSHOT_DIR")
     path = os.path.join(snap, "gate.json") if snap else None
     if not path or not os.path.exists(path):
-        return set()
+        return {}
     try:
         gate = json.load(open(path, encoding="utf-8"))
     except (OSError, ValueError):
-        return set()
-    return {url for url, v in gate.items() if isinstance(v, dict) and any(k.get("change") == "security" for k in v.get("kept_by") or [])}
+        return {}
+    return {url: v for url, v in gate.items() if isinstance(v, dict)}
+
+
+def security_urls(c):
+    """관문이 security로 남긴 소식의 url들."""
+    return {url for url, v in _why(c).items() if any(k.get("change") == "security" for k in v.get("kept_by") or [])}
+
+
+def slot_reasons(c):
+    """자리 질의가 후보로 고른 소식 → {url: [{slot, name, repo, role, fit, reason}]} (HYO-205). 대상 repo가 적힌 자리만 —
+    detect는 「어디에 쓰나」를 다시 판단하지 않고 이 자리의 repo · 역할로 쓴다."""
+    return {url: hits for url, v in _why(c).items()
+            if (hits := [h for h in v.get("slots") or [] if h.get("repo") in c.targets])}
 
 
 # 「우리 코드가 안 쓴다」는 뜻의 말 — unused_claim을 안 붙이고 버린 보안 소식을 잡는 뒷문 (W47: 「HTTP/2 서버를 열지 않는다」가 표시 없이 빠졌다)
@@ -141,6 +153,13 @@ def unused_security(excluded, sec):
     """버린 것 가운데 「보안 소식인데 안 쓴다는 이유」인 것 (HYO-205 사용자 2026-11-20: 보안 소식은 코드에 없다고 빼지 않는다 — 찾아본 결과를 적어 올린다).
     이유가 사용 여부가 아닌 것(스택 밖 · 내용 없음 · 다른 줄의 백포트)은 그대로 둔다 — 보고서가 따로 센다."""
     return [e for e in excluded if e.get("url") in sec and (e.get("unused_claim") or _UNUSED_WORDS.search(e.get("reason") or ""))]
+
+
+def to_rescue(excluded, sec, slotted):
+    """거르기가 버렸지만 버릴 수 없는 소식 → [(버린 줄, 왜 못 버리나)] (HYO-205).
+    slot = 자리 질의가 이미 후보로 고른 것 — 어디에 쓰나를 detect가 다시 판단해 빼면 실행마다 갈린다 · security = 보안 소식을 안 쓴다는 이유로 버린 것."""
+    unused = {id(e) for e in unused_security(excluded, sec)}
+    return [(e, "slot" if e.get("url") in slotted else "security") for e in excluded if e.get("url") in slotted or id(e) in unused]
 
 
 def usage_lines(c, patterns):

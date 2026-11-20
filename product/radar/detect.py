@@ -72,6 +72,8 @@ def detect_graph(ctx, model):
         feed, applied = detect_ops.drop_applied(ctx, feed)
         sec = detect_ops.security_urls(ctx)  # 관문이 security로 남긴 소식 — 모델에게 표시해 주고, 「안 쓴다」며 버리면 코드가 되돌린다 (HYO-205)
         feed = [{**it, "security": True} if it.get("url") in sec else it for it in feed]
+        slotted = detect_ops.slot_reasons(ctx)  # 자리 질의가 이미 후보로 고른 것 — 어느 repo의 어느 역할인지 넘기고, 거르기가 다시 빼지 못하게 한다 (HYO-205)
+        feed = [{**it, "candidate_for": slotted[it["url"]]} if it.get("url") in slotted else it for it in feed]
         return {"stack": detect_ops.read_stack(ctx), "feed": feed, "rejected": rejected + applied}
 
     async def triage_node(state):
@@ -86,15 +88,18 @@ def detect_graph(ctx, model):
         t = r.structured
         cands = [c.model_dump() for c in t.candidates]
         excluded, p3 = [e.model_dump() for e in t.excluded], []
-        # 보안 소식은 「우리 코드에 없다」는 이유로 빼지 않는다 — 찾아본 결과를 적어 올리고 사람이 정한다 (HYO-205, 사용자 2026-11-20)
+        # 못 버리는 소식 (HYO-205, 사용자 2026-11-20) — 보안 소식은 「우리 코드에 없다」는 이유로 빼지 않는다(찾아본 결과를 적어 올린다) ·
+        # 자리 질의가 고른 후보는 어디에 쓰나를 다시 판단해 빼지 않는다(실행마다 갈렸다). 버렸으면 코드가 되돌려 후보로 다시 쓰게 한다
         sec = {it["url"] for it in feed if it.get("security")}
-        back = detect_ops.unused_security(excluded, sec)
-        rescued = []
+        slotted = {it["url"] for it in feed if it.get("candidate_for")}
+        pairs = detect_ops.to_rescue(excluded, sec, slotted)
+        back, rescued = [e for e, _ in pairs], []
         if back:
             urls = [e["url"] for e in back]
             try:
                 rr = await agent("detect-rescue", RESCUE_INSTRUCTIONS, Rescued,
-                                 rescue_prompt(state["now"], state["stack"], [it for it in feed if it.get("url") in urls], back))
+                                 rescue_prompt(state["now"], state["stack"], [it for it in feed if it.get("url") in urls],
+                                               [{**e, "kept_because": why} for e, why in pairs]))
                 got = [c.model_dump() for c in rr.structured.candidates]
                 for c in got:  # 버릴 때 적은 패턴을 후보로 옮긴다 — 초안에 찾아본 결과가 남는다
                     mine = [p for e in back if e["url"] in c["source_urls"] for p in e.get("checked") or []]
@@ -106,8 +111,11 @@ def detect_graph(ctx, model):
                 p3.append({"kind": "model_error", "stage": "rescue", "type": type(e).__name__, "message": str(e)[:300]})
         kept, skipped, dropped = detect_ops.screen(ctx, cands, state["feed"])
         excluded = detect_ops.check_unused(ctx, excluded)  # 「안 쓴다」는 말을 repo_grep 기록과 대조 (HYO-205)
-        security = {"total": len(sec), "rescued": rescued,
+        security = {"total": len(sec), "rescued": [u for u in rescued if u in sec],
                     "excluded": [{"url": e["url"], "reason": e["reason"]} for e in excluded if e["url"] in sec]} if sec else None
+        if slotted:  # 자리 질의 후보의 결과 — 남은 excluded는 되돌리기에 실패한 것뿐이다
+            security = {**(security or {}), "slot_candidates": {"total": len(slotted), "rescued": [u for u in rescued if u in slotted],
+                                                              "excluded": [e["url"] for e in excluded if e["url"] in slotted]}}
         return {"kept": kept, "skipped": skipped, "dropped": dropped, "excluded": rejected + excluded, "security": security, "p3": p3}
 
     def fan_out(state):

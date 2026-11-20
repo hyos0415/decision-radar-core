@@ -197,7 +197,27 @@ async def main():
                {"url": "https://x/brk", "reason": "미사용", "unused_claim": True, "checked": ["zz_absent"]}]
         back = detect_ops.unused_security(exs, sec)
         check("되돌릴 것: 보안 소식을 안 쓴다는 이유로 버린 것만 (표시 · 말 둘 다)", back == exs[:2], back)
+        # 3d 자리 질의가 고른 후보는 거르기가 다시 빼지 못한다 — 대상 repo가 적힌 자리만 넘긴다
+        gate = json.loads((snapd / "gate.json").read_text(encoding="utf-8"))
+        gate["https://x/model"] = {"kept_by": [], "slots": [{"slot": "judge", "name": "채점", "repo": "mine", "role": "루브릭 채점", "fit": 2, "reason": "비교해 볼 만"},
+                                                            {"slot": "old", "name": "뺀 repo의 자리", "repo": "gone", "role": "r", "fit": 2, "reason": "x"}]}
+        gate["https://x/other"] = {"kept_by": [], "slots": [{"slot": "old", "name": "n", "repo": "gone", "role": "r", "fit": 2, "reason": "x"}]}
+        (snapd / "gate.json").write_text(json.dumps(gate), encoding="utf-8")
         ctx.targets = {"mine": str(code)}
+        sl = detect_ops.slot_reasons(ctx)
+        check("자리 후보: 대상 repo의 자리만 (뺀 repo의 자리는 넘기지 않는다)", list(sl) == ["https://x/model"] and [h["slot"] for h in sl["https://x/model"]] == ["judge"], sl)
+        exs2 = exs + [{"url": "https://x/model", "reason": "코드에 아직 채점 모델 사용처 없음"}, {"url": "https://x/other", "reason": "스택 밖"}]
+        pairs = detect_ops.to_rescue(exs2, sec, set(sl))
+        check("되돌릴 것: 보안(안 쓴다) 2 + 자리 후보 1, 이유가 붙는다", [(e["url"], w) for e, w in pairs] ==
+              [("https://x/sec", "security"), ("https://x/sec", "security"), ("https://x/model", "slot")], pairs)
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # 레포 루트 — pipeline 패키지
+        from pipeline import detect_feed
+        sj ={"per_slot": {"judge": [{"id": "a", "fit": 3, "reason": "r1", "rank": 1}], "gate": [{"id": "a", "fit": 2, "reason": "r2", "rank": 2}, {"id": "b", "fit": 2, "reason": "r3", "rank": 1}]},
+              "slot_names": {"judge": "채점", "gate": "관문"}, "slot_repos": {"judge": "mine", "gate": "mine"}, "slot_roles": {"judge": "루브릭 채점"}}
+        hits = detect_feed.slot_hits(sj, "a")
+        check("입력 만들기: 항목이 든 자리를 전부 넘긴다 (repo · 역할 · 이유)", [(h["slot"], h["repo"], h["fit"], h["role"]) for h in hits] ==
+              [("judge", "mine", 3, "루브릭 채점"), ("gate", "mine", 2, None)], hits)
+        check("입력 만들기: 예전 slots.json(repo 없음)도 돈다", detect_feed.slot_hits({"per_slot": {"j": [{"id": "a", "fit": 2, "reason": "r"}]}}, "a")[0]["repo"] is None)
         ops.repo_grep(ctx, "zz_absent")
         lines = detect_ops.usage_lines(ctx, ["zz_absent", "zz_widget", "zz_never_ran"])
         check("초안에 적는 줄: 개수는 기록에서 읽는다", "mine 0곳" in lines[0] and "mine 2곳" in lines[1] and "돌린 기록 없음" in lines[2], lines)
