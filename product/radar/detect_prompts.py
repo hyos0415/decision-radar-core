@@ -1,8 +1,8 @@
 """detect 프롬프트 — 스킬 SKILL.md 흐름 2(R10·R14·R16·R17)와 같은 규칙을 같은 뜻으로 적는다.
 
-규칙을 여기에 더 쓰기 전에 radar.py·그래프 코드로 옮길 수 있는지 먼저 본다 (CLAUDE.md 규율 1):
-  R14 (기존 ADR과 겹침)   그래프의 match 노드가 radar.py match로 집행한다 — 프롬프트에 없다
-  R10 (affected 하나 이상) match 노드가 빈 affected·없는 repo를 버린다
+규칙을 여기에 더 쓰기 전에 radar.py·흐름 코드로 옮길 수 있는지 먼저 본다 (CLAUDE.md 규율 1):
+  R14 (기존 ADR과 겹침)   흐름 코드(detect_ops.screen)가 radar.py match로 집행한다 — 프롬프트에 없다
+  R10 (affected 하나 이상) detect_ops.screen이 빈 affected·없는 repo를 버린다
   R8  (status)            AdrDraft에 칸이 없고 ops.render가 proposed로 박는다
   R17 형식 (basis·source_hint·조건 없음 메모)  radar.py validate가 막는다. 여기엔 「무엇을 쓸지」만 있다
 """

@@ -711,7 +711,7 @@ def write_adr(ctx, item_id, kind, draft, *, lifecycle="USER_REVIEW", final_lifec
     항목을 검토 대기(USER_REVIEW · export.state=review)로 둔다 — 사람이 `review_item`으로 답하면 그때 내보내거나 지운다.
     run_id는 「같은 실행」의 기록이다(detect 한 번이 초안 여러 개에 같은 값을 준다) — 별도 파일에 남아, 같은 실행의 다른 항목이 내보낸 ADR을
     재개 검사에서 넘기는 근거가 된다 (`_own_exports`). 없으면(capture) 어떤 내보내기도 넘기지 않는다.
-    이미 의도가 있으면 새로 쓰지 않고 회복한다 (그래프가 같은 도구 노드를 다시 돌려도 ADR이 두 개가 되지 않는다 — S3).
+    이미 의도가 있으면 새로 쓰지 않고 회복한다 (재개가 같은 도구 호출을 다시 돌려도 ADR이 두 개가 되지 않는다 — S3).
     """
     approval = approval or {}
     item = read_item(ctx, item_id)

@@ -1,4 +1,4 @@
-"""detect의 코드 쪽 — 모델이 아니라 그래프의 노드가 부른다. 안전 조항은 여기와 radar.py가 집행한다.
+"""detect의 코드 쪽 — 모델이 아니라 흐름의 단계 함수(detect.py)가 부른다. 안전 조항은 여기와 radar.py가 집행한다.
 
 도구 호출은 스킬 transcript와 같은 모양으로 ctx.events에 남는다 (ops.radar / ops.read_repo_file이 기록한다).
 """

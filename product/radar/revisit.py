@@ -2,7 +2,7 @@
 
 list(radar.py list) ─조건마다 병렬─▶ judge(에이전트 + Verdict 구조화 출력) ─▶ decide(radar.py decide --apply)
 판정 결과를 손으로 옮기지 않는다 — 변화·알림·기록은 radar.py decide가 정한다 (R3·R4·R8).
-에이전트는 실행 엔진(engines.py)이 돌린다 — API는 LangChainRunner(create_agent), 구독 CLI는 ClaudeCliRunner (HYO-99).
+에이전트는 실행 엔진(engines.py)이 돌린다 — API · 스텁은 LoopRunner(직접 쓴 루프 loop.py), 구독 CLI는 ClaudeCliRunner (HYO-99).
 순서 · 병렬은 plain Python(asyncio)이 부른다 — 처음(0009)엔 LangGraph StateGraph + Send였다 (ADR 0030, HYO-220).
 """
 
@@ -29,7 +29,7 @@ def revisit_flow(ctx, model):
         except Exception as e:  # 400·파싱 실패·recursion limit — 안전 실패 (R1)
             row, err = ops.error_row(adr, cond, e)
             return {"rows": [row], "p3": [err]}
-        # 병렬이라 ctx.calls 대신 이 판정에서 부른 도구 수로 센다 (엔진이 센다 — LangChain은 ToolMessage, CLI는 도구 기록)
+        # 병렬이라 ctx.calls 대신 이 판정에서 부른 도구 수로 센다 (엔진이 센다 — 루프는 tool_result 수, CLI는 도구 기록)
         err = [] if r.tool_calls else [{"adr": adr["id"], "condition_id": cond.get("id"), "kind": "tool_call_missing"}]
         return {"rows": [ops.verdict_row(adr, cond, r.structured)], "p3": err}
 

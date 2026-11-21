@@ -21,7 +21,7 @@ from pydantic import ValidationError
 
 
 class LoopError(RuntimeError):
-    """루프 실패 — 턴 상한 · 구조화 출력 없음 · 스키마 불일치 · 모르는 도구. 노드가 model_error로 센다 (안전 실패, R1)."""
+    """루프 실패 — 턴 상한 · 구조화 출력 없음 · 스키마 불일치 · 모르는 도구. 흐름 단계가 model_error로 센다 (안전 실패, R1)."""
 
 
 def limit(max_turns):

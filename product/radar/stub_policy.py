@@ -7,7 +7,7 @@ detect — 소식(feed) 단위 판단표 (케이스가 아니라 소식 ID가 �
 - triage: 소식 목록(<feed>)의 url마다 script["detect"]["items"][url] — candidate면 technology·dependency·affected, exclude면 reason
 - draft:  후보(<candidate>)의 소식 url로 script["detect"]["drafts"][url] — DraftBody 그대로
 - repair: 고쳐 쓸 초안(<repair>)의 소식 url로 script["detect"]["repairs"][url] — 없으면 받은 초안을 그대로 돌려준다(고치지 못함)
-스텁은 겹침(R14)을 모른다 — LEANN(D06)도 후보로 올린다. 겹침은 그래프의 screen 노드와 radar.py match가 잡아야 한다.
+스텁은 겹침(R14)을 모른다 — LEANN(D06)도 후보로 올린다. 겹침은 흐름의 screen(detect_ops.screen)과 radar.py match가 잡아야 한다.
 """
 
 import json
