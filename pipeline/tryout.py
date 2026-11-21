@@ -434,6 +434,19 @@ def load_targets(path):
     return {t["repo"]: str((base / t["path"]).resolve()) for t in json.loads(Path(path).read_text(encoding="utf-8"))}
 
 
+def choose_target(adr, targets, checks, repo=None, component=None):
+    """결정 기록의 affected 가운데 대상 목록과 검사 설정에 둘 다 있는 첫 곳 → (repo, component, 검사 설정).
+    없으면 ValueError(이유) — 명령줄과 실험 실행기(pipeline/experiment.py)가 같이 쓴다."""
+    cands = [(x["repo"], x["component"]) for x in adr["affected"] if (not repo or x["repo"] == repo) and (not component or x["component"] == component)]
+    if repo and component and (repo, component) not in cands:
+        cands = [(repo, component)]
+    pick = next(((r, c) for r, c in cands if r in targets and c in ((checks.get(r) or {}).get("components") or {})), None)
+    if not pick:
+        raise ValueError(f"돌릴 곳이 없다 — 결정 기록의 affected {cands} 가운데 대상 목록과 검사 설정에 둘 다 있는 곳이 없다")
+    r, c = pick
+    return r, c, {"python": checks[r].get("python"), **checks[r]["components"][c]}
+
+
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -459,14 +472,10 @@ def main(argv=None):
     package, version = a.package or adr["technology"], a.to or release_version(adr)
     if not version:
         raise SystemExit("올릴 버전을 결정 기록에서 못 읽었다 — --to로 넘긴다")
-    cands = [(x["repo"], x["component"]) for x in adr["affected"] if (not a.repo or x["repo"] == a.repo) and (not a.component or x["component"] == a.component)]
-    if a.repo and a.component and (a.repo, a.component) not in cands:
-        cands = [(a.repo, a.component)]
-    pick = next(((r, c) for r, c in cands if r in targets and c in ((checks.get(r) or {}).get("components") or {})), None)
-    if not pick:
-        raise SystemExit(f"돌릴 곳이 없다 — 결정 기록의 affected {cands} 가운데 대상 목록과 검사 설정에 둘 다 있는 곳이 없다")
-    repo, comp = pick
-    check = {"python": checks[repo].get("python"), **checks[repo]["components"][comp]}
+    try:
+        repo, comp, check = choose_target(adr, targets, checks, a.repo, a.component)
+    except ValueError as e:
+        raise SystemExit(str(e))
     extra = []
     for spec in a.extra:
         name, sep, ver = spec.partition("==")

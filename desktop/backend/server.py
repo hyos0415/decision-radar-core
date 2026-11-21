@@ -264,6 +264,8 @@ def main(argv=None):
             print("개발 데이터에 이번 주 목록 예시를 더했다", flush=True)
     if devdata.ensure_check(a.data_dir):
         print("개발 데이터에 자리 질의 「확인 필요」 예시를 더했다", flush=True)
+    if devdata.ensure_experiment(a.data_dir):
+        print("개발 데이터에 「실험해 보기」 예시 결정을 더했다", flush=True)
     try:
         svc = RadarService(a.data_dir, profile=profile)  # 폴더를 만든 프로필과 다르면 거부한다
     except ServiceError as e:

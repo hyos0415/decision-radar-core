@@ -299,8 +299,46 @@ class DecisionList(BaseModel):
     items: list[Decision]
 
 
+class ExperimentPlan(BaseModel):
+    """이 결정에 맞는 실험 레시피 (HYO-116, `pipeline.experiment.plan`) — 돌리지 않고 무엇을 돌릴지만. ready가 False면 reason."""
+    adr: str
+    recipe: Optional[str] = Field(description="dependency(의존성 올려 보기) · 없으면 null — 맞는 레시피가 아직 없다")
+    label: Optional[str] = None
+    cost: Optional[Literal["local", "subscription", "api"]] = Field(default=None, description="local만 바로 돈다 — subscription · api는 확인이 필요하다")
+    cost_text: Optional[str] = None
+    ready: bool
+    reason: Optional[str] = Field(default=None, description="못 돌리는 이유 (레시피 없음 · 버전 못 읽음 · 검사 설정 없음 · 돌릴 곳 없음)")
+    detail: Optional[str] = Field(default=None, description="무엇을 어디서 — 「fastapi → 0.162.6 (decision-radar · desktop) — …」")
+    export_rule: Optional[str] = Field(default=None, description="내보내기(브랜치 push · draft PR) 조건")
+    export_allowed: bool = Field(default=False, description="이 모드에서 내보내기를 켤 수 있나 — 실사용 모드만")
+
+
+class ExperimentExport(BaseModel):
+    branch: Optional[str] = None
+    pr_url: Optional[str] = None
+    skipped_reason: Optional[str] = None
+
+
+class ExperimentResult(BaseModel):
+    """실험 한 번의 결과 — 결정은 사람이다(ADR · status를 바꾸지 않는다)."""
+    adr: str
+    recipe: Optional[str]
+    label: Optional[str]
+    at: str
+    seconds: Optional[float] = None
+    verdict: str = Field(description="레시피의 판정 (올려 보기: pass · fail · pass_not_exercised · install_failed …) · unavailable · needs_confirm")
+    verdict_text: str
+    ok: bool
+    summary: str
+    report_md: Optional[str] = None
+    export: Optional[ExperimentExport] = None
+    stub: bool = Field(default=False, description="스텁 · 데모 — 실제로 돌리지 않았다")
+
+
 class DecisionDetail(Decision):
     markdown: str
+    experiment: Optional[ExperimentPlan] = Field(default=None, description="실험해 보기 (HYO-116) — 이 결정에 맞는 레시피")
+    experiments: list[ExperimentResult] = Field(default_factory=list, description="이 결정의 지난 실험, 최근 것 먼저")
 
 
 # ── 실행 ──────────────────────────────────────────────────────────
@@ -361,13 +399,15 @@ class Schedule(BaseModel):
 
 # ── 작업 + 폴링 (HYO-85) ─────────────────────────────────────────
 
-JobKind = Literal["capture", "detect", "revisit"]
+JobKind = Literal["capture", "detect", "revisit", "experiment"]
 
 
 class JobRequest(BaseModel):
     conversation: Optional[str] = Field(default=None, description="capture만")
     repo: Optional[str] = Field(default=None, description="capture만 — CaptureRequest.repo와 같다")
     topic: Optional[TopicRef] = Field(default=None, description="capture만 — CaptureRequest.topic과 같다")
+    adr: Optional[str] = Field(default=None, description="experiment만 — 실험할 결정 번호 (HYO-116)")
+    export: Optional[bool] = Field(default=None, description="experiment만 — 레시피 조건(예: 통과)이면 브랜치 push + draft PR. 실사용 모드만")
 
 
 class Job(BaseModel):
@@ -378,7 +418,8 @@ class Job(BaseModel):
     started: Optional[str]
     finished: Optional[str]
     message: Optional[str] = Field(description="한 줄 — 상태 창에 그대로")
-    result: Union[CaptureResult, RunResult, None] = Field(description="끝났을 때: capture → CaptureResult, detect·revisit → RunResult")
+    result: Union[CaptureResult, RunResult, ExperimentResult, None] = Field(
+        description="끝났을 때: capture → CaptureResult, detect·revisit → RunResult, experiment → ExperimentResult")
     error: Optional[str]
     item: Optional[str] = Field(description="capture가 만든 Inbox 항목 (알림을 누르면 여기로)")
     mode: Mode

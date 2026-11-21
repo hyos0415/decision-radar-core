@@ -31,8 +31,11 @@ function Centered({ children }: { children: React.ReactNode }): React.JSX.Elemen
   return <div className="empty-state h-full">{children}</div>
 }
 
+// detect · revisit run only — capture shows in the Inbox, experiment (HYO-116) is watched by the decision panel itself
 function isActive(j: Job): boolean {
-  return j.kind !== 'capture' && (j.state === 'queued' || j.state === 'running')
+  return (
+    (j.kind === 'detect' || j.kind === 'revisit') && (j.state === 'queued' || j.state === 'running')
+  )
 }
 
 function App(): React.JSX.Element {

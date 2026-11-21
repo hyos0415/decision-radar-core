@@ -195,6 +195,7 @@ def main():
         scenario_hyo158_blocked(tmp)
         scenario_hyo245(tmp)
         scenario_hyo245_real(tmp)
+        scenario_hyo116(tmp)
     finally:
         os.environ.pop("RADAR_EXPORT", None)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -1989,6 +1990,76 @@ def _check_json_245(root, week):
     json.dump(slots, open(os.path.join(run, "slots.json"), "w", encoding="utf-8"), ensure_ascii=False)
     detect_feed.build(run, out)
     return json.load(open(os.path.join(out, "check.json"), encoding="utf-8"))
+
+
+def scenario_hyo116(tmp):
+    """HYO-116 첫 조각 — 결정 상세의 「실험해 보기」: 레시피 고르기(진짜) · 접수 검사(레시피 없음 · 스텁 내보내기는 409) · 작업으로 돌기 ·
+    스텁은 흉내(사본 · 설치 · 검사 0) · 지난 결과가 상세에 · ADR은 그대로 (R8) · 실사용이면 실행기에 export를 넘긴다."""
+    print("\n— HYO-116: 실험해 보기 —")
+    import hashlib
+    import jobs as jobs_mod
+    from pipeline import experiment as exp_mod
+    data = os.path.join(tmp, "data116")
+    devdata.seed(data)
+    check("실험 예시: 서버가 뜰 때만 더한다 · 두 번째는 안 더한다", devdata.ensure_experiment(data) and not devdata.ensure_experiment(data))
+    svc = RadarService(data)
+    jobs = jobs_mod.Jobs(svc, start=False)
+    c = TestClient(server.create_app(svc, jobs=jobs))
+    ds = {d["id"]: d for d in c.get("/decisions").json()["items"]}
+    ex = next((i for i, d in ds.items() if (d.get("use") or "").startswith("의존성 릴리스")), None)
+    check("실험 예시: 의존성 릴리스 결정 하나 (다음 번호)", ex == "0006" and len(ds) == 6, sorted(ds))
+    path = os.path.join(svc.adr_dir, ds[ex]["file"])
+    before = hashlib.sha256(open(path, "rb").read()).hexdigest()
+    d = c.get(f"/decisions/{ex}").json()
+    pl = d["experiment"]
+    check("상세: 레시피 = 의존성 올려 보기 · local · 무엇을 어디서", pl["recipe"] == "dependency" and pl["ready"] and pl["cost"] == "local"
+          and "pydantic → 2.12.3 (medical-mate · chat-api)" in (pl["detail"] or "") and d["experiments"] == [], pl)
+    check("상세: 스텁에서는 내보내기를 못 켠다", pl["export_allowed"] is False, pl)
+    p1 = c.get("/decisions/0001").json()["experiment"]
+    check("상세: 맞는 레시피가 없으면 이유", p1["recipe"] is None and not p1["ready"] and p1["reason"] == exp_mod.NO_RECIPE, p1)
+    r = c.post("/jobs/experiment", json={"adr": "0001"})
+    check("접수: 레시피 없는 결정은 409 (작업이 되지 않는다)", r.status_code == 409 and "실험할 수 없다" in r.json()["detail"], r.text[:200])
+    r = c.post("/jobs/experiment", json={"adr": ex, "export": True})
+    check("접수: 스텁에서 내보내기는 409", r.status_code == 409 and "실사용 모드" in r.json()["detail"], r.text[:200])
+    r = c.post("/jobs/experiment", json={"adr": "9999"})
+    check("접수: 없는 번호는 404", r.status_code == 404, r.text[:200])
+    r = c.post("/jobs/experiment", json={"adr": ex})
+    job = r.json()["job"]
+    check("접수: 202 · 종류 experiment · 미리보기에 결정 · 레시피", r.status_code == 202 and job["kind"] == "experiment" and job["state"] == "queued"
+          and job["preview"] == f"ADR {ex} · 의존성 올려 보기", job)
+    jid, payload = jobs.q.get()
+    jobs.run_one(jid, payload)
+    j = c.get(f"/jobs/{jid}").json()
+    res = j["result"] or {}
+    check("작업: 끝 · 결과 = 스텁 흉내(통과) · 요약 한 줄", j["state"] == "done" and res.get("stub") is True and res.get("verdict") == "pass"
+          and j["message"].startswith("의존성 올려 보기: [스텁]"), j)
+    d2 = c.get(f"/decisions/{ex}").json()
+    check("상세: 지난 실험이 최근 것 먼저", [x["verdict"] for x in d2["experiments"]] == ["pass"] and d2["experiments"][0]["stub"], d2["experiments"])
+    check("ADR 파일은 그대로 (R8 — 실험은 근거일 뿐)", hashlib.sha256(open(path, "rb").read()).hexdigest() == before)
+    check("행동 로그: experiment_done", any(e["event"] == "experiment_done" and e["item"] == ex and e["detail"]["verdict"] == "pass" for e in events(svc)))
+    # 실사용이면 실행기(pipeline.experiment.run)를 부르고 export를 넘긴다 — 사본 · 설치 · 내보내기는 test_experiment · test_tryout이 본다
+    calls = []
+    orig_run, orig_mode = exp_mod.run, svc.mode
+
+    def fake_run(adr_path, out, export=False, confirm=False, root=None):
+        calls.append({"adr": os.path.basename(adr_path)[:4], "export": export, "out": out, "root": root})
+        return {"adr": ex, "recipe": "dependency", "label": "의존성 올려 보기", "at": "t", "seconds": 1.0, "verdict": "fail",
+                "verdict_text": "깨짐", "ok": False, "summary": "의존성 올려 보기: 깨짐", "report_md": "# r", "export": {"branch": None, "pr_url": None,
+                "skipped_reason": "내보내지 않음: fail"}, "stub": False}
+    exp_mod.run, svc.mode = fake_run, "real"
+    try:
+        check("실사용: 내보내기를 켤 수 있다", c.get(f"/decisions/{ex}").json()["experiment"]["export_allowed"] is True)
+        r = c.post("/jobs/experiment", json={"adr": ex, "export": True})
+        jid, payload = jobs.q.get()
+        jobs.run_one(jid, payload)
+        j = c.get(f"/jobs/{jid}").json()
+    finally:
+        exp_mod.run, svc.mode = orig_run, orig_mode
+    check("실사용: 실행기에 export · 결과 폴더(<data>/experiments/) · ADR repo 루트를 넘긴다", len(calls) == 1 and calls[0]["export"] is True
+          and calls[0]["out"].startswith(os.path.join(data, "experiments", ex + "-")) and calls[0]["root"] == os.path.dirname(os.path.dirname(svc.adr_dir)), calls)
+    check("실사용: 깨짐도 작업은 끝(done) — 판정은 결과에", j["state"] == "done" and j["result"]["verdict"] == "fail" and not j["result"]["ok"]
+          and j["result"]["export"]["skipped_reason"] == "내보내지 않음: fail", j)
+    check("상세: 지난 실험 둘, 최근 것 먼저", [x["verdict"] for x in c.get(f"/decisions/{ex}").json()["experiments"]] == ["fail", "pass"])
 
 
 def scenario_hyo245(tmp):

@@ -148,7 +148,22 @@ export const COPY = {
     detailLabel: '결정 상세',
     revisitConditions: '재검토 조건',
     noConditions: '등록된 조건이 없어요',
-    statusNote: '상태는 ADR 파일에서 직접 바꿔요'
+    statusNote: '상태는 ADR 파일에서 직접 바꿔요',
+    // 실험해 보기 (HYO-116) — 승인한 결정을 격리된 사본에서 레시피로. 결정은 사람이다
+    experiment: {
+      title: '실험',
+      run: '실험해 보기',
+      running: '실험 중…',
+      runningHint: '격리된 사본에서 설치하고 검사해요 — 몇 분 걸려요',
+      exportLabel: '통과하면 draft PR 열기',
+      exportOff: '내보내기는 실사용 모드에서만 돼요',
+      none: '이 결정에 맞는 실험이 아직 없어요',
+      past: '지난 실험',
+      stub: '스텁',
+      pr: 'PR 열기',
+      note: '결과는 근거예요 — 채택 여부와 상태는 사람이 정해요',
+      failed: (msg: string) => `실험이 끝나지 못했어요 — ${msg}`
+    }
   },
 
   runs: {

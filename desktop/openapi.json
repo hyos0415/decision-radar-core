@@ -3802,6 +3802,25 @@
           "markdown": {
             "type": "string",
             "title": "Markdown"
+          },
+          "experiment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExperimentPlan"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "실험해 보기 (HYO-116) — 이 결정에 맞는 레시피"
+          },
+          "experiments": {
+            "items": {
+              "$ref": "#/components/schemas/ExperimentResult"
+            },
+            "type": "array",
+            "title": "Experiments",
+            "description": "이 결정의 지난 실험, 최근 것 먼저"
           }
         },
         "type": "object",
@@ -4115,6 +4134,260 @@
           "source_type"
         ],
         "title": "Evidence"
+      },
+      "ExperimentExport": {
+        "properties": {
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch"
+          },
+          "pr_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr Url"
+          },
+          "skipped_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipped Reason"
+          }
+        },
+        "type": "object",
+        "title": "ExperimentExport"
+      },
+      "ExperimentPlan": {
+        "properties": {
+          "adr": {
+            "type": "string",
+            "title": "Adr"
+          },
+          "recipe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipe",
+            "description": "dependency(의존성 올려 보기) · 없으면 null — 맞는 레시피가 아직 없다"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "cost": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "local",
+                  "subscription",
+                  "api"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost",
+            "description": "local만 바로 돈다 — subscription · api는 확인이 필요하다"
+          },
+          "cost_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Text"
+          },
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "못 돌리는 이유 (레시피 없음 · 버전 못 읽음 · 검사 설정 없음 · 돌릴 곳 없음)"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail",
+            "description": "무엇을 어디서 — 「fastapi → 0.162.6 (decision-radar · desktop) — …」"
+          },
+          "export_rule": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Export Rule",
+            "description": "내보내기(브랜치 push · draft PR) 조건"
+          },
+          "export_allowed": {
+            "type": "boolean",
+            "title": "Export Allowed",
+            "description": "이 모드에서 내보내기를 켤 수 있나 — 실사용 모드만",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "adr",
+          "recipe",
+          "ready"
+        ],
+        "title": "ExperimentPlan",
+        "description": "이 결정에 맞는 실험 레시피 (HYO-116, `pipeline.experiment.plan`) — 돌리지 않고 무엇을 돌릴지만. ready가 False면 reason."
+      },
+      "ExperimentResult": {
+        "properties": {
+          "adr": {
+            "type": "string",
+            "title": "Adr"
+          },
+          "recipe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipe"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "at": {
+            "type": "string",
+            "title": "At"
+          },
+          "seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds"
+          },
+          "verdict": {
+            "type": "string",
+            "title": "Verdict",
+            "description": "레시피의 판정 (올려 보기: pass · fail · pass_not_exercised · install_failed …) · unavailable · needs_confirm"
+          },
+          "verdict_text": {
+            "type": "string",
+            "title": "Verdict Text"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "report_md": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Md"
+          },
+          "export": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExperimentExport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stub": {
+            "type": "boolean",
+            "title": "Stub",
+            "description": "스텁 · 데모 — 실제로 돌리지 않았다",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "adr",
+          "recipe",
+          "label",
+          "at",
+          "verdict",
+          "verdict_text",
+          "ok",
+          "summary"
+        ],
+        "title": "ExperimentResult",
+        "description": "실험 한 번의 결과 — 결정은 사람이다(ADR · status를 바꾸지 않는다)."
       },
       "HTTPValidationError": {
         "properties": {
@@ -4622,7 +4895,8 @@
             "enum": [
               "capture",
               "detect",
-              "revisit"
+              "revisit",
+              "experiment"
             ],
             "title": "Kind"
           },
@@ -4683,11 +4957,14 @@
                 "$ref": "#/components/schemas/RunResult"
               },
               {
+                "$ref": "#/components/schemas/ExperimentResult"
+              },
+              {
                 "type": "null"
               }
             ],
             "title": "Result",
-            "description": "끝났을 때: capture → CaptureResult, detect·revisit → RunResult"
+            "description": "끝났을 때: capture → CaptureResult, detect·revisit → RunResult, experiment → ExperimentResult"
           },
           "error": {
             "anyOf": [
@@ -4820,6 +5097,30 @@
               }
             ],
             "description": "capture만 — CaptureRequest.topic과 같다"
+          },
+          "adr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adr",
+            "description": "experiment만 — 실험할 결정 번호 (HYO-116)"
+          },
+          "export": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Export",
+            "description": "experiment만 — 레시피 조건(예: 통과)이면 브랜치 push + draft PR. 실사용 모드만"
           }
         },
         "type": "object",

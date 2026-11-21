@@ -63,6 +63,7 @@ from radar.stub_model import StubChat  # noqa: E402
 from common import ops  # noqa: E402
 from pipeline.detect_feed import check_input, funnel_line, slot_entry, url_key  # noqa: E402
 from pipeline import basis  # noqa: E402
+from pipeline import experiment  # noqa: E402  — 실험해 보기 (HYO-116)
 from pipeline import topic_hier  # noqa: E402
 from pipeline import skill_line  # noqa: E402
 from pipeline.importance.card_action import card_action  # noqa: E402
@@ -75,6 +76,7 @@ STATE_FILE = "capture-checkpoint.sqlite"
 META_FILE = "app-meta.json"
 EVENTS_FILE = "events.jsonl"
 RUNS_FILE = "runs.jsonl"
+EXPERIMENTS_FILE = "experiments.jsonl"  # 실험해 보기 결과 한 줄씩 (HYO-116)
 SHADOW_FILE = "shadow.jsonl"  # API 그림자 기록 (HYO-99 3단계) — 화면에 안 띄운다
 SKILL_SHADOW_DIR = "shadow-skill"  # 스킬 그림자 (HYO-166, 비교 프로토콜 §7 「같은 순간 짝」) — <data>/shadow-skill/<주>/. 11/22까지 봉인
 SKILL_SHADOW_INDEX = "index.jsonl"  # 주마다 한 줄 — 성공 · 실패 · 이유만 (내용은 주 폴더에)
@@ -1440,8 +1442,66 @@ class RadarService:
     def decision(self, adr_id):
         for row in self.decisions():
             if row["id"] == adr_id:
-                return {**row, "markdown": open(os.path.join(self.adr_dir, row["file"]), encoding="utf-8").read()}
+                return {**row, "markdown": open(os.path.join(self.adr_dir, row["file"]), encoding="utf-8").read(),
+                        "experiment": self.experiment_plan(adr_id), "experiments": self.experiments(adr_id)}
         raise ServiceError(404, f"ADR {adr_id}가 없다")
+
+    # ── 실험해 보기 (HYO-116) — 승인한 결정 하나를 레시피로 (pipeline/experiment.py) ──────────
+    # 실사용 모드만 실제로 돈다(대상 repo 사본 · 설치 · 검사, 켜면 브랜치 push + draft PR). 스텁 · 데모는 레시피 고르기만 진짜이고
+    # 돌리기는 흉내다(네트워크 · 대상 repo 0). 결과는 `<data>/experiments/<번호>-<시각>/`과 `<data>/experiments.jsonl`. ADR · status는 안 바꾼다.
+    # 쓰기 잠금(self.lock)을 잡지 않는다 — 사본에서만 돌고 분 단위라 정기 실행 · 답을 막지 않게
+
+    def _adr_file(self, adr_id):
+        adr_id = str(adr_id or "").strip()
+        names = sorted(n for n in os.listdir(self.adr_dir) if n.startswith(f"{adr_id}-") and n.endswith(".md")) if adr_id else []
+        if not names:
+            raise ServiceError(404, f"ADR {adr_id or '(번호 없음)'}가 없다")
+        return os.path.join(self.adr_dir, names[0])
+
+    def experiment_plan(self, adr_id):
+        pl = experiment.plan(self._adr_file(adr_id), os.path.dirname(os.path.dirname(self.adr_dir)))
+        return {**{k: pl.get(k) for k in ("adr", "recipe", "label", "cost", "cost_text", "ready", "reason", "detail", "export_rule")},
+                "export_allowed": self.mode == "real"}
+
+    def check_experiment(self, adr_id, export=False):
+        """접수할 때 검사 — 돌릴 수 없으면 작업이 되지 않고 409로 돌아온다."""
+        pl = self.experiment_plan(adr_id)
+        if not pl["ready"]:
+            raise ServiceError(409, f"ADR {pl['adr']}: 실험할 수 없다 — {pl['reason']}")
+        if pl["cost"] != "local":   # 구독 · 유료 API 레시피의 확인 단계는 다음 조각 — 그 전까지 앱에서는 local만 (비용 문)
+            raise ServiceError(409, f"ADR {pl['adr']}: {pl['cost_text']} — 앱의 확인 단계가 아직 없다")
+        if export and self.mode != "real":
+            raise ServiceError(409, "내보내기(브랜치 push · draft PR)는 실사용 모드에서만 — 스텁 · 데모는 대상 repo에 아무것도 내지 않는다")
+        return pl
+
+    def run_experiment(self, adr_id, export=False):
+        self.check_experiment(adr_id, export)
+        path = self._adr_file(adr_id)
+        root = os.path.dirname(os.path.dirname(self.adr_dir))
+        stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        out = os.path.join(self.data_dir, "experiments", f"{os.path.basename(path)[:4]}-{stamp}")
+        res = experiment.run(path, out, export=export, root=root) if self.mode == "real" else experiment.stub(path, root)
+        res = {**res, "out": out if self.mode == "real" else None}
+        with open(os.path.join(self.data_dir, EXPERIMENTS_FILE), "a", encoding="utf-8") as f:
+            f.write(json.dumps(res, ensure_ascii=False) + "\n")
+        self.log("experiment_done", res["adr"], recipe=res.get("recipe"), verdict=res["verdict"], stub=res.get("stub", False),
+                 pr=((res.get("export") or {}).get("pr_url")))
+        return res
+
+    def experiments(self, adr_id, limit=10):
+        """그 결정의 지난 실험, 최근 것 먼저."""
+        path = os.path.join(self.data_dir, EXPERIMENTS_FILE)
+        if not os.path.exists(path):
+            return []
+        rows = []
+        for line in open(path, encoding="utf-8"):
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("adr") == str(adr_id):
+                rows.append(r)
+        return list(reversed(rows))[:limit]
 
     def _decision_row(self, r):
         path = os.path.join(self.adr_dir, os.path.basename(r["file"].replace("\\", "/")))
