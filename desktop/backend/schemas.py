@@ -146,6 +146,7 @@ class InboxItem(BaseModel):
     action: Optional[CardAction] = Field(default=None, description="detect만: 남김 카드 표시 (HYO-132) — 관문 kept_by로 코드가 정한다 "
                                          "(모델 은퇴·EOL → 강제 이전 + 마감일 · 후속 모델 → 선택 실험). 그 밖은 null")
     adr: Optional[str] = Field(default=None, description="revisit: 조건이 충족된 ADR 번호 (「ADR 열기」 → /decisions/{adr})")
+    answer_error: Optional[str] = Field(default=None, description="접수한 답을 ADR repo에 반영하지 못한 이유 (HYO-217) — 같은 답을 다시 하면 재시도한다 (중복 없음). 없으면 null")
     message: Optional[str] = Field(default=None, description="pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장 / check: 후보 · 자리 수 한 줄")
 
 
@@ -211,7 +212,8 @@ class EditRequest(BaseModel):
 
 
 Outcome = Literal["written", "rejected", "stale", "edit_errors", "discarded", "rejudge", "blocked", "recovered", "acked", "error",
-                  "drafted", "no_draft"]  # 「확인 필요」 초안 만들기 (HYO-245) — detect 항목이 생김 · 초안 없이 끝남(줄은 열린 채)
+                  "drafted", "no_draft",  # 「확인 필요」 초안 만들기 (HYO-245) — detect 항목이 생김 · 초안 없이 끝남(줄은 열린 채)
+                  "queued"]  # 답을 접수했다 — ADR repo 반영(git·PR)은 export 작업이 뒤에서 한다 (HYO-217, 실사용 모드)
 
 
 class ActionResult(BaseModel):
@@ -400,7 +402,7 @@ class Schedule(BaseModel):
 
 # ── 작업 + 폴링 (HYO-85) ─────────────────────────────────────────
 
-JobKind = Literal["capture", "detect", "revisit", "experiment"]
+JobKind = Literal["capture", "detect", "revisit", "experiment", "export"]
 
 
 class JobRequest(BaseModel):

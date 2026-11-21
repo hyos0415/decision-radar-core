@@ -242,6 +242,17 @@ export function ItemDetail({
           </div>
         )}
 
+        {detail.answer_error && (
+          <div className="callout" role="alert">
+            <AlertTriangle size={16} />
+            <div>
+              <strong>{COPY.item.answerFailed}</strong>
+              <p>{detail.answer_error}</p>
+              <p>{COPY.item.answerFailedHint}</p>
+            </div>
+          </div>
+        )}
+
         {detail.kind === 'revisit' && detail.message && (
           <div className="callout">
             <BellRing size={16} />

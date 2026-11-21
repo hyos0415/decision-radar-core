@@ -82,6 +82,8 @@ export const COPY = {
     blocked: '지금은 처리할 수 없어요',
     error: '처리하지 못했어요',
     notSaved: '저장하지 않았어요. 아래 내용을 확인해 주세요',
+    answerFailed: 'ADR repo에 반영하지 못했어요',
+    answerFailedHint: '같은 답을 다시 하면 이어서 반영해요. 같은 ADR이 두 번 만들어지지 않아요',
     stale: {
       prompt: '기다리는 동안 기록이 바뀌었어요. 어떻게 할까요?',
       continue: '그대로 저장',

@@ -1,6 +1,6 @@
 """작업 + 폴링 (HYO-85, 사용자 결정 10/8) — 오래 걸리는 일(capture 1턴 · detect · revisit)을 접수만 하고 바로 돌려준다.
 
-  POST /jobs/{capture|detect|revisit|experiment}  → 202 {"job": {...}}   (capture는 {"conversation": "..."}, experiment는 {"adr": "0017", "export": false})
+  POST /jobs/{capture|detect|revisit|experiment|export}  → 202 {"job": {...}}   (capture는 {"conversation": "..."}, experiment는 {"adr": "0017", "export": false})
   GET  /jobs                            → {"items": [...]}     최신 먼저 — 화면의 「상태 창」
   GET  /jobs/{id}                       → {...}
 
@@ -21,7 +21,8 @@ import uuid
 
 from service import ServiceError, now_iso
 
-KINDS = ("capture", "detect", "revisit", "experiment")  # experiment = 승인한 결정을 레시피로 실험 (HYO-116 — 사본 · 설치 · 검사라 분 단위)
+KINDS = ("capture", "detect", "revisit", "experiment", "export")  # experiment = 승인한 결정을 레시피로 실험 (HYO-116 — 사본 · 설치 · 검사라 분 단위)
+# export = 접수한 Inbox 답을 ADR repo에 반영 (git·PR, HYO-217) — 앱 안에서만 접수한다 (svc.answer). POST /jobs/export는 반영할 답이 없으면 409
 LANES = ("main", "experiment")
 JOBS_FILE = "jobs.json"
 KEEP = 100
@@ -40,6 +41,7 @@ class Jobs:
         self.q = self.queues["main"]  # 테스트가 start=False로 손수 꺼내 돌린다 — 실험은 queue_of("experiment")
         self.items = self._load()
         svc.jobs = self  # Inbox가 접수된 capture를 보인다 (화면 설계 ①)
+        svc.close_stale_answers()  # 반영 중이던 답은 일꾼이 사라졌다 (HYO-217)
         self.threads = [threading.Thread(target=self._loop, args=(lane,), name=f"radar-jobs-{lane}", daemon=True) for lane in LANES]
         if start:
             for t in self.threads:
@@ -73,6 +75,9 @@ class Jobs:
             payload = {"conversation": body["conversation"], "repo": self.svc.check_repo(body.get("repo")), "topic": body.get("topic")}
             first = next((x.strip() for x in body["conversation"].splitlines() if x.strip()), "")
             preview = first[:80] + ("…" if len(first) > 80 else "")
+        elif kind == "export":
+            self.svc.check_export(body.get("item"))
+            payload, preview = {"item": body["item"]}, None
         elif kind == "experiment":  # 돌릴 수 없는 결정(레시피 없음 · 설정 없음) · 스텁에서 내보내기는 접수할 때 409 — 작업이 되지 않는다
             plan = self.svc.check_experiment(body.get("adr"), bool(body.get("export")))
             payload = {"adr": plan["adr"], "export": bool(body.get("export"))}
@@ -81,7 +86,7 @@ class Jobs:
             self.svc.check_flow(kind)
             payload, preview = {}, None
         job = {"id": f"job-{uuid.uuid4().hex[:10]}", "kind": kind, "state": "queued", "created": now_iso(), "started": None,
-               "finished": None, "message": "대기 중", "result": None, "error": None, "item": None, "mode": self.svc.mode,
+               "finished": None, "message": "대기 중", "result": None, "error": None, "item": payload["item"] if kind == "export" else None, "mode": self.svc.mode,
                "preview": preview, "acked": False}
         with self.lock:
             self.items.append(job)
@@ -133,6 +138,9 @@ class Jobs:
             if kind == "capture":
                 res = self.svc.submit_capture(payload["conversation"], repo=payload.get("repo"), topic=payload.get("topic"))
                 done = {"result": res, "message": res.get("message"), "item": res.get("item")}
+            elif kind == "export":
+                res = self.svc.run_export(payload["item"])
+                done = {"result": None, "message": res.get("message"), "item": payload["item"]}
             elif kind == "experiment":
                 res = self.svc.run_experiment(payload["adr"], export=payload["export"])
                 done = {"result": res, "message": res["summary"], "item": None}

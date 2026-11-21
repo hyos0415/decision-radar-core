@@ -28,7 +28,8 @@ export const SUCCESS_OUTCOMES: Outcome[] = [
   'discarded',
   'rejudge',
   'recovered',
-  'acked'
+  'acked',
+  'queued' // 답을 접수했다 — ADR repo 반영은 뒤에서 (HYO-217)
 ]
 
 /** 자리 질의 「확인 필요」 (HYO-245) — 주당 Inbox 항목 하나, 자리마다 후보 목록 */
