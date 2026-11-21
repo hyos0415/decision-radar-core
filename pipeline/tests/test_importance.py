@@ -720,6 +720,100 @@ def test_gate_breaking_runtime_drop_only_scoped_per_repo():
     assert own["keep"] and not noted(own), own                                           # 런타임 자신의 소식은 건드리지 않는다
 
 
+LANGCHAIN_QUOTE = "`langchain-core` 1.8.0 drops support for Python 3.10, which has reached end-of-life."   # 모델이 굵은 글씨 표시를 빼고 옮긴 꼴
+LANGCHAIN_NOTICE = ("> [!WARNING]\n> **Python 3.10 support will be dropped in `langchain-core` 1.8.0 and `langchain` 1.5.0.** The current minor versions "
+                    "are the last to support Python 3.10. Please upgrade to Python 3.11 or later.\n\nChanges since langchain-core==1.7.3\n\nrelease(core): 1.7.4 (#41635)\n")
+
+
+def test_gate_breaking_basis_quotes_when_no_breaking_section():
+    """W47: langchain 1.5.0 · langchain-core 1.8.0 — Breaking 절 없이 첫 문장 「drops support for Python 3.10」뿐인데 L4 × breaking으로 남았다 (HYO-208).
+    절이 없으면 breaking의 근거 문장을 모델에게 글에서 그대로 옮기게 하고, 스크립트가 (1) 글에 그대로 있나 (2) 전부 런타임 지원 중단 문장인가
+    (3) 우리가 더 새 줄인가를 본다. 하나라도 모자라면 남긴다. 답이 판정을 바꿀 수 없는 소식에는 묻지 않는다."""
+    st = _store(langchain={"tiers": ["L4"]}, python={"tiers": ["L0"]})
+    vers = lambda py: {"langchain": [{"version": "1.4.3", "repo": "a"}], "python": [{"version": py, "repo": "a"}]}   # noqa: E731
+    asked = []
+
+    def run(basis, text=LANGCHAIN_DROP, py="3.12", labels=("breaking", "eol")):
+        ans = (lambda q: asked.append(q.id) or basis) if not isinstance(basis, Exception) else (lambda q: (_ for _ in ()).throw(basis))
+        be = StubBackend(changes=lambda q: list(labels), basis=None if basis is None else ans)
+        return gate_mod.Gate(be, st, versions=vers(py))(_item("l", "langchain-ai/langchain langchain-core==1.8.0", tech="langchain", text=text))
+
+    note = lambda g: next(n for s in g["scope"] for n in s["notes"] if n["change"] == "breaking")   # noqa: E731
+    r = run({"quotes": [LANGCHAIN_QUOTE], "more": False})
+    assert not r["keep"] and r["model_changes"] == ["breaking", "eol"] and asked == ["l"], r          # 모델 라벨은 그대로 · 한 번 물었다
+    assert note(r)["verdict"] == "other" and note(r)["basis"] == {"quotes": [LANGCHAIN_QUOTE], "more": False}
+    assert note(r)["evidence"][0]["announced"] == "3.10" and note(r)["evidence"][0]["repos"] == {"a": ["3.12"]}
+    for why, basis, text in (("그 밖의 이유가 더 있다(more)", {"quotes": [LANGCHAIN_QUOTE], "more": True}, LANGCHAIN_DROP),
+                             ("고쳐 쓴 문장 — 글에 그대로 없다", {"quotes": ["langchain-core 1.8.0은 Python 3.10 지원을 중단한다"], "more": False}, LANGCHAIN_DROP),
+                             ("문장 하나가 글에 없다", {"quotes": [LANGCHAIN_QUOTE, "Removes the `foo` API."], "more": False}, LANGCHAIN_DROP),
+                             ("런타임 문장이 아닌 근거가 섞였다", {"quotes": [LANGCHAIN_QUOTE, "Removes the `foo` API."], "more": False},
+                              LANGCHAIN_DROP + "\nRemoves the `foo` API.\n"),
+                             ("옮긴 문장이 없다", {"quotes": [], "more": False}, LANGCHAIN_DROP),
+                             ("한 문장에 다른 변경이 같이 적혔다", {"quotes": ["Drops support for Python 3.10 and renames `a` to `b`."], "more": False},
+                              "Drops support for Python 3.10 and renames `a` to `b`.\n"),
+                             ("근거를 못 받았다(호출 실패)", RuntimeError("timeout"), LANGCHAIN_DROP)):
+        k = run(basis, text)
+        assert k["keep"] and [x["change"] for x in k["kept_by"]] == ["breaking"] and note(k)["verdict"] == "unknown", (why, k)
+    # 곁문장 — Haiku가 W47 langchain 세 건에서 실제로 같이 옮긴 문장들 (2026-11-21, 15번 물어 15번 글자 그대로): 하한 · 끊긴 버전 사용자 안내 · 커밋 제목
+    full = ("**`langchain` 1.5.0 drops support for Python 3.10**, which has reached end-of-life. The minimum supported version is now Python 3.11, and the "
+            "minimum `langchain-core` version is now 1.8.0. Users on Python 3.10 will continue to resolve `langchain` 1.4.x.\n\nChanges since langchain==1.4.10\n\n"
+            "feat(langchain): Remove EOL'd Python 3.10 from langchain_v1 (#41301)\nfeat(langchain): add model router (#41766)\n")
+    side = ["**`langchain` 1.5.0 drops support for Python 3.10**, which has reached end-of-life.",
+            "The minimum supported version is now Python 3.11, and the minimum `langchain-core` version is now 1.8.0.",
+            "Users on Python 3.10 will continue to resolve `langchain` 1.4.x.", "feat(langchain): Remove EOL'd Python 3.10 from langchain_v1 (#41301)"]
+    s = run({"quotes": side, "more": False}, full)
+    assert not s["keep"] and note(s)["verdict"] == "other", s                                         # 넷 다 같은 지원 중단의 곁문장이다
+    for why, quote, extra in (("하한이 우리 버전보다 높다", "The minimum supported version is now Python 3.13.", "The minimum supported version is now Python 3.13.\n"),
+                              ("끊지 않은 버전 이야기가 섞였다", "Adds support for Python 3.15.", "Adds support for Python 3.15.\n"),
+                              ("곁문장에 다른 변경이 같이 적혔다", "Users on Python 3.10 must migrate to `foo`.", "Users on Python 3.10 must migrate to `foo`.\n"),
+                              ("런타임 말이 없는 문장이 섞였다", "feat(langchain): add model router (#41766)", "")):
+        k = run({"quotes": side[:1] + [quote], "more": False}, full + extra)
+        assert k["keep"] and note(k)["verdict"] == "unknown", (why, k)
+    n0 = len(asked)
+    none = run(None)                                                                                  # 못 묻는 백엔드 — 예전대로 남긴다
+    assert none["keep"] and not [n for s in none["scope"] for n in s["notes"] if n["change"] == "breaking"], none
+    for why, kw in (("우리가 그 줄이다 — 답이 판정을 못 바꾼다", {"py": "3.10"}), ("런타임 문장이 없다", {"text": "Removes the `foo` API.\n"}),
+                    ("breaking이 안 붙었다", {"labels": ("eol",)}), ("Breaking 절이 있다 — 스크립트가 읽는다", {"text": FASTAPI_DROP})):
+        run({"quotes": [LANGCHAIN_QUOTE], "more": False}, **kw)
+        assert len(asked) == n0, (why, asked)                                                         # 묻지 않는다
+    assert scope.verbatim("**`a` 1.0   drops\nsupport** for X.", ["`a` 1.0 drops support for X."]) == ["`a` 1.0 drops support for X."]
+    assert scope.verbatim("a drops b", ["a drops b", "c"]) is None and scope.verbatim("a", []) is None and scope.verbatim("a", ["  "]) is None
+
+
+def test_gate_eol_notice_support_will_be_dropped():
+    """W46: langchain-core 1.7.4 · langchain 1.4.8의 「Python 3.10 support will be dropped in …」 예고 — 이 꼴을 못 읽어 eol이 「확인 불가」로 남았다 (HYO-208).
+    이름 · 버전이 앞에 오고 support가 주어인 꼴도 지원 종료 문장으로 읽는다 → 우리 줄(3.12)이 아니면 뺀다 · 우리 줄이면 남긴다."""
+    assert scope.eol_targets(LANGCHAIN_NOTICE, ["python"], "langchain") == [("python", (3, 10), "eq")]
+    assert scope.eol_targets("Node 18 support has been removed. Python 3.9 support is discontinued.", ["python", "node"], None) == \
+        [("python", (3, 9), "eq"), ("node", (18,), "eq")]
+    assert scope.eol_targets("Python 3.10 support is great and will be kept.", ["python"], None) == []
+    st = _store(langchain={"tiers": ["L4"]}, python={"tiers": ["L0"]})
+    g = lambda py: gate_mod.Gate(StubBackend(changes=lambda q: ["eol"]), st, versions={"python": [{"version": py, "repo": "a"}]})(   # noqa: E731
+        _item("n", "langchain-ai/langchain langchain-core==1.7.4", tech="langchain", text=LANGCHAIN_NOTICE))
+    r = g("3.12")
+    assert not r["keep"] and r["scope"][0]["notes"][0]["verdict"] == "other", r
+    assert g("3.10")["keep"] and g("3.10")["scope"][0]["notes"][0]["verdict"] == "ours"
+
+
+def test_cli_backend_breaking_basis():
+    """구독 CLI 백엔드: 근거 문장을 한 세션으로 받는다 — 분류 프롬프트(ROUND)와 따로 · 호출 기록에 flow와 소식 id (HYO-208)."""
+    saved = os.environ.get("RADAR_FAKE_CLI")
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            be = _fake_cli({"structured": {"quotes": ["a drops b", 3, "c", "d", "e", "f", "g"], "more": False}}, d)
+            got = be.breaking_basis(NewsQuery(id="n1", technology="langchain", title="t", text="a drops b"))
+            assert got == {"quotes": ["a drops b", "c", "d", "e", "f"], "more": False}, got            # 문자열만 · 5개까지
+            rec = be.log.calls[-1]
+            assert rec["flow"] == "breaking-basis" and rec["item"] == "n1" and rec["billing"] == "subscription", rec
+            assert be.run_info()["basis_round"] == prompts_cli.BASIS_ROUND and be.run_info()["prompt_round"] == prompts_cli.ROUND
+            assert "quotes" in prompts_cli.BASIS_SCHEMA["required"] and prompts_cli.CLI_CHANGE_INSTRUCTIONS == prompts.CHANGE_INSTRUCTIONS   # 분류 문구는 그대로
+    finally:
+        if saved is None:
+            os.environ.pop("RADAR_FAKE_CLI", None)
+        else:
+            os.environ["RADAR_FAKE_CLI"] = saved
+
+
 def test_gate_model_retirement_needs_our_model_mentioned():
     """댓글(2026-10-27): W44 OpenAI deprecations diff(gpt-6-* 없음)의 모델 은퇴가 gpt-6-luna에 붙었다 → L2는 같은 계열·같은 버전이 글에 있어야 남긴다."""
     st = _store(**{"gpt-6-luna": {"tiers": ["L2"]}, "openai-agents": {"tiers": ["L4"]}, "amazon bedrock": {"tiers": ["L2"]}})
@@ -2147,7 +2241,7 @@ def test_cli_backend_isolation_labels_and_log():
             assert be.log.totals()["unpriced_calls"] == 1 and be.log.totals()["cost_usd"] == 0
             info = be.run_info()                                                              # CLI 버전은 실행마다 남긴다 (precondition-hyo169 §3)
             assert info == {"engine": "claude-cli", "model": "claude-sonnet-5-5", "effort": "medium", "cli_version": "0.0.0-fake (Claude Code)",
-                            "prompt_round": prompts_cli.ROUND, "batch": None, "seed": 0}, info
+                            "prompt_round": prompts_cli.ROUND, "basis_round": prompts_cli.BASIS_ROUND, "batch": None, "seed": 0}, info
             t = _fake_cli({"structured": {"tiers": ["L5"], "unsure": False, "reason": "SDK"}}, d).classify_tiers(TechQuery(name="anthropic"))
             assert t.labels == ["L5"] and not t.unsure
     finally:
@@ -2685,7 +2779,18 @@ def mutations():
         ("우리 것: 줄 비교가 늘 다른 줄 (우리 줄 EOL도 뺌)", [(scope, "line_match", lambda ours, ann, op="eq": False)], test_gate_eol_scoped_to_our_line_and_newer_line_alert),
         ("우리 것: 「and below」를 안 봄", [(scope, "_LE", r"()")], test_scope_eol_targets_and_line_match),
         ("우리 것: 사람 overrides 버전을 무시", [(scope.Versions, "__call__", lambda self, name: self.auto.get(signals.norm(name)) or [])], test_gate_eol_scoped_to_our_line_and_newer_line_alert),
-        ("우리 것: 런타임뿐인 breaking을 안 좁힘 (W47 FastAPI 0.162.6)", [(scope, "_runtime_only", lambda tech, text, ours_of: None)], test_gate_breaking_runtime_drop_only_scoped_per_repo),
+        ("우리 것: 런타임뿐인 breaking을 안 좁힘 (W47 FastAPI 0.162.6)", [(scope, "_runtime_only", lambda tech, text, ours_of, basis=None: None)], test_gate_breaking_runtime_drop_only_scoped_per_repo),
+        ("근거 문장: 절이 없는 글의 breaking 근거를 안 물음 (W47 langchain 1.5.0)", [(gate_mod.Gate, "_breaking_basis", lambda self, *a: None)], test_gate_breaking_basis_quotes_when_no_breaking_section),
+        ("근거 문장: 글에 그대로 있는지 안 봄", [(scope, "verbatim", lambda text, quotes: [q for q in quotes or [] if isinstance(q, str) and q.strip()] or None)], test_gate_breaking_basis_quotes_when_no_breaking_section),
+        ("근거 문장: 「이유가 더 있다」(more)를 무시", [(scope, "_basis_entries", lambda text, basis: scope.verbatim(text, basis.get("quotes")))], test_gate_breaking_basis_quotes_when_no_breaking_section),
+        ("근거 문장: 판정을 못 바꾸는 소식에도 물음", [(scope, "needs_basis", lambda tech, text, ours_of: True)], test_gate_breaking_basis_quotes_when_no_breaking_section),
+        ("근거 문장: 호출 실패를 「근거 없음 = 런타임뿐」으로 봄", [(scope, "_basis_entries", lambda text, basis: scope.verbatim(text, basis.get("quotes")) or (None if basis.get("quotes") else ["Drop support for Python 3.10"]))], test_gate_breaking_basis_quotes_when_no_breaking_section),
+        ("우리 것: 「X support will be dropped」 꼴 eol 문장을 못 읽음 (W46 langchain-core 1.7.4)", [(scope, "_SUPPORT_GONE", r"(?!)")], test_gate_eol_notice_support_will_be_dropped),
+        ("곁문장: 최소 버전 구절을 못 읽음", [(scope, "_runtime_floors", lambda text: [])], test_gate_breaking_basis_quotes_when_no_breaking_section),
+        ("곁문장: 최소 버전을 우리 버전과 안 견줌", [(scope, "_at_least", lambda ours_of, name, m, repos: True)], test_gate_breaking_basis_quotes_when_no_breaking_section),
+        ("곁문장: 버전만 적힌 말을 못 읽음", [(scope, "_runtime_bare", lambda text: [])], test_gate_breaking_basis_quotes_when_no_breaking_section),
+        ("곁문장: 끊지 않은 버전 이야기도 런타임 문장으로 봄", [(scope, "_only_gone", lambda bare, gone: True)], test_gate_breaking_basis_quotes_when_no_breaking_section),
+        ("근거 문장: 구독 CLI가 근거 질문을 분류 흐름으로 기록", [(cli_backend.ClaudeCliBackend, "breaking_basis", lambda self, q: {"quotes": [s for s in self._run("changes", prompts_cli.BASIS_INSTRUCTIONS, "p", prompts_cli.BASIS_SCHEMA, extra={"item": q.id}).get("quotes") if isinstance(s, str)][:5], "more": False})], test_cli_backend_breaking_basis),
         ("우리 것: breaking을 repo별로 안 보고 아는 버전 아무거나로 견줌", [(scope.Versions, "in_repo", lambda self, name, repo: self(name))], test_gate_breaking_runtime_drop_only_scoped_per_repo),
         ("우리 것: Breaking 절이 아니라 글 전체를 항목으로 봄", [(scope, "breaking_entries", lambda text: [x for x in (text or "").splitlines() if x.strip()] or None)], test_gate_breaking_runtime_drop_only_scoped_per_repo),
         ("우리 것: 한 항목에 같이 적힌 다른 변경을 안 봄", [(scope, "_OTHER_BREAK", re.compile(r"(?!)"))], test_gate_breaking_runtime_drop_only_scoped_per_repo),

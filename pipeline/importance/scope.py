@@ -11,7 +11,10 @@
   model_retirement L2 기술의 계열 + 같은 버전이 제목·본문에 나와야 유지 (successor.mentions). 이름에 버전이 없는 기술(Amazon Bedrock)은 → 유지 · unknown
   breaking         릴리스 노트의 Breaking 절이 「언어 런타임 버전 지원 중단」(RUNTIMES) 줄뿐이고, 이 기술을 쓰는 대상 repo 전부의 런타임 버전을 알며
                    모두 그 버전보다 새 줄이면 → 뺌 (HYO-202, W47 「Drop support for Python 3.10」 3건). repo 하나라도 런타임 버전을 모르거나,
-                   절에 다른 항목이 있거나, 절이 없으면(첫 문장에만 적힌 꼴 — 무엇이 breaking인지 스크립트가 모른다) → 유지
+                   절에 다른 항목이 있거나, 절이 없으면(첫 문장에만 적힌 꼴 — 무엇이 breaking인지 스크립트가 모른다) → 유지.
+                   절이 없는 글은 모델이 글에서 그대로 옮긴 breaking 근거 문장(basis — Backend.breaking_basis)을 항목으로 본다 (HYO-208):
+                   문장이 전부 글에 그대로 있고 · 전부 런타임 지원 중단 문장이나 그 곁문장(최소 버전 · 끊긴 버전 사용자 안내)이고 · 모델이
+                   그 밖의 이유가 더 있다고 하지 않았을 때만 → 뺌. 판정은 여전히 스크립트가 한다
 그 밖의 종류(security 포함)는 빼지 않는다. 의존성 릴리스가 우리 줄인지(release_line)는 기록만 한다 (사용자 Q2).
 비교 깊이: 문장에 적힌 버전의 자릿수만큼 (「42」 → 첫 숫자, 「3.9」 → 둘째 숫자까지). 릴리스 버전에는 semver 줄(첫 숫자, 0.x면 둘째까지) + LINE_DEPTH.
 """
@@ -27,7 +30,10 @@ _VER = r"v?(\d+(?:\.\d+)*)(?:\.[xX*])*(?:\.y)?(?!\d)"
 _LE = r"(?:\s*(?:and|or)\s+(below|older|earlier|lower|prior))?"
 _GONE = r"(?:end[- ]of[- ](?:life|support)|\bEOL\w*|no longer supported|unsupported)"
 _BE = r"[^.;\n]{0,40}?\b(?:is|are|was|were|has|have)\b[^.;\n]{0,25}?" + _GONE
-_DROP = r"\b(?:drop(?:s|ped|ping)?|remov(?:e|es|ed|ing)|end(?:s|ed)?)\s+(?:support\s+for\s+|the\s+)?"
+_DROP = r"\b(?:drop(?:s|ped|ping)?|remov(?:e|es|ed|ing)|end(?:s|ed)?)\s+(?:support\s+for\s+|the\s+)?(?:EOL(?:'?e?d)?\s+)?"   # 「Remove EOL'd Python 3.10」(커밋 제목 꼴, HYO-208)
+# 「Python 3.10 support will be dropped in …」 — 이름 · 버전이 앞에 오고 support가 주어인 꼴 (HYO-208, W46 langchain-core 1.7.4 · langchain 1.4.8:
+# 이 꼴을 못 읽어 eol이 「확인 불가」로 남았고 detect에서 세 번 중 한 번 초안이 됐다)
+_SUPPORT_GONE = r"\s+support\s+(?:will\s+be|is\s+being|has\s+been|have\s+been|was|is)\s+(?:dropped|removed|ended|discontinued)"
 RUNTIMES = ("python", "node")   # 언어 런타임 — 「이 버전 지원 중단」뿐인 breaking을 우리 버전과 견줄 때 보는 이름 (HYO-202)
 _HEAD = re.compile(r"^\s{0,3}(?:(#{1,6})\s*(.+?)\s*#*|(?:\*\*|__)(?P<b>[^*_].*?)(?:\*\*|__):?)\s*$")
 _BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
@@ -57,7 +63,7 @@ def _eol_matches(text, names):
         if not rx:
             continue
         nv = rx + r"[\s-]?" + _VER + _LE
-        for pat in (nv + _BE, _DROP + nv):
+        for pat in (nv + _BE, _DROP + nv, nv + _SUPPORT_GONE):
             out += [(n, m) for m in re.finditer(pat, text or "", re.I)]
     return out
 
@@ -146,48 +152,125 @@ def breaking_entries(text):
     return entries or None
 
 
-def _runtime_only(tech, text, ours_of):
-    """breaking이 「런타임 버전 지원 중단」뿐이고 우리는 더 새 줄인가 (HYO-202) → (verdict "other"|"unknown", 근거 목록) | None(볼 것이 없다).
+def _plain(s):
+    """견주기용 글 — 마크다운 강조 · 코드 표시(`*` · `_` · 백틱)를 빼고 공백을 하나로. 모델이 옮긴 문장이 글에 그대로 있는지 볼 때 쓴다."""
+    return re.sub(r"\s+", " ", re.sub(r"[*_`]", "", s or "")).strip().lower()
+
+
+def verbatim(text, quotes):
+    """모델이 옮긴 근거 문장이 **전부** 글에 그대로 있나 (HYO-208) → 문장 목록 | None. 하나라도 글에 없으면 None — 고쳐 쓴 문장으로는 판정하지 않는다."""
+    body = _plain(text)
+    qs = [q for q in (quotes or []) if isinstance(q, str) and _plain(q)]
+    return qs if qs and all(_plain(q) in body for q in qs) else None
+
+
+def _basis_entries(text, basis):
+    """모델이 옮긴 근거 {quotes, more} → 항목으로 볼 문장들 | None. 그 밖의 이유가 더 있다고 했으면(more) 문장이 맞아도 보지 않는다."""
+    return None if basis.get("more") else verbatim(text, basis.get("quotes"))
+
+
+def needs_basis(tech, text, ours_of):
+    """breaking의 근거 문장을 모델에게 물어볼 만한가 (HYO-208) — Breaking 절이 없는 글이고(절이 있으면 스크립트가 읽는다), 런타임 지원 중단 문장이 있고,
+    그 문장만 근거라면 뺄 수 있는(이 기술을 쓰는 repo 전부가 더 새 줄) 때만. 답이 판정을 바꿀 수 없는 소식에는 묻지 않는다."""
+    if norm(tech) in RUNTIMES or breaking_entries(text):
+        return False
+    ms = _eol_matches(text or "", RUNTIMES)
+    repos = ours_of.repos(tech)
+    return bool(ms) and bool(repos) and all(_newer(ours_of, n, m, repos)[0] for n, m in ms)
+
+
+def _newer(ours_of, name, m, repos):
+    """런타임 지원 중단 문장 하나 → (이 기술을 쓰는 repo 전부가 그 버전보다 새 줄인가, repo별 우리 버전)."""
+    ann = vtuple(m.group(1))
+    by_repo = {r: ours_of.in_repo(name, r) for r in repos}
+    ok = bool(by_repo) and all(vs and all((v := vtuple(x)) and len(v) >= len(ann) and v[:len(ann)] > ann for x in vs) for vs in by_repo.values())
+    return ok, by_repo
+
+
+_FLOOR = r"\b(?:minimum|at\s+least|requires?|upgrade\s+to)\b[^.;\n]{0,50}?"     # 「The minimum supported version is now Python 3.11」 · 「Please upgrade to Python 3.11 or later」
+
+
+def _runtime_floors(text):
+    """글 → [(런타임 이름, re.Match)] — 최소 버전을 말하는 구절. group(1) = 버전."""
+    return [(n, m) for n in RUNTIMES for m in re.finditer(_FLOOR + _name_rx(n) + r"[\s-]?(?:>=\s*)?" + _VER, text or "", re.I)]
+
+
+def _runtime_bare(text):
+    """글 → [(런타임 이름, re.Match)] — 런타임 이름 + 버전만 적힌 말. group(1) = 버전."""
+    return [(n, m) for n in RUNTIMES for m in re.finditer(_name_rx(n) + r"[\s-]?" + _VER, text or "", re.I)]
+
+
+def _only_gone(bare, gone):
+    """버전만 적힌 말이 전부 이 글이 지원을 끊는다고 한 (런타임, 버전)인가 — 다른 버전 이야기(「adds support for Python 3.15」)는 런타임 지원 중단의 곁문장이 아니다."""
+    return all((n, vtuple(m.group(1))) in gone for n, m in bare)
+
+
+def _at_least(ours_of, name, m, repos):
+    """최소 버전 구절 하나 → 이 기술을 쓰는 repo 전부의 런타임이 그 버전 이상인가 (모르면 False)."""
+    floor = vtuple(m.group(1))
+    by_repo = {r: ours_of.in_repo(name, r) for r in repos}
+    return bool(by_repo) and all(vs and all((v := vtuple(x)) and len(v) >= len(floor) and v[:len(floor)] >= floor for x in vs) for vs in by_repo.values())
+
+
+def _runtime_only(tech, text, ours_of, basis=None):
+    """breaking이 「런타임 버전 지원 중단」뿐이고 우리는 더 새 줄인가 (HYO-202) → (verdict "other"|"unknown", 근거 목록, 무엇으로 봤나) | None(볼 것이 없다).
     other = Breaking 절의 항목이 전부 런타임 지원 중단 문장이고, 이 기술을 쓰는 대상 repo 전부의 런타임 버전을 알며 모두 그 버전보다 새 줄이다.
-    하나라도 모자라면 unknown — 남긴다. 절이 없는 글(첫 문장에만 적힌 꼴)은 무엇이 breaking인지 알 수 없어 보지 않는다."""
+    하나라도 모자라면 unknown — 남긴다. 절이 없는 글(첫 문장에만 적힌 꼴 — W47 langchain 1.5.0 · langchain-core 1.8.0)은 무엇이 breaking인지 스크립트가 모른다.
+    그때는 basis(모델이 글에서 그대로 옮긴 breaking 근거 문장 {quotes, more} — HYO-208)를 항목으로 본다: 문장이 전부 글에 그대로 있고(verbatim),
+    모델이 그 밖의 이유가 더 있다고 하지 않았을 때만. 판정은 여전히 스크립트가 한다 — 모델은 문장만 옮긴다."""
     if norm(tech) in RUNTIMES:
         return None
-    entries = breaking_entries(text)
+    entries, via = breaking_entries(text), "section"
+    if not entries and basis is not None:
+        entries, via = _basis_entries(text, basis), "quotes"
+        if not entries:      # 다른 이유가 더 있다 · 문장을 못 옮겼다 · 고쳐 썼다 → 모른다(남긴다). 물어본 기록은 남긴다
+            return "unknown", [], via
     if not entries:
         return None
     found = [(e, _eol_matches(e, RUNTIMES)) for e in entries]
     if not any(ms for _, ms in found):
-        return None
+        return ("unknown", [], via) if via == "quotes" else None
     repos, ev, ok = ours_of.repos(tech), [], bool(ours_of.repos(tech))
+    gone = {(n, vtuple(m.group(1))) for _, ms in found for n, m in ms}       # 이 글이 지원을 끊는다고 한 (런타임, 버전)
     for entry, ms in found:
         rest = entry
         for _, m in ms:
             rest = rest.replace(m.group(0), " ")
-        if not ms or _OTHER_BREAK.search(rest):          # 런타임 문장이 아닌 항목 · 한 항목에 다른 변경이 같이 적혔다
+        # 지원 중단 문장의 곁문장 (HYO-208 — 모델이 근거로 같이 옮긴다): 「최소 지원 버전은 이제 Python 3.11」 · 「Python 3.10 사용자는 1.7.x를 계속 받는다」.
+        # 하한은 우리가 그 이상일 때만, 버전만 적힌 말은 그 버전이 이 글이 끊는다고 한 버전일 때만 런타임 문장으로 본다
+        floors = _runtime_floors(rest)
+        for _, m in floors:
+            rest = rest.replace(m.group(0), " ")
+        bare = _runtime_bare(rest)
+        for _, m in bare:
+            rest = rest.replace(m.group(0), " ")
+        if not (ms or floors or bare) or _OTHER_BREAK.search(rest):          # 런타임 문장이 아닌 항목 · 한 항목에 다른 변경이 같이 적혔다
+            ok = False
+        if not _only_gone(bare, gone) or not all(_at_least(ours_of, n, m, repos) for n, m in floors):
             ok = False
         for n, m in ms:
             ann = vtuple(m.group(1))
-            by_repo = {r: ours_of.in_repo(n, r) for r in repos}
-            newer = bool(by_repo) and all(vs and all((v := vtuple(x)) and len(v) >= len(ann) and v[:len(ann)] > ann for x in vs)
-                                          for vs in by_repo.values())
+            newer, by_repo = _newer(ours_of, n, m, repos)
             row = {"technology": n, "announced": ".".join(map(str, ann)), "op": "le" if m.group(2) else "eq",
                    "ours": list(dict.fromkeys(x for vs in by_repo.values() for x in vs)), "match": False if newer else None, "repos": by_repo}
             if row not in ev:
                 ev.append(row)
             ok = ok and newer
-    return ("other" if ok else "unknown"), ev
+    return ("other" if ok else "unknown"), ev, via
 
 
-def narrow(labels, tech, tiers, item, ours_of):
+def narrow(labels, tech, tiers, item, ours_of, basis=None):
     """한 기술의 변화 라벨 → (정리한 라벨, 기록 목록). 기록 = [{change, verdict, ...}] — 무엇을 왜 뺐나/남겼나.
-    ours_of(name) → 우리 버전 문자열 목록 · ours_of.names() → 버전을 아는 기술 이름들."""
+    ours_of(name) → 우리 버전 문자열 목록 · ours_of.names() → 버전을 아는 기술 이름들.
+    basis = 모델이 글에서 그대로 옮긴 breaking 근거 문장 {quotes, more} | None (HYO-208 — Breaking 절이 없는 글에서만 쓴다)."""
     text = (item.get("title") or "") + "\n" + (item.get("text") or "")
     out, notes = [], []
     for c in labels:
         if c == "breaking":
-            res = _runtime_only(tech, item.get("text") or "", ours_of)
+            res = _runtime_only(tech, item.get("text") or "", ours_of, basis)
             if res:
-                notes.append({"change": c, "verdict": res[0], "runtime_only": True, "evidence": res[1]})
+                notes.append({"change": c, "verdict": res[0], "runtime_only": True, "evidence": res[1],
+                              **({"basis": {"quotes": list(basis.get("quotes") or []), "more": bool(basis.get("more"))}} if res[2] == "quotes" else {})})
                 if res[0] == "other":
                     continue
         if c == "eol":

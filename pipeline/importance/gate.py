@@ -126,9 +126,10 @@ class Gate:
         changes = policy.normalize_changes(labels_in, item.get("title") or "", policy.item_tag(item))   # 프리릴리스 · x.0.0 아닌 major, 덧붙인 minor_patch 빼기 (§3 변경 2026-10-21 · 2026-11-11, HYO-131 · HYO-169)
         rows, kept_by, defaulted, scoped = [], [], False, []
         versions = self.versions
+        basis = self._breaking_basis(q, item, changes, effs, versions)
         for t, e in effs.items():
             ctx = policy.Context(path=e.get("path", "prod"), pin=e.get("pin"), sensitive=e.get("sensitive"), local=e.get("local"))
-            labels, notes = scope.narrow(changes, t, e["tiers"], item, versions)   # 우리 버전·우리 모델이 아닌 eol·모델 은퇴를 뺀다 (HYO-148)
+            labels, notes = scope.narrow(changes, t, e["tiers"], item, versions, basis)   # 우리 버전·우리 모델이 아닌 eol·모델 은퇴를 뺀다 (HYO-148)
             line = scope.release_line(t, item, versions)
             if notes or line:
                 scoped.append({"technology": t, "notes": notes, **({"release_line": line} if line else {})})
@@ -145,6 +146,19 @@ class Gate:
         return {"keep": keep, "status": "ok", "technologies": techs, "tiers": {t: e["tiers"] for t, e in effs.items()}, "changes": changes, "model_changes": list(ans.labels),
                 "rows": rows, "kept_by": kept_by, "defaulted_change": defaulted, "skipped": base["skipped"], "successor": base["successor"],
                 "scope": scoped, "reason": why, **({"official_security": True} if official else {}), **_advisory(item)}
+
+    def _breaking_basis(self, q, item, changes, effs, versions):
+        """Breaking 절이 없는 글의 breaking이 「런타임 지원 중단」뿐인지 가리려고 근거 문장을 묻는다 (HYO-208) → {quotes, more} | None.
+        묻는 때는 scope.needs_basis — 답이 판정을 바꿀 수 있을 때만(한 주에 몇 건). 못 묻는 백엔드 · 실패는 None → scope가 예전대로 남긴다."""
+        if "breaking" not in changes or not any(scope.needs_basis(t, item.get("text") or "", versions) for t in effs):
+            return None
+        try:
+            got = self.backend.breaking_basis(q)
+        except BoundaryError:
+            raise
+        except Exception as e:  # noqa: BLE001 — 근거를 못 받으면 좁히지 않는다 (남긴다)
+            return {"quotes": [], "more": True, "error": f"{type(e).__name__}: {str(e)[:120]}"}
+        return got if isinstance(got, dict) else None
 
     def prefetch(self, entries):
         """묶음 모드 백엔드(구독 CLI, 묶음 10 — HYO-169)면 이번 판정에서 모델에 물을 질문을 먼저 모아 한꺼번에 묻는다.
