@@ -40,6 +40,7 @@ import yaml
 VERDICTS = {
     "pass": "통과 — 올려도 기존 검사가 깨지지 않고, 검사가 이 패키지를 실제로 올렸다",
     "pass_not_exercised": "모름 — 검사는 통과했지만 이 패키지를 올린 검사가 없다 (이 검사로는 영향을 알 수 없다)",
+    "pass_partial": "일부만 — 깨진 검사는 없지만 올리기 전부터 실패한 검사가 있다 (그 검사로는 영향을 알 수 없다)",
     "fail": "깨짐 — 기준에서는 통과하던 검사가 올린 뒤 실패한다",
     "install_failed": "확인 불가 — 올린 버전으로 설치가 안 된다 (다른 고정 버전과 충돌할 수 있다)",
     "not_applied": "확인 불가 — 설치는 됐지만 설치된 버전이 올리려던 버전이 아니다",
@@ -160,16 +161,26 @@ class Env:
         return r.stdout.strip() or None
 
 
+CHECK_ENV_DROP = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY", "ELECTRON_RUN_AS_NODE")
+
+
+def check_env(base=None):
+    """검사 스크립트에 넘길 환경 — 부른 쪽의 설정이 새지 않게 `RADAR_*` · API 키를 뺀다.
+    실사용 앱 백엔드가 실험을 돌리면 앱의 `RADAR_APP_MODE=real`이 검사로 새어 test_backend가 실사용 모드로 열리다 실패했다 (HYO-116,
+    2026-11-21 — 핵심 검사가 「원래 실패」가 되고 판정은 남은 검사 하나로 「통과」가 났다). 검사는 키 없이 돈다 (유료 API를 부르지 않게)."""
+    env = {k: v for k, v in (os.environ if base is None else base).items() if not k.startswith("RADAR_") and k not in CHECK_ENV_DROP}
+    return {**env, "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"}
+
+
 def run_checks(env, repo, runs, names, out, tag, timeout=1800):
-    """검사 스크립트를 차례로 돈다 → [{script, exit, seconds, loaded, log}]."""
+    """검사 스크립트를 차례로 돈다 → [{script, exit, seconds, loaded, log}]. 환경은 check_env() — 부른 쪽 설정이 새지 않게."""
     probe = Path(out) / "probe.py"
     probe.write_text(PROBE, encoding="utf-8")
     rows = []
     for i, r in enumerate(runs):
         seen = Path(out) / f"{tag}-{i}.loaded.json"
         log = Path(out) / f"{tag}-{i}.log"
-        res = sh([env.python, probe, seen, ",".join(names), r["script"], *(r.get("args") or [])], repo, log, timeout,
-                 env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"})
+        res = sh([env.python, probe, seen, ",".join(names), r["script"], *(r.get("args") or [])], repo, log, timeout, env=check_env())
         loaded = {}
         if seen.exists():
             try:
@@ -196,7 +207,11 @@ def judge(base, after, package):
         return "fail", rows
     if not any(r["state"] == "통과" for r in rows):
         return "baseline_failed", rows
-    return ("pass" if exercised else "pass_not_exercised"), rows
+    if not exercised:                                  # 통과한 검사가 이 패키지를 안 올렸다 — 「모름」이 먼저다
+        return "pass_not_exercised", rows
+    if any(r["state"] == "원래 실패" for r in rows):   # 원래 실패한 검사가 있으면 남은 검사로 「통과」라 하지 않는다 (규율 3 — HYO-116, 내보내지 않는다)
+        return "pass_partial", rows
+    return "pass", rows
 
 
 def bump_all(repo, manifests, bumps):

@@ -2013,7 +2013,7 @@ def scenario_hyo116(tmp):
     d = c.get(f"/decisions/{ex}").json()
     pl = d["experiment"]
     check("상세: 레시피 = 의존성 올려 보기 · local · 무엇을 어디서", pl["recipe"] == "dependency" and pl["ready"] and pl["cost"] == "local"
-          and "pydantic → 2.12.3 (medical-mate · chat-api)" in (pl["detail"] or "") and d["experiments"] == [], pl)
+          and "pydantic 2.12.0 → 2.12.3 (medical-mate · chat-api)" in (pl["detail"] or "") and d["experiments"] == [], pl)  # 옛 버전은 픽스처 manifest에서
     check("상세: 스텁에서는 내보내기를 못 켠다", pl["export_allowed"] is False, pl)
     p1 = c.get("/decisions/0001").json()["experiment"]
     check("상세: 맞는 레시피가 없으면 이유", p1["recipe"] is None and not p1["ready"] and p1["reason"] == exp_mod.NO_RECIPE, p1)

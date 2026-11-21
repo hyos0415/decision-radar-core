@@ -27,10 +27,11 @@ MODEL = "---\nstatus: proposed\ntechnology: Gemini 4 Carbon\nuse: 신규 모델 
 CHECKS = {"app": {"python": "3.12", "components": {"api": {"manifests": ["requirements.txt"], "run": [{"script": "t.py"}]}}}}
 
 
-def adr_repo(d, checks=True, files=None):
+def adr_repo(d, checks=True, files=None, reqs="zz-web==1.0.0\n"):
     root = Path(d) / "adr"
     (root / "docs" / "adr").mkdir(parents=True)
     (Path(d) / "app").mkdir()
+    (Path(d) / "app" / "requirements.txt").write_text(reqs, encoding="utf-8")      # 대상 repo 작업 사본의 manifest — plan이 고정 줄을 미리 본다
     (root / "radar-targets.json").write_text(json.dumps([{"repo": "app", "path": "../app"}]), encoding="utf-8")
     if checks:
         (root / "radar-checks.json").write_text(json.dumps(CHECKS), encoding="utf-8")
@@ -48,7 +49,19 @@ def test_plan_picks_dependency_and_where():
         pl = experiment.plan(p["0001-dep.md"])
         assert pl["recipe"] == "dependency" and pl["ready"] and pl["cost"] == "local", pl
         assert pl["params"] == {"package": "zz-web", "to": "2.0.0", "repo": "app", "component": "api"}, pl
-        assert "app · api" in pl["detail"] and pl["export_rule"].startswith("통과"), pl
+        assert "zz-web 1.0.0 → 2.0.0 (app · api)" in pl["detail"] and pl["export_rule"].startswith("통과"), pl
+
+
+def test_plan_checks_the_pin_exists_now():
+    """이미 걷어낸 의존성(langchain · ADR 0030)이 「돌릴 수 있음」으로 보이지 않게 — 대상 repo manifest의 고정 줄을 미리 본다 (HYO-116)."""
+    with tempfile.TemporaryDirectory() as d:
+        _, p = adr_repo(d, reqs="other==1.0\n")
+        gone = experiment.plan(p["0001-dep.md"])
+    assert not gone["ready"] and "고정 줄" in gone["reason"] and "requirements.txt" in gone["reason"], gone
+    with tempfile.TemporaryDirectory() as d:
+        _, p = adr_repo(d, reqs="zz-web==2.0.0\n")
+        done = experiment.plan(p["0001-dep.md"])
+    assert not done["ready"] and "이미 2.0.0" in done["reason"], done
 
 
 def test_plan_reasons_instead_of_guessing():
