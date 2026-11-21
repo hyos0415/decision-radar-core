@@ -27,7 +27,8 @@ from . import policy
 from .backends import CHANGE_SET, TIER_SET, Backend, LabelAnswer, check_labels
 from .claude_backend import CHANGE_SCHEMA, TIER_SCHEMA, _canon
 from .prompts import TIER_INSTRUCTIONS, change_prompt, tier_prompt
-from .prompts_cli import BATCH_SCHEMA, CLI_CHANGE_INSTRUCTIONS, ROUND, batch_instructions, batch_prompt
+from .prompts_cli import (BASIS_INSTRUCTIONS, BASIS_ROUND, BASIS_SCHEMA, BATCH_SCHEMA, CLI_CHANGE_INSTRUCTIONS, ROUND, batch_instructions,
+                          batch_prompt)
 
 PREFIX = "claude-cli/"
 DEFAULT_EFFORT = "medium"
@@ -83,7 +84,7 @@ class ClaudeCliBackend(Backend):
 
     def run_info(self):
         return {"engine": self.engine, "model": self.model, "effort": self.effort, "cli_version": self.cli_version(),
-                "prompt_round": ROUND, "batch": self.batch, "seed": self.seed}
+                "prompt_round": ROUND, "basis_round": BASIS_ROUND, "batch": self.batch, "seed": self.seed}
 
     def _cmd(self, system, schema):
         return [*self.bin, "-p", "--output-format", "json", "--system-prompt", system,
@@ -157,6 +158,12 @@ class ClaudeCliBackend(Backend):
         out = self._run("changes", CLI_CHANGE_INSTRUCTIONS, change_prompt(q), CHANGE_SCHEMA)
         return LabelAnswer(labels=check_labels(_canon(out.get("changes") or [], policy.MODEL_CHANGES), CHANGE_SET, "changes"),
                            reason=out.get("reason"))
+
+    def breaking_basis(self, q):
+        """breaking의 근거 문장을 글에서 그대로 옮기게 한다 (HYO-208) → {quotes, more}. 소식 하나 = 세션 하나 — 한 주에 몇 건뿐이라 묶지 않는다.
+        분류와 같은 본문 창(change_prompt)을 준다. 실패는 CliError — 관문이 「모른다」로 두고 남긴다."""
+        out = self._run("breaking-basis", BASIS_INSTRUCTIONS, change_prompt(q), BASIS_SCHEMA, extra={"item": q.id})
+        return {"quotes": [s for s in out.get("quotes") or [] if isinstance(s, str)][:5], "more": bool(out.get("more"))}
 
     def prefetch_changes(self, queries):
         """묶음 모드: 이번 차례 시드로 순서를 섞어 batch개씩 한 세션에 묻는다 → {id: LabelAnswer | CliError}를 쌓는다 (차례마다 새로).

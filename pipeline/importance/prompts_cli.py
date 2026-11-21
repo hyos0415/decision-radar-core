@@ -28,6 +28,22 @@ def batch_prompt(queries):
     return "\n".join(f"=== 소식 [{n}] ===\n{change_prompt(q)}" for n, q in enumerate(queries, 1))
 
 
+# ---------------------------------------------------------------------------- breaking 근거 확인 (HYO-208) — 위 분류 프롬프트와 **따로 묻는다**
+# 분류 프롬프트(ROUND)는 그대로다 — 라벨은 바뀌지 않는다. Breaking 절이 없는 글에 breaking이 붙었고 런타임 지원 중단 문장이 있을 때만
+# (scope.needs_basis), 그 breaking의 근거 문장을 글에서 그대로 옮기게 한다. 옮긴 문장이 글에 그대로 있는지 · 런타임 지원 중단뿐인지는 scope가 본다.
+# 이 문구를 고치면 BASIS_ROUND를 올리고 고친 줄을 남긴다.
+BASIS_ROUND = 0
+
+BASIS_INSTRUCTIONS = """당신은 기술 소식(릴리스 노트) 하나에서 **breaking — 사용하는 코드가 깨질 수 있는 변경** — 에 해당하는 문장을 찾아 그대로 옮긴다. 주어진 글만 쓰고 외부를 조회하지 않는다.
+
+- `quotes`: 글에서 breaking에 해당하는 문장을 **전부**, 글자 그대로 옮긴다 (한 칸에 한 문장 · 최대 5개). 요약하거나 고쳐 쓰거나 번역하지 않는다. 없으면 빈 목록
+- `more`: 옮긴 문장 말고도 이 글이 breaking인 이유가 더 있으면 true (문장이 5개를 넘었다 · 여러 줄에 걸친 변경 목록이다 등). 옮긴 문장이 전부면 false
+- 판단하지 않는다 — 이 변경이 누구에게 영향이 있는지, 중요한지는 묻지 않았다. 문장만 옮긴다
+"""
+
+BASIS_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["quotes", "more"],
+                "properties": {"quotes": {"type": "array", "items": {"type": "string"}, "maxItems": 5}, "more": {"type": "boolean"}}}
+
 BATCH_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["items"],
                 "properties": {"items": {"type": "array", "items": {
                     "type": "object", "additionalProperties": False, "required": ["n", "changes", "reason"],

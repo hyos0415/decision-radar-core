@@ -105,6 +105,11 @@ class Backend(ABC):
     def classify_changes(self, q: NewsQuery) -> LabelAnswer:
         """소식 하나 → 변화 종류 (policy.MODEL_CHANGES 중 해당하는 것 전부)."""
 
+    def breaking_basis(self, q: NewsQuery):
+        """breaking의 근거 문장을 글에서 그대로 옮긴 것 → {"quotes": [문장…], "more": 그 밖의 이유가 더 있나} | None(못 묻는 백엔드 — 관문은 예전대로 남긴다).
+        관문이 Breaking 절 없는 글의 「런타임 지원 중단뿐」을 가릴 때만 묻는다 (HYO-208, scope.needs_basis). 판정은 scope가 한다."""
+        return None
+
     def close(self):
         pass
 
@@ -126,9 +131,17 @@ class StubBackend(Backend):
     """
     name = "stub"
 
-    def __init__(self, tiers=None, changes=None, log=None):
+    def __init__(self, tiers=None, changes=None, log=None, basis=None):
         super().__init__(log)
-        self._tiers, self._changes = tiers, changes
+        self._tiers, self._changes, self._basis = tiers, changes, basis
+
+    def breaking_basis(self, q):
+        """basis: {소식 id: {quotes, more}} 또는 호출 가능 (NewsQuery → dict | None). 없으면 None — 스텁은 근거를 지어내지 않는다."""
+        b = self._basis
+        if b is None:
+            return None
+        self._record("breaking-basis")
+        return b(q) if callable(b) else b.get(q.id)
 
     @staticmethod
     def _wrap(v, flow):
@@ -163,7 +176,7 @@ class StubBackend(Backend):
 def make_backend(model, *, allow_real=False, **kw):
     """모델 이름 → 백엔드. 실제 API를 부르는 백엔드는 allow_real=True 없이는 만들지 않는다 (키 파일도 읽기 전에 거부)."""
     if model == "stub":
-        return StubBackend(**{k: v for k, v in kw.items() if k in ("tiers", "changes", "log")})
+        return StubBackend(**{k: v for k, v in kw.items() if k in ("tiers", "changes", "log", "basis")})
     if model.startswith("gpt-"):
         if not allow_real:
             raise PermissionError(f"{model}: 실제 API 실행은 --real-api 없이는 거부한다")
