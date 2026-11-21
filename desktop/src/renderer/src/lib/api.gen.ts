@@ -1117,7 +1117,7 @@ export interface components {
       adr: string
       /**
        * Recipe
-       * @description dependency(의존성 올려 보기) · 없으면 null — 맞는 레시피가 아직 없다
+       * @description dependency(의존성 올려 보기) · embedding(임베딩 정답지 비교) · 없으면 null — 맞는 레시피가 아직 없다
        */
       recipe: string | null
       /** Label */
@@ -1147,8 +1147,14 @@ export interface components {
        */
       export_rule?: string | null
       /**
+       * Exports
+       * @description 이 레시피가 내보내기를 하나 — 임베딩 비교는 근거만 낸다(false, 화면은 체크 상자를 숨긴다)
+       * @default false
+       */
+      exports: boolean
+      /**
        * Export Allowed
-       * @description 이 모드에서 내보내기를 켤 수 있나 — 실사용 모드만
+       * @description 이 모드에서 내보내기를 켤 수 있나 — 실사용 모드이고 레시피가 내보낼 때만
        * @default false
        */
       export_allowed: boolean

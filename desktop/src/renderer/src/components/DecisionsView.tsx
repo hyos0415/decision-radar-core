@@ -11,7 +11,7 @@ import { COPY } from '../../../copy'
 
 const E = COPY.decisions.experiment
 const EXPERIMENT_POLL_MS = 3000
-const BROKEN = ['fail', 'install_failed', 'baseline_failed']
+const BROKEN = ['fail', 'install_failed', 'baseline_failed', 'baseline_mismatch', 'error']
 
 function verdictKey(r: ExperimentResult): StatusKey {
   if (r.ok) return 'done'
@@ -108,21 +108,27 @@ function Experiment({
               <Button size="sm" disabled={jobId !== null} onClick={start}>
                 {jobId ? E.running : E.run}
               </Button>
-              <label
-                className={cn(
-                  'flex items-center gap-1.5 text-xs',
-                  !plan.export_allowed && 'text-muted-foreground'
-                )}
-                title={plan.export_allowed ? (plan.export_rule ?? undefined) : E.exportOff}
-              >
-                <input
-                  type="checkbox"
-                  checked={exportPr && plan.export_allowed}
-                  disabled={!plan.export_allowed || jobId !== null}
-                  onChange={(e) => setExportPr(e.target.checked)}
-                />
-                {E.exportLabel}
-              </label>
+              {plan.exports ? (
+                <label
+                  className={cn(
+                    'flex items-center gap-1.5 text-xs',
+                    !plan.export_allowed && 'text-muted-foreground'
+                  )}
+                  title={plan.export_allowed ? (plan.export_rule ?? undefined) : E.exportOff}
+                >
+                  <input
+                    type="checkbox"
+                    checked={exportPr && plan.export_allowed}
+                    disabled={!plan.export_allowed || jobId !== null}
+                    onChange={(e) => setExportPr(e.target.checked)}
+                  />
+                  {E.exportLabel}
+                </label>
+              ) : (
+                plan.export_rule && (
+                  <span className="text-xs text-muted-foreground">{plan.export_rule}</span>
+                )
+              )}
             </div>
           )}
           {jobId && <p className="text-xs text-muted-foreground">{E.runningHint}</p>}

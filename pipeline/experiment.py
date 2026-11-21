@@ -8,7 +8,10 @@
 레시피 = 손으로 해 본 실험을 그대로 옮긴 것이다. 결정 기록의 모양으로 고른다.
   dependency  의존성 릴리스 대응(use가 「의존성 릴리스 <버전> 대응」) → 올려 보기(`pipeline/tryout.py` — 격리된 사본에서
               기준 검사 → 고정 버전 올림 → 같은 검사). Python 고정 줄 · npm package.json(HYO-248) 둘 다. 로컬 · 모델 호출 0
-  다음 조각    embedding(HYO-228 Arena 정답지) · gate(HYO-169 정답 118건) · medical-llm(HYO-229 추출 평가)
+  embedding   검색 임베딩 자리(radar-slots.yaml `retrieval-dense`의 repo · component)에 닿는 새 후보 → Arena 정답지로 지금 것(BGE-M3)과
+              짝 비교(`arena/compare_embed.py`, HYO-240 — HYO-228 손 실험을 옮김). 로컬 · 모델 호출 0 · 내보내지 않는다.
+              torch · sentence-transformers가 든 Arena 환경이 따로 필요하다 (`RADAR_ARENA_PYTHON` 또는 ../venvs/arena · arena-qwen)
+  다음 조각    gate(HYO-169 정답 118건) · medical-llm(HYO-229 추출 평가)
 
 원칙 (HYO-116):
 - **결정은 사람** — ADR을 고치지 않고 status를 바꾸지 않는다. 결과는 근거다
@@ -20,17 +23,24 @@
 import argparse
 import datetime as dt
 import json
+import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
 
+import yaml
+
+from arena import compare_embed
 from pipeline import tryout
 
+REPO = Path(__file__).resolve().parents[1]
 COST_TEXT = {"local": "로컬 — 모델 호출 · 비용 없음", "subscription": "구독 세션을 쓴다 — 세션 수를 보고 확인해야 돈다",
              "api": "유료 API — 견적을 보고 확인해야 돈다"}
 DEP_USE = re.compile(r"의존성 릴리스\s+\S.*대응")
-NO_RECIPE = "이 결정에 맞는 실험 레시피가 아직 없다 — 지금은 의존성 릴리스 대응만 (임베딩 · 관문 분류 · 의료 LLM 레시피는 다음 조각)"
+NO_RECIPE = "이 결정에 맞는 실험 레시피가 아직 없다 — 지금은 의존성 릴리스 대응 · 검색 임베딩 후보만 (관문 분류 · 의료 LLM 레시피는 다음 조각)"
+HF_MODEL = re.compile(r"huggingface\.co/(?!datasets/|spaces/|docs/|blog/|papers/)([A-Za-z0-9][\w.\-]*/[\w.\-]+)")
 
 
 def _configs(root):
@@ -45,9 +55,10 @@ def _configs(root):
 class Dependency:
     """의존성 릴리스 대응 → 올려 보기 (HYO-239). 통과(pass)일 때만 draft PR을 연다 (`tryout.may_export`)."""
     id, label, cost = "dependency", "의존성 올려 보기", "local"
+    exports = True
     export_rule = "통과(pass)일 때만 브랜치 push + draft PR"
 
-    def match(self, adr):
+    def match(self, adr, root=None):
         return bool(DEP_USE.search(adr.get("use") or ""))
 
     def plan(self, adr, root):
@@ -90,7 +101,86 @@ class Dependency:
                 "report_md": tryout.report(res), "export": res.get("export")}
 
 
-RECIPES = [Dependency()]
+def arena_python():
+    """Arena 실험 환경(torch · sentence-transformers · ranx)의 python — `RADAR_ARENA_PYTHON`, 없으면 형제 폴더 venvs/arena · arena-qwen.
+    없으면 None (임베딩 레시피는 「환경 없음」으로 멈춘다 — 레시피가 환경을 만들지 않는다: 수 GB를 말없이 받지 않게)."""
+    env = os.environ.get("RADAR_ARENA_PYTHON")
+    if env:
+        return env if Path(env).exists() else None
+    sub = "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+    return next((str(p) for name in ("arena", "arena-qwen") if (p := REPO.parent / "venvs" / name / sub).exists()), None)
+
+
+class Embedding:
+    """검색 임베딩 자리 후보 → Arena 정답지로 지금 것(BGE-M3)과 짝 비교 (HYO-240). 결과는 근거 — 내보내지 않는다."""
+    id, label, cost = "embedding", "임베딩 정답지 비교", "local"
+    exports = False
+    export_rule = "내보내지 않는다 — 결과는 근거, 채택은 사람"
+    slot_id = "retrieval-dense"
+    timeout = 2 * 3600
+
+    def _slot(self, root):
+        """radar-slots.yaml의 검색 임베딩 자리 → (repo, {component}) | None."""
+        p = Path(root) / "radar-slots.yaml"
+        if not p.exists():
+            return None
+        for s in (yaml.safe_load(p.read_text(encoding="utf-8")) or {}).get("slots") or []:
+            if s.get("id") == self.slot_id:
+                comp = s.get("component")
+                return s.get("repo"), set(comp if isinstance(comp, list) else [comp])
+        return None
+
+    def match(self, adr, root=None):
+        if DEP_USE.search(adr.get("use") or "") or root is None:
+            return False
+        slot = self._slot(root)
+        return bool(slot) and any(a.get("repo") == slot[0] and a.get("component") in slot[1] for a in adr.get("affected") or [])
+
+    @staticmethod
+    def model_id(adr):
+        """HF 모델 id — technology가 `조직/이름`이면 그것, 아니면 evidence의 huggingface.co/<조직>/<이름>. 못 찾으면 None (지어내지 않는다)."""
+        tech = (adr.get("technology") or "").strip()
+        if re.fullmatch(r"[A-Za-z0-9][\w.\-]*/[\w.\-]+", tech):
+            return tech
+        for e in adr.get("evidence") or []:
+            m = HF_MODEL.search(str((e or {}).get("url") or ""))
+            if m:
+                return m.group(1).rstrip("/")
+        return None
+
+    def plan(self, adr, root):
+        model = self.model_id(adr)
+        if not model:
+            return {"ready": False, "reason": "HF 모델 id를 못 읽었다 — technology가 `조직/이름`이 아니고 evidence에 huggingface.co/<조직>/<이름>이 없다"}
+        if not arena_python():
+            return {"ready": False, "reason": "Arena 실험 환경이 없다 — RADAR_ARENA_PYTHON 또는 ../venvs/arena "
+                                              "(uv pip install -r requirements.txt -r arena/requirements.txt)"}
+        return {"ready": True, "params": {"model": model},
+                "detail": f"{model} vs {compare_embed.BASE_ID} — Arena 정답지(gold@v1.2 test 36문항) nDCG@10 짝 비교, "
+                          f"95% 구간이 0을 넘으면 나음 · M1에서 약 20분 (처음엔 모델 받기 포함)"}
+
+    def run(self, adr, root, plan, out, export=False):
+        out = Path(out) / "embed"
+        cmd = [arena_python(), "-m", "arena.compare_embed", "--candidate", plan["params"]["model"], "--out", str(out),
+               "--siblings", str(Path(root).resolve().parent)]          # 코퍼스의 형제 폴더 = ADR repo 옆 (radar-snapshots · 얼린 대상 repo)
+        out.mkdir(parents=True, exist_ok=True)
+        log = out / "run.log"
+        try:
+            with open(log, "w", encoding="utf-8") as f:
+                code = subprocess.run(cmd, cwd=REPO, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                      timeout=self.timeout, env=tryout.check_env()).returncode
+        except subprocess.TimeoutExpired:
+            code = 124
+        rep = out / "report.json"
+        if code != 0 or not rep.exists():
+            return {"verdict": "error", "verdict_text": f"실행 실패(종료 {code}) — {tryout.tail(log, 3) or '로그 없음'}", "ok": False,
+                    "report_md": f"# 임베딩 비교 실패\n\n```\n{tryout.tail(log, 25)}\n```\n", "export": None}
+        r = json.loads(rep.read_text(encoding="utf-8"))
+        return {"verdict": r["verdict"], "verdict_text": compare_embed.VERDICTS[r["verdict"]], "ok": r["verdict"] == "better",
+                "report_md": (out / "report.md").read_text(encoding="utf-8"), "export": None}
+
+
+RECIPES = [Dependency(), Embedding()]
 
 
 def _adr_root(adr_path):
@@ -106,13 +196,17 @@ def plan(adr_path, root=None):
         return {"adr": Path(adr_path).name.split("-", 1)[0], "recipe": None, "label": None, "cost": None, "cost_text": None,
                 "ready": False, "reason": f"결정 기록을 못 읽었다: {e}"}
     for r in RECIPES:
-        if r.match(adr):
+        try:
+            hit = r.match(adr, root)
+        except (OSError, ValueError, yaml.YAMLError):     # 자리 설정이 깨졌으면 그 레시피는 고르지 않는다
+            hit = False
+        if hit:
             try:
                 p = r.plan(adr, root)
             except (OSError, ValueError) as e:      # 대상 목록 · 검사 설정이 깨졌다 — 돌리지 않고 이유로
                 p = {"ready": False, "reason": f"설정을 못 읽었다: {e}"}
             return {"adr": adr["id"], "recipe": r.id, "label": r.label, "cost": r.cost, "cost_text": COST_TEXT[r.cost],
-                    "export_rule": r.export_rule, **p}
+                    "export_rule": r.export_rule, "exports": r.exports, **p}
     return {"adr": adr["id"], "recipe": None, "label": None, "cost": None, "cost_text": None, "ready": False, "reason": NO_RECIPE}
 
 

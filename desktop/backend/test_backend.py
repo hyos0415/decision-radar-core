@@ -2024,7 +2024,7 @@ def scenario_hyo116(tmp):
     pl = d["experiment"]
     check("상세: 레시피 = 의존성 올려 보기 · local · 무엇을 어디서", pl["recipe"] == "dependency" and pl["ready"] and pl["cost"] == "local"
           and "pydantic 2.12.0 → 2.12.3 (medical-mate · chat-api)" in (pl["detail"] or "") and d["experiments"] == [], pl)  # 옛 버전은 픽스처 manifest에서
-    check("상세: 스텁에서는 내보내기를 못 켠다", pl["export_allowed"] is False, pl)
+    check("상세: 스텁에서는 내보내기를 못 켠다 (레시피는 내보내는 쪽)", pl["export_allowed"] is False and pl["exports"] is True, pl)
     p1 = c.get("/decisions/0001").json()["experiment"]
     check("상세: 맞는 레시피가 없으면 이유", p1["recipe"] is None and not p1["ready"] and p1["reason"] == exp_mod.NO_RECIPE, p1)
     r = c.post("/jobs/experiment", json={"adr": "0001"})
@@ -2060,6 +2060,18 @@ def scenario_hyo116(tmp):
     exp_mod.run, svc.mode = fake_run, "real"
     try:
         check("실사용: 내보내기를 켤 수 있다", c.get(f"/decisions/{ex}").json()["experiment"]["export_allowed"] is True)
+        # 내보내지 않는 레시피(임베딩 정답지 비교, HYO-240)는 실사용이어도 내보내기를 못 켜고, 켜서 보내면 409
+        orig_plan = exp_mod.plan
+        exp_mod.plan = lambda path, root=None: {**orig_plan(path, root), "recipe": "embedding", "label": "임베딩 정답지 비교", "exports": False,
+                                                "export_rule": "내보내지 않는다 — 결과는 근거, 채택은 사람"}
+        try:
+            ep = c.get(f"/decisions/{ex}").json()["experiment"]
+            r409 = c.post("/jobs/experiment", json={"adr": ex, "export": True})
+        finally:
+            exp_mod.plan = orig_plan
+        check("내보내지 않는 레시피: 실사용이어도 체크 상자를 못 켠다", ep["exports"] is False and ep["export_allowed"] is False, ep)
+        check("내보내지 않는 레시피: export를 보내면 409 (작업이 되지 않는다)", r409.status_code == 409 and "내보내지 않는다" in r409.json()["detail"]
+              and jobs.queue_of("experiment").empty(), r409.text[:200])
         r = c.post("/jobs/experiment", json={"adr": ex, "export": True})
         jid, payload = jobs.queue_of("experiment").get()
         jobs.run_one(jid, payload)

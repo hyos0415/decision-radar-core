@@ -302,7 +302,7 @@ class DecisionList(BaseModel):
 class ExperimentPlan(BaseModel):
     """이 결정에 맞는 실험 레시피 (HYO-116, `pipeline.experiment.plan`) — 돌리지 않고 무엇을 돌릴지만. ready가 False면 reason."""
     adr: str
-    recipe: Optional[str] = Field(description="dependency(의존성 올려 보기) · 없으면 null — 맞는 레시피가 아직 없다")
+    recipe: Optional[str] = Field(description="dependency(의존성 올려 보기) · embedding(임베딩 정답지 비교) · 없으면 null — 맞는 레시피가 아직 없다")
     label: Optional[str] = None
     cost: Optional[Literal["local", "subscription", "api"]] = Field(default=None, description="local만 바로 돈다 — subscription · api는 확인이 필요하다")
     cost_text: Optional[str] = None
@@ -310,7 +310,8 @@ class ExperimentPlan(BaseModel):
     reason: Optional[str] = Field(default=None, description="못 돌리는 이유 (레시피 없음 · 버전 못 읽음 · 검사 설정 없음 · 돌릴 곳 없음)")
     detail: Optional[str] = Field(default=None, description="무엇을 어디서 — 「fastapi → 0.162.6 (decision-radar · desktop) — …」")
     export_rule: Optional[str] = Field(default=None, description="내보내기(브랜치 push · draft PR) 조건")
-    export_allowed: bool = Field(default=False, description="이 모드에서 내보내기를 켤 수 있나 — 실사용 모드만")
+    exports: bool = Field(default=False, description="이 레시피가 내보내기를 하나 — 임베딩 비교는 근거만 낸다(false, 화면은 체크 상자를 숨긴다)")
+    export_allowed: bool = Field(default=False, description="이 모드에서 내보내기를 켤 수 있나 — 실사용 모드이고 레시피가 내보낼 때만")
 
 
 class ExperimentExport(BaseModel):

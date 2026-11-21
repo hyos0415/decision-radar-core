@@ -118,7 +118,7 @@ def read_adr(path):
         raise SystemExit(f"{path}: frontmatter가 없다")
     fm = yaml.safe_load(parts[1]) or {}
     return {"id": Path(path).name.split("-", 1)[0], "technology": fm.get("technology"), "use": fm.get("use") or "", "title": fm.get("title") or "",
-            "status": fm.get("status"), "affected": fm.get("affected") or [], "path": str(path)}
+            "status": fm.get("status"), "affected": fm.get("affected") or [], "evidence": fm.get("evidence") or [], "path": str(path)}
 
 
 def release_version(adr):
