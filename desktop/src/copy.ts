@@ -335,6 +335,7 @@ export const COPY = {
     captureFailed: `${term.capture} (단축키 없음)`,
     run: (flow: string) => flow,
     runFailedTitle: (flow: string) => `${flow} 실행에 실패했어요`,
+    openAtLogin: '로그인할 때 열기',
     quit: '종료'
   },
 

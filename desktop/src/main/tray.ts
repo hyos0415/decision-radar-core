@@ -1,4 +1,4 @@
-import { Menu, Tray, nativeImage, type BrowserWindow } from 'electron'
+import { Menu, Tray, app, nativeImage, type BrowserWindow } from 'electron'
 import { COPY } from '../copy'
 
 // 32x32 ring drawn as a BGRA bitmap (2x scale => 16pt). Black on transparent so macOS can template it.
@@ -38,6 +38,23 @@ function show(): void {
   w.focus()
 }
 
+// 로그인할 때 열기 (HYO-252) — 설치본에서만. 정기 실행(월 revisit · 화 detect)은 앱이 떠 있을 때만 돈다.
+// 개발 모드에서 켜면 node_modules의 Electron.app이 로그인 항목이 되므로 보이지 않게 한다
+function loginItem(): Electron.MenuItemConstructorOptions[] {
+  if (!app.isPackaged || (process.platform !== 'darwin' && process.platform !== 'win32')) return []
+  return [
+    {
+      label: COPY.tray.openAtLogin,
+      type: 'checkbox',
+      checked: app.getLoginItemSettings().openAtLogin,
+      click: (item) => {
+        app.setLoginItemSettings({ openAtLogin: item.checked })
+        rebuild()
+      }
+    }
+  ]
+}
+
 function rebuild(): void {
   if (!tray || !actions) return
   const a = actions
@@ -53,6 +70,7 @@ function rebuild(): void {
       { label: COPY.tray.run('detect'), click: () => a.onRun('detect') },
       { label: COPY.tray.run('revisit'), click: () => a.onRun('revisit') },
       { type: 'separator' },
+      ...loginItem(),
       { label: COPY.tray.quit, click: a.onQuit }
     ])
   )

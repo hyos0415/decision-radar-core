@@ -121,7 +121,9 @@ RADAR_APP_DEMO=1 RADAR_APP_MODEL=anthropic RADAR_DEMO_SNAPSHOT=pipeline/out/w41/
 ## 실사용 모드 (HYO-99 3단계 — 레포 주인 기기, 실제 ADR repo에 push)
 
 ```bash
-RADAR_APP_MODE=real npm run dev     # [RADAR_REAL_ADR=../adr] [RADAR_SNAPSHOT_REPO=../radar-snapshots] [RADAR_APP_ENGINE=claude-cli|api]
+RADAR_APP_MODE=real npm run app:install   # 평소 — 설치본으로 묶어 /Applications에 (아래 「설치본」, 2026-11-22부터)
+RADAR_APP_MODE=real npm run dev           # 고치면서 볼 때 — 설치본과 동시에는 안 뜬다
+# 둘 다 [RADAR_REAL_ADR=../adr] [RADAR_SNAPSHOT_REPO=../radar-snapshots] [RADAR_APP_ENGINE=claude-cli|api]
 ```
 
 - 시작 검사: ADR repo가 git 작업 사본의 맨 위 · main · origin 있음 · `docs/adr`·`radar-targets.json` 있음 · 데이터 폴더와 안 겹침 · (claude-cli 엔진이면) CLI 바이너리. 틀리면 시작을 거부한다. 데모·`RADAR_APP_MODEL`과 같이 주면 거부
@@ -151,6 +153,9 @@ npm run app:pack                          # 묶기만 — dist/mac-arm64/Decisio
 - 설정 · 로그 폴더(`decision-radar-desktop`)와 한 번만 뜨기 잠금은 개발 모드와 같다 — **설치본과 `npm run dev`는 동시에 뜨지 않는다**(나중에 띄운 쪽이 먼저 뜬 창을 앞으로 부르고 꺼진다). 정기 실행이 두 번 돌지 않게. 데이터 폴더(`~/.decision-radar`)도 같다
 - `app:install`은 /Applications의 같은 앱(번들 ID `io.github.hyos0415.decision-radar`)만 바꾼다 — 떠 있으면 멈추고 트레이에서 종료하라고 한다
 - **아이콘**: `resources/icon.png` (1024×1024 PNG, 지금은 임시). 바꾼 뒤 다시 묶는다. 개발 모드도 Dock · 창 아이콘으로 이 파일을 쓴다
+- **로그인할 때 열기** (HYO-252): 트레이 메뉴의 체크 — 설치본에서만 보인다. 정기 실행(월 revisit · 화 detect)은 앱이 떠 있을 때만 돌므로 켜 두면 놓치지 않는다(못 돈 칸은 다음에 뜰 때 따라잡는다)
+- 앱 버전(`package.json` version)은 공개 사본 릴리스 번호와 맞춘다 — 설치본의 「Decision Radar 정보」에 보인다
+- 설치본 파일은 릴리스에 올리지 않는다 — 묶은 기기의 레포 위치가 들어가고 ad-hoc 서명이라 받은 사람 기기에서는 돌지 않는다. 각자 소스에서 묶는다
 
 ## Mac 검증 (10/26 — Windows로 쓰다 Mac으로 옮긴다, 두 경로 다 검증)
 
