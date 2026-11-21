@@ -82,8 +82,8 @@ test는 사전 등록된 최종 비교에서 **한 번만** 연다(`docs/design/
 1. 사용자 「열자」
 2. `python eval/arena/final/split_gold.py eval/arena/gold@v1.1 test $W/in` — test id 해시 대조(P4), qrels는 만들지 않는다
 3. `bash eval/arena/final/run_strategies.sh $W/in test $W/rank gold@v1.1-test-rankonly rank-only` — 14전략 순위만 (30~60분)
-4. `arena/cli.py docs-dump … --out $W/docs.json` → `python eval/arena/screening/residue.py $W/rank --queries $W/in/test-queries.jsonl --docs-json $W/docs.json --out $W/residue` — 풀 크기를 먼저 세어 Luna 비용을 말하고 돌린다(dev 556쌍 $0.108 → test 1,100~1,300쌍 **$0.2~0.3** 예상)
-5. `python eval/arena/screening/residue_cards.py $W/residue --docs-json $W/docs.json --queries $W/in/test-queries.jsonl --out $W/cards` → 아티팩트로 올림(db) → **사용자 카드 확정 (80~100장 예상, 40~60분)**
+4. `arena/cli.py docs-dump … --out $W/docs.json` → `python eval/arena/screening/residue.py $W/rank --queries $W/in/test-queries.jsonl --docs-json $W/docs.json --out $W/residue` — 풀 크기를 먼저 세어 Luna 비용을 말하고 돌린다(dev 556쌍 $0.108 → test 1,100\~1,300쌍 **$0.2\~0.3** 예상)
+5. `python eval/arena/screening/residue_cards.py $W/residue --docs-json $W/docs.json --queries $W/in/test-queries.jsonl --out $W/cards` → 아티팩트로 올림(db) → **사용자 카드 확정 (80\~100장 예상, 40\~60분)**
 6. 카드 등급 내려받기(`grades.json`) → `python eval/arena/screening/build_qrels_next.py eval/arena/gold@v1.1 $W/residue $W/cards/cards.json $W/grades.json eval/arena/gold@v1.2` — gold@v1.2 얼림(커밋)
 7. `split_gold.py eval/arena/gold@v1.2 test $W/in2 --with-qrels` → `run_strategies.sh $W/in2 test $W/scored gold@v1.2-test` → `arena/cli.py grid --results $W/scored --queries … --qrels $W/in2/test-qrels.json --judgments eval/arena/gold@v1.2/judgments.jsonl --rank-only-results $W/rank` (순위가 3과 같은지 먼저 확인) — v1.1로도 한 번(옛 판 점수 · 잔여 판정 전 judged@10)
    - **변경 (2026-10-29, 사용자 결정 — 채점 결과를 본 뒤)**: 순위 확인에서 S4 · S4.bbq · S4.int8의 run.json이 3과 달라 멈췄다(ES kNN 실행 간 흔들림 추정 · 새로 든 미판정 문서 0 · 30칸 판정 차이 0). **공식 채점은 3의 rank-only 순위로 한다**(`grid --results $W/rank`, 잔여 판정을 받은 바로 그 순위). 채점 실행 결과는 보고서 부록으로 싣는다 — `test-final-2026-10-29.md` 「변경」

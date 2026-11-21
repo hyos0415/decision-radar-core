@@ -220,8 +220,8 @@ excludes:
 
 - `search_by_date`, `tags=story`, **points ≥ 25**, **2일 지연** — 매주 「2~9일 전에 올라온 글」을 받는다
 - 2일 지연 이유: 최근 2일 글 1,000건 중 50점 이상은 42건이었다. 점수가 쌓이는 데 시간이 걸린다
-- 점수 구간 (9~2일 전, 7일치): 200↑ 162 · 100~199 139 · 50~99 148 · 20~49 197 · 10~19 248건
-- 20~49점에 스택 기술 글이 있었다(「Jev Based Code Review」 48, 「What if Jev spoke Arrow?」 45). 10~19점에는 「Anthropic classifiers prohibit kernel development」(18)
+- 점수 구간 (9\~2일 전, 7일치): 200↑ 162 · 100\~199 139 · 50\~99 148 · 20\~49 197 · 10\~19 248건
+- 20\~49점에 스택 기술 글이 있었다(「Jev Based Code Review」 48, 「What if Jev spoke Arrow?」 45). 10\~19점에는 「Anthropic classifiers prohibit kernel development」(18)
 - 점수·댓글 수는 필터 특징으로 넘긴다. URL이 github.com이면 GitHub 통로와 repo 기준으로 중복 제거
 - **4주 뒤**: 필터 통과 글의 점수 구간을 보고 기준선을 낮추거나(지난 기간 재수집) 올린다
 
@@ -305,11 +305,11 @@ excludes:
 | 벤더 RSS · Atom | 실패 · 다른 도메인 · 3주째 새 항목 없음 (그 주에 규칙이 고른 벤더만) |
 | 그 밖의 URL | 출처가 적은 실패 · 200 아닌 응답 |
 
-- 「3주째」는 페이지 · RSS만 — GitHub releases는 조용한 게 정상이고(LEANN W42~W44 0건 · openai-agents-python W44~W45 0건) 저장소가 죽거나 옮기면 실패 · 리다이렉트로 잡힌다. 보안 채널은 0건이 정상이라 실패 · 리다이렉트만 (사용자 11/5)
+- 「3주째」는 페이지 · RSS만 — GitHub releases는 조용한 게 정상이고(LEANN W42\~W44 0건 · openai-agents-python W44\~W45 0건) 저장소가 죽거나 옮기면 실패 · 리다이렉트로 잡힌다. 보안 채널은 0건이 정상이라 실패 · 리다이렉트만 (사용자 11/5)
 - 알려진 예외는 `collector/source-health.yaml` (`pypi.org/pypi/python/json` 404 — W42부터 매주, 해 없음)
 - 수집기가 리다이렉트를 따라간 최종 주소를 `run.json` `http.redirects`에 남긴다 (W46부터)
 - 결과: 얼릴 때 `<주>/source-health.json`(같은 주와 함께 얼린다) · manifest `source_health` 한 줄 · 데스크톱 앱 「이번 주」 머리 경고 한 줄 · 주간 사슬 `health` 단계가 `LINEAR_API_KEY`(.env)로 출처마다 Linear 이슈(열린 이슈가 있으면 N주째 댓글, 정상으로 돌아오면 댓글 한 번 — 닫는 것은 사람). 키가 없거나 실패해도 사슬은 간다
-- 확인(얼린 W42~W45 다시 검사): W42~W44 이상 없음 · W45 Gemini 한 건(본문 45자 — 중앙값 47,373자의 절반 미만 · 수집기 실패). 이 검사가 그때 있었으면 11/3에 알았다
+- 확인(얼린 W42\~W45 다시 검사): W42\~W44 이상 없음 · W45 Gemini 한 건(본문 45자 — 중앙값 47,373자의 절반 미만 · 수집기 실패). 이 검사가 그때 있었으면 11/3에 알았다
 - 2단계(11/10 뒤): 이상 → 수리 에이전트가 대체 주소를 찾아 그 출처만 다시 받고 기계 검사(본문 ≥ 마지막 정상 주 절반 · 마지막 정상 주의 날짜 머리글이 새 출처에 있다 · 날짜 블록 쪼개기 정상)를 통과해야 PR. 에이전트 하네스2 도입 뒤 기준으로 설계한다 (사용자 11/5)
 
 변경 (2026-11-11, 사용자 — HYO-180 첫 조각): **출처 단위는 데이터 등록부로 묶어 센다** (`registry/sources.ttl` → `registry.json`, 설계 `data-registry.md`). 위 표의 「출처(reddit · …)」는 수집 단위이고, 항목 수는 항목 `source`를 등록부의 `collectedBy`로 묶은 값이다 — security = osv + python + nodejs. W46은 보안 항목 4건이 python 3 · nodejs 1로 흩어져 security가 0건으로 보였다(HYO-179 — 0건 규칙은 #281이 먼저 껐고 그대로 둔다). 규칙 하나를 더한다:
@@ -333,7 +333,7 @@ excludes:
 
 ## 6. 스킬과의 관계
 
-`comparison-protocol.md` §1 역수입 적용(2026-10-02): 실사용 기준선(10/5~11/1)은 `skill@v1` 그대로 돈다(detect = 웹 검색). 수집기가 완성되면 detect가 같은 스냅숏을 읽는 `skill@v2`를 만들고 v1 ↔ v2 짝 eval을 따로 한다 (HYO-75). 제품(11/2~)과 `skill@v1`의 실사용 차이에는 출처 풀 효과가 섞여 있다 — 판정문에 적는다.
+`comparison-protocol.md` §1 역수입 적용(2026-10-02): 실사용 기준선(10/5\~11/1)은 `skill@v1` 그대로 돈다(detect = 웹 검색). 수집기가 완성되면 detect가 같은 스냅숏을 읽는 `skill@v2`를 만들고 v1 ↔ v2 짝 eval을 따로 한다 (HYO-75). 제품(11/2\~)과 `skill@v1`의 실사용 차이에는 출처 풀 효과가 섞여 있다 — 판정문에 적는다.
 
 ## 7. Elasticsearch 등급 (overview Q4 · Arena A7의 답)
 
