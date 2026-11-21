@@ -1,4 +1,4 @@
-"""재시도 정책 회귀 (HYO-48 전제) — 실제 API 없이 가짜 모델로. 대기는 주입해서 실제로 기다리지 않는다.
+"""재시도 정책 회귀 (HYO-48 전제) — 실제 API 없이 가짜 SDK 클라이언트로(models.AnthropicModel의 클라이언트 자리). 대기는 주입해서 실제로 기다리지 않는다.
 
   python product/radar/test_retry.py        # 메인 .venv
 
@@ -15,12 +15,11 @@ sys.path[0] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # pro
 sys.stdout.reconfigure(encoding="utf-8")
 
 import anthropic  # noqa: E402
-import httpx  # noqa: E402
-from langchain_core.language_models.chat_models import BaseChatModel  # noqa: E402
-from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
-from langchain_core.outputs import ChatGeneration, ChatResult  # noqa: E402
+import httpx2 as httpx  # noqa: E402  — anthropic 1.x는 httpx2 위에 있다 (httpx는 langchain을 따라 들어왔었다 — ADR 0030 뒤 없다)
 
-from radar import llm_log, retry  # noqa: E402
+from radar import llm_log, models, retry  # noqa: E402
+from radar.loop import Request  # noqa: E402
+from common.schemas import Verdict  # noqa: E402
 
 REQ = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
 
@@ -33,32 +32,32 @@ def conn_err():
     return anthropic.APIConnectionError(request=REQ)
 
 
-class FakeChat(BaseChatModel):
-    """앞에서부터 script를 하나씩 소비한다 — 예외면 던지고, 아니면 성공 응답. 호출 수를 센다."""
-    script: list
-    calls: int = 0
+OK = anthropic.types.Message.model_validate({"id": "msg_x", "type": "message", "role": "assistant", "model": "claude-sonnet-5-5",
+                                             "stop_reason": "end_turn", "stop_sequence": None, "content": [{"type": "text", "text": "{}"}],
+                                             "usage": {"input_tokens": 10, "output_tokens": 5}})
+REQUEST = Request(agent="detect-triage", system="s", messages=[{"role": "user", "content": "hi"}], tools=[], schema=Verdict)
 
-    @property
-    def _llm_type(self):
-        return "fake"
 
-    def _result(self):
+class FakeMessages:
+    """앞에서부터 script를 하나씩 소비한다 — 예외면 던지고, 아니면 성공 응답. 호출 수를 센다 (SDK의 client.messages 자리)."""
+
+    def __init__(self, script):
+        self.script, self.calls = script, 0
+
+    def _next(self):
         item = self.script[min(self.calls, len(self.script) - 1)]
         self.calls += 1
         if isinstance(item, Exception):
             raise item
-        msg = AIMessage(content="ok", usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15})
-        return ChatResult(generations=[ChatGeneration(message=msg)])
+        return OK
 
-    def _generate(self, messages, stop=None, run_manager=None, **kw):
-        return self._result()
-
-    async def _agenerate(self, messages, stop=None, run_manager=None, **kw):
-        return self._result()
+    def create(self, **body):
+        return self._next()
 
 
-class RetryChat(retry.RetryMixin, FakeChat):
-    pass
+class AsyncFakeMessages(FakeMessages):
+    async def create(self, **body):
+        return self._next()
 
 
 class Ctx:
@@ -69,7 +68,7 @@ class Ctx:
 
 
 def run(script, sync=False):
-    """한 번 호출 → (성공 여부, 예외, 모델 호출 수, llm_call 줄들, 대기 기록)."""
+    """한 번 호출 → (성공 여부, 예외, 모델 호출 수, llm_call 줄들, 대기 기록). 모델은 models.AnthropicModel — SDK 클라이언트 자리에 가짜를 꽂는다."""
     waits = []
     retry.SLEEPER.sleep = lambda s: waits.append(s)
 
@@ -77,14 +76,18 @@ def run(script, sync=False):
         waits.append(s)
 
     retry.SLEEPER.asleep = _asleep
-    ctx, m = Ctx(), RetryChat(script=script)
+    ctx, m = Ctx(), models.AnthropicModel(api_key="test-key")
+    fake = (FakeMessages if sync else AsyncFakeMessages)(script)
+    client = type("C", (), {"messages": fake})()
+    m._client = lambda: client
+    m._aclient = lambda: client
     llm_log.attach(m, ctx, "detect", "claude-sonnet-5-5")
     exc = None
     try:
-        m.invoke([HumanMessage("hi")]) if sync else asyncio.run(m.ainvoke([HumanMessage("hi")]))
+        m.call(REQUEST) if sync else asyncio.run(m.acall(REQUEST))
     except Exception as e:  # noqa: BLE001
         exc = e
-    return exc is None, exc, m.calls, llm_log.read_calls(ctx.events), waits
+    return exc is None, exc, fake.calls, llm_log.read_calls(ctx.events), waits
 
 
 def scenarios():

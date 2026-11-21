@@ -1,6 +1,6 @@
 """제품 구조 회귀 — 모델·API 없이 돈다. 안전 조항이 구조로 남아 있는지, 채점기가 무력하지 않은지 본다.
 
-  python product/radar/test_product.py        # 메인 .venv (PyYAML·langgraph 필요)
+  python product/radar/test_product.py        # 메인 .venv (PyYAML 필요)
 
 e2e(53케이스 + 음성 대조)는 run_eval.py --stub이 한다. 여기는 그 앞의 빠른 검사다:
   1. R8  status를 쓰는 길이 구조적으로 없다 — 스키마에 칸이 없고, 렌더가 proposed로 박고, 소스에 다른 status 쓰기가 없다
@@ -84,22 +84,36 @@ check("tool_uses·tool_calls가 llm_call을 세지 않음", len(rc.tool_uses(ok.
 check("read_calls가 llm_call만 거름", len(llm_log.read_calls(ok.events)) == 1)
 
 print("5. 열기·검색 가드 (HYO-137) — 보인 적 없는 URL 거절 · 예산 넘으면 거절")
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
+from radar.loop import Conversation  # noqa: E402
 from radar.tools import CAPTURE_TOOLS, LOOKUP_BUDGET, REVISIT_TOOLS, lookup_guard  # noqa: E402
 
-cond = HumanMessage(content='확인할 조건:\n<condition>{"source_hint": "docs.cloudvendor.example/guardrails/languages"}</condition>')
-st = {"messages": [cond]}
+COND = '확인할 조건:\n<condition>{"source_hint": "docs.cloudvendor.example/guardrails/languages"}</condition>'
+
+
+def conv_with(*turns):
+    """turns: ("tool", 이름, 결과 글) · ("ai", 글) — 조건 하나로 시작하는 대화 (Anthropic 형식)."""
+    c = Conversation.start(COND)
+    for i, t in enumerate(turns):
+        if t[0] == "ai":
+            c.messages.append({"role": "assistant", "content": [{"type": "text", "text": t[1]}]})
+        else:
+            c.messages.append({"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": t[1], "input": {}}]})
+            c.messages.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": t[2], "is_error": False}]})
+    return c
+
+
+st = conv_with()
 check("source_hint는 연다 (scheme 붙여도)", lookup_guard(st, "https://docs.cloudvendor.example/guardrails/languages/") is None)
 check("지어낸 URL은 not_offered", (lookup_guard(st, "https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html") or {}).get("status") == "not_offered")
 check("빈 URL은 not_offered", (lookup_guard(st, "") or {}).get("status") == "not_offered")
-found = ToolMessage(content='{"ok": true, "results": [{"url": "https://cloudvendor.example/blog/korean"}]}', name="snapshot_search", tool_call_id="t1")
-check("검색 결과에 나온 URL은 연다", lookup_guard({"messages": [cond, found]}, "cloudvendor.example/blog/korean") is None)
-check("AI가 스스로 쓴 URL은 근거가 아니다", (lookup_guard({"messages": [cond, AIMessage(content="github.com/x/y 를 열어 보자")]}, "github.com/x/y") or {}).get("status") == "not_offered")
-used = [cond] + [ToolMessage(content='{"ok": false, "status": 403}', name="snapshot_fetch", tool_call_id=f"f{i}") for i in range(LOOKUP_BUDGET)]
+found = ("tool", "snapshot_search", '{"ok": true, "results": [{"url": "https://cloudvendor.example/blog/korean"}]}')
+check("검색 결과에 나온 URL은 연다", lookup_guard(conv_with(found), "cloudvendor.example/blog/korean") is None)
+check("AI가 스스로 쓴 URL은 근거가 아니다", (lookup_guard(conv_with(("ai", "github.com/x/y 를 열어 보자")), "github.com/x/y") or {}).get("status") == "not_offered")
+used = conv_with(*[("tool", "snapshot_fetch", '{"ok": false, "status": 403}') for _ in range(LOOKUP_BUDGET)])
 check("예산을 다 쓰면 열기·검색 모두 거절", all((x or {}).get("status") == "lookup_budget_exhausted"
-                                         for x in (lookup_guard({"messages": used}, "docs.cloudvendor.example/guardrails/languages"), lookup_guard({"messages": used}))))
-other = [cond] + [ToolMessage(content="{}", name="read_repo_file", tool_call_id=f"r{i}") for i in range(LOOKUP_BUDGET)]
-check("read_repo_file은 예산에 안 든다", lookup_guard({"messages": other}) is None)
+                                         for x in (lookup_guard(used, "docs.cloudvendor.example/guardrails/languages"), lookup_guard(used))))
+other = conv_with(*[("tool", "read_repo_file", "{}") for _ in range(LOOKUP_BUDGET)])
+check("read_repo_file은 예산에 안 든다", lookup_guard(other) is None)
 check("revisit·capture 도구 이름 그대로 · capture에 열기 추가", [t.name for t in REVISIT_TOOLS] == ["snapshot_fetch", "snapshot_search", "read_repo_file"]
       and [t.name for t in CAPTURE_TOOLS] == ["snapshot_fetch", "match_adr", "propose_adr"])
 

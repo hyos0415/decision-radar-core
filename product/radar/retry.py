@@ -2,14 +2,15 @@
 
 배경: 2026-10-06 제품 실제 모델 53케이스 k=1에서 4건이 detect triage 첫 호출의 `AnthropicConnectionError: Connection error.`
 (토큰 0)로 실패했고, 같은 4건을 다시 돌리니 전부 통과했다. 게이트(pass^k k=10, 150회)에서 이런 오류는 안전 실패로 집계된다.
-langchain-anthropic 1.9.0의 ChatAnthropic은 max_retries=2가 기본이고 anthropic SDK가 0.5초·1초 안팎의 짧은 대기(총 1.5초 안쪽)로
+anthropic SDK는 max_retries=2가 기본이고 0.5초·1초 안팎의 짧은 대기(총 1.5초 안쪽)로
 재시도한다 — 순간 끊김보다 긴 끊김은 못 넘는다. 그래서 SDK 재시도는 끄고(models.py max_retries=0) 이 정책이 한 곳에서 맡는다:
-시도 횟수를 세어 llm_call 기록에 남길 수 있고, 대기 상한이 한 군데 상수다.
+시도 횟수를 세어 llm_call 기록에 남길 수 있고, 대기 상한이 한 군데 상수다. (처음엔 ChatAnthropic 앞에 섞는 RetryMixin이었다 — 지금은
+models.AnthropicModel이 call_sync · call_async로 SDK 호출을 직접 감싼다, ADR 0030)
 
 후속(2026-10-06): 게이트의 첫 호출 연결 오류 590건은 일시 장애가 아니라 루프를 건너 재사용된 비동기 연결이었다 — models.py가 고쳤다(test_loop_client.py).
 재시도 대상: 연결 오류·타임아웃(상태 코드 없음) · 429 · 5xx(529 overloaded 포함). 그 밖의 4xx(요청 형식 오류 등)는 다시 불러도
 같은 결과이므로 재시도하지 않는다 — 어댑터 400이 P3로 드러나야 한다.
-재시도 끝에 성공한 호출은 오류가 아니다(on_llm_error가 불리지 않는다). 끝내 실패하면 그 예외가 그대로 올라가 지금처럼 P3다.
+재시도 끝에 성공한 호출은 오류가 아니다(llm_call에 error 칸이 없다). 끝내 실패하면 그 예외가 그대로 올라가 지금처럼 P3다.
 실패한 시도는 토큰 0이라 비용은 성공한 호출 기준이다.
 """
 
@@ -50,7 +51,7 @@ def delay(n):
     return min(BACKOFF_CAP, BACKOFF_BASE * 2 ** n) * (1 - JITTER * random.random())
 
 
-# run_id별 시도 기록 — CallLog가 on_llm_end·on_llm_error에서 꺼내 llm_call 줄에 붙인다.
+# run_id별 시도 기록 — models.AnthropicModel이 호출이 끝나면(성공·실패) 꺼내 llm_call 줄에 붙인다.
 _INFO, _LOCK = {}, threading.Lock()
 
 
@@ -102,15 +103,3 @@ async def call_async(fn, run_id=None):
                 raise
             retried.append(error_kind(e))
             await SLEEPER.asleep(delay(n))
-
-
-class RetryMixin:
-    """ChatModel 앞에 섞는다: `class M(RetryMixin, ChatAnthropic)`. `_generate`·`_agenerate`만 감싼다 (스트리밍 경로는 쓰지 않는다)."""
-
-    def _generate(self, messages, stop=None, run_manager=None, **kw):
-        sup = super()._generate
-        return call_sync(lambda: sup(messages, stop=stop, run_manager=run_manager, **kw), getattr(run_manager, "run_id", None))
-
-    async def _agenerate(self, messages, stop=None, run_manager=None, **kw):
-        sup = super()._agenerate
-        return await call_async(lambda: sup(messages, stop=stop, run_manager=run_manager, **kw), getattr(run_manager, "run_id", None))

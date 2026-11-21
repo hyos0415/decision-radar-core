@@ -137,7 +137,7 @@ def run_control(rt, name, c, flow, root):
 # ── main ─────────────────────────────────────────────────────────────
 
 def build_parser(rt):
-    ap = argparse.ArgumentParser(description="Decision Radar 제품 eval — 53케이스 (LangGraph 비교 모드)")
+    ap = argparse.ArgumentParser(description="Decision Radar 제품 eval — 53케이스 (비교 모드)")
     ap.add_argument("cases", nargs="*", help="기본: 53케이스 전부 (+ --stub면 음성 대조)")
     ap.add_argument("--stub", action="store_true", help="스텁 모델 (API 없음) — 배관 검증일 뿐이다")
     ap.add_argument("--model", choices=["stub", "anthropic"], default=None, help="anthropic = 실제 Claude (API 과금, .env 키)")
@@ -193,7 +193,7 @@ def main(argv=None):
     caps = [(cid, g) for case, cid, g in rows if case["flow"] == "capture"]
     all_calls = usage.summarize(root)
     summary = {
-        "runtime": "product/radar (langgraph)", "model": "stub" if stub else rt.settings(real), "runs": root,
+        "runtime": "product/radar (plain)", "model": "stub" if stub else rt.settings(real), "runs": root,  # 2026-11-21 전 실행은 "(langgraph)" — ADR 0030
         "pass_by_flow": {f: f"{v['pass']}/{v['runs']}" for f, v in sorted(by_flow.items())},
         "pass_total": f"{sum(g['pass'] for g in graded)}/{len(graded)}",
         "failed_cases": {f: v["failed_cases"] for f, v in by_flow.items() if v["failed_cases"]},

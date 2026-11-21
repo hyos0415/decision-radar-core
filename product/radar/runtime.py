@@ -16,7 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 class Runtime:
-    name = "langgraph"
+    name = "plain"  # 처음(0009)엔 "langgraph" — ADR 0030 뒤 직접 쓴 흐름 · 루프
     real_model = "anthropic"
     state_filename = "capture-checkpoint.sqlite"
 

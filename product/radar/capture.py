@@ -1,97 +1,67 @@
-"""capture 그래프 — HITL·체크포인트·재개 (설계 docs/design/hitl-state.md, HYO-44).
+"""capture 흐름 — HITL·멈춤·재개 (설계 docs/design/hitl-state.md, HYO-44).
 
-create_agent(snapshot_fetch(가드) · match_adr · propose_adr) + HumanInTheLoopMiddleware(propose_adr: approve/edit/reject) + SqliteSaver
-  1턴  승인 대기에서 interrupt → 체크포인트가 SQLite 파일에 남는다. 이 시점의 지문(Fingerprint)도 같은 파일의 별도 표에 남는다
+에이전트 루프(loop.py, 도구: snapshot_fetch(가드) · match_adr · propose_adr) — propose_adr 호출이 나오면 실행하지 않고 멈춘다 (approve/edit/reject)
+  1턴  승인 대기에서 멈춤 → 대화와 대기 중인 호출이 SQLite 파일에 남는다(hitl.ThreadStore). 이 시점의 지문(Fingerprint)도 같은 파일의 별도 표에 남는다
        — 별도 파일(.radar/items)은 아직 없다 (R9: 승인 전 ADR repo 쓰기 0, 설계 §3-1)
-  2턴  (새 프로세스, resume.py) 같은 파일·같은 thread_id → 재개 검사(hitl.check_resume) → Command(resume=...)
+  2턴  (새 프로세스, resume.py) 같은 파일·같은 thread_id → 재개 검사(hitl.check_resume) → 사람의 답대로 대기 중인 호출을 실행하고 루프를 이어 간다
        승인 순간에 별도 파일이 생긴다 (write-ahead 의도와 같은 단계, tools.propose_adr → hitl.write_adr)
 
+처음(0009)엔 LangChain create_agent + HumanInTheLoopMiddleware + LangGraph SqliteSaver였다 (ADR 0030, HYO-220). 멈출 때 저장하는 것은
+대화(메시지 목록 JSON) · 대기 중인 호출 · 멈춘 시각뿐이다 — 재개 검사 · 쓰기 순서 · 검증은 처음부터 hitl.py가 했다.
 스파이크에서 바뀐 것: thread_id = item-id(결정 5, 더는 "capture" 고정이 아니다) · edit 채널(결정 6) · 재개 검사(결정 3)
-· write-ahead 쓰기(결정 4) · 끝난 항목의 checkpoint 삭제 · 지문 A′(결정 7) · git 내보내기(결정 8 — 켰을 때만. 재개 전에 원격을 따라잡고,
+· write-ahead 쓰기(결정 4) · 끝난 항목의 멈춘 대화 삭제 · 지문 A′(결정 7) · git 내보내기(결정 8 — 켰을 때만. 재개 전에 원격을 따라잡고,
 쓰기가 끝나면 커밋·push. 재개 검사에서 또 달라졌으면 커밋하지 않고 항목에 남긴다 → review.py로 사람이 답한다).
 """
 
 import dataclasses
 import hashlib
 
-from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware, HumanInTheLoopMiddleware
-from langchain.agents.structured_output import ProviderStrategy
-from langgraph.checkpoint.sqlite import SqliteSaver
-from langgraph.types import Command
-
 from common import ops
-from common.core import Ctx
 from common.prompts import CAPTURE_INSTRUCTIONS, capture_prompt
 from common.schemas import AdrDraft, CaptureResult
 
-from . import hitl, llm_log
-from .revisit import limit
+from . import hitl, llm_log, loop
 from .tools import CAPTURE_TOOLS
 
 DECISIONS = ["approve", "edit", "reject"]  # 결정 6 — 스파이크는 approve/reject였다
+GATED = ("propose_adr",)
+REJECT_MESSAGE = "사용자가 이 초안을 거부했다. 저장하지 않는다."
 
 
-def thread_config(item_id, **configurable):
-    """thread_id = item-id (결정 5). configurable의 나머지는 도구가 읽는 승인 정보 — checkpoint에 저장되지 않는다."""
-    return {"configurable": {"thread_id": item_id, **configurable}}
-
-
-class PinRepo(AgentMiddleware):
+def pin_repo(repo):
     """사람이 정한 repo(빠른 capture의 repo 칸, HYO-95)를 propose_adr 초안의 affected에 박는다 — component는 모델 것을 둔다.
-    after_model 훅은 미들웨어 목록의 **역순**으로 돈다 → HITL 뒤에 두면 HITL이 멈추기 전에 돈다. 그래서 Inbox에 처음 보이는 초안부터
-    정한 repo이고, 사람의 「승인」은 승인으로 남는다(edit로 바꿔 보내지 않는다). repo가 없으면 아무것도 안 한다 —
-    2턴도 같은 그래프여야 해서 항상 끼운다."""
+    루프가 멈추기 **전에** 호출을 고친다 → Inbox에 처음 보이는 초안부터 정한 repo이고, 사람의 「승인」은 승인으로 남는다(edit로 바꿔 보내지 않는다).
+    repo가 없으면 None(고치지 않는다)."""
+    if not repo:
+        return None
 
-    def __init__(self, repo=None):
-        super().__init__()
-        self.repo = repo
-
-    def after_model(self, state, runtime):
-        msg = state["messages"][-1] if state.get("messages") else None
-        calls = getattr(msg, "tool_calls", None) or []
-        if not self.repo or not any(c["name"] == "propose_adr" for c in calls):
-            return None
-        out = []
-        for c in calls:
-            if c["name"] == "propose_adr" and isinstance(c["args"].get("draft"), dict):
-                d = dict(c["args"]["draft"])
-                comps = list(dict.fromkeys((a or {}).get("component") for a in d.get("affected") or [] if (a or {}).get("component")))
-                d["affected"] = [{"repo": self.repo, "component": x} for x in comps]  # component가 없으면 빈 목록 → validate가 막는다
-                c = {**c, "args": {**c["args"], "draft": d}}
-            out.append(c)
-        return {"messages": [msg.model_copy(update={"tool_calls": out})]}  # 같은 id — add_messages가 바꿔 끼운다
-
-    async def aafter_model(self, state, runtime):
-        return self.after_model(state, runtime)
+    def rewrite(block):
+        if block.get("name") != "propose_adr" or not isinstance((block.get("input") or {}).get("draft"), dict):
+            return block
+        d = dict(block["input"]["draft"])
+        comps = list(dict.fromkeys((a or {}).get("component") for a in d.get("affected") or [] if (a or {}).get("component")))
+        d["affected"] = [{"repo": repo, "component": x} for x in comps]  # component가 없으면 빈 목록 → validate가 막는다
+        return {**block, "input": {**block["input"], "draft": d}}
+    return rewrite
 
 
-def capture_agent(model, checkpointer, gate=True, repo=None):
-    mw = [HumanInTheLoopMiddleware(interrupt_on={"propose_adr": {"allowed_decisions": DECISIONS}})] if gate else []
-    mw.append(PinRepo(repo))
-    return create_agent(model, tools=CAPTURE_TOOLS, system_prompt=CAPTURE_INSTRUCTIONS,
-                        response_format=ProviderStrategy(CaptureResult), middleware=mw, checkpointer=checkpointer,
-                        context_schema=Ctx, name="capture")
+def _run(model, conv, ctx, config, gate=True, repo=None):
+    return loop.run(model, name="capture", system=CAPTURE_INSTRUCTIONS, conv=conv, schema=CaptureResult, tools=CAPTURE_TOOLS, ctx=ctx,
+                    max_turns=ops.CAPTURE_MAX_TURNS, config=config, interrupt_on=GATED if gate else (), rewrite=pin_repo(repo))
 
 
-def _interrupts(r):
-    return list(r.get("__interrupt__") or [])
+def _preview(calls):
+    return [{"tool": c["name"], "arguments": c["input"]} for c in calls]
 
 
-def _preview(its):
-    return [{"tool": a["name"], "arguments": a["args"]} for it in its for a in (it.value or {}).get("action_requests", [])]
-
-
-def _report(ctx, now, r, item_id=None, extra=None):
+def _report(ctx, now, kind, val, item_id=None, extra=None):
     # ops.capture_report는 ctx.events가 전부 도구 호출이라고 가정한다 — llm_call 줄을 뺀 보기로 부른다
     ctx = dataclasses.replace(ctx, events=[e for e in ctx.events if e.get("type") == "assistant"])
-    its = _interrupts(r)
-    if its:
-        rep = ops.capture_report(ctx, now, link_candidates=[], awaiting=True, preview=_preview(its))
+    if kind == "interrupt":
+        rep = ops.capture_report(ctx, now, link_candidates=[], awaiting=True, preview=_preview(val))
     else:
-        out = r.get("structured_response")
-        rep = ops.capture_report(ctx, now, link_candidates=list(out.link_candidates) if out else [], awaiting=False,
-                                 note=out.note if out else None)
+        rep = ops.capture_report(ctx, now, link_candidates=list(val.link_candidates) if val else [], awaiting=False,
+                                 note=val.note if val else None)
     return _tag(rep, item_id, extra)
 
 
@@ -108,12 +78,23 @@ def _plain_report(ctx, now, *, awaiting, preview=None, note=None, item_id=None, 
     return _tag(ops.capture_report(ctx, now, link_candidates=[], awaiting=awaiting, preview=preview, note=note), item_id, extra)
 
 
-def _pending_draft(its):
-    for it in its:
-        for a in (it.value or {}).get("action_requests", []):
-            if a["name"] == "propose_adr":
-                return a["args"].get("draft")
+def pending_draft(calls):
+    """대기 중인 호출 → propose_adr 초안 dict | None."""
+    for c in calls or []:
+        if c["name"] == "propose_adr":
+            return (c.get("input") or {}).get("draft")
     return None
+
+
+def pending_items(state_path):
+    """대기 중인 capture 항목 → [{id, draft, since}] (멈춘 대화만 읽는다 — 모델을 부르지 않는다). 데스크톱 Inbox가 쓴다."""
+    threads, out = hitl.ThreadStore(state_path), []
+    for tid in threads.threads():
+        t = threads.get(tid)
+        draft = pending_draft((t or {}).get("pending"))
+        if draft is not None:
+            out.append({"id": tid, "draft": draft, "since": t["created_at"]})
+    return out
 
 
 def make_item_id(ctx, conversation, store):
@@ -121,45 +102,53 @@ def make_item_id(ctx, conversation, store):
     return hitl.new_item_id(ctx, "capture", hashlib.sha1(conversation.encode("utf-8")).hexdigest()[:8], taken=set(store.threads()))
 
 
+def _pause(state_path, item_id, conv, calls):
+    hitl.ThreadStore(state_path).put(item_id, conv.to_json(), calls)
+
+
 async def capture_turn1(ctx, model, conversation, now, state_path, model_name, gate=True, item_id=None, fingerprint=None, repo=None):
     ctx.now, ctx.calls = now, 0
     store = hitl.StateStore(state_path)
     item_id = item_id or make_item_id(ctx, conversation, store)
     log = llm_log.attach(model, ctx, "capture", model_name)
-    with SqliteSaver.from_conn_string(state_path) as cp:
-        r = capture_agent(model, cp, gate, repo=repo).invoke({"messages": [{"role": "user", "content": capture_prompt(conversation, now, repo)}]},
-                                                   config={**thread_config(item_id), "recursion_limit": limit(ops.CAPTURE_MAX_TURNS)},
-                                                   context=ctx)
-    its = _interrupts(r)
-    if its:  # 멈춘 순간의 세상을 적어 둔다 — 재개 때 비교한다. ADR repo가 아니라 checkpoint 파일 안이라 R9에 걸리지 않는다
-        scope = hitl.scope_of(_pending_draft(its) or {})
+    conv = loop.Conversation.start(capture_prompt(conversation, now, repo))
+    kind, val, conv = _run(model, conv, ctx, {"thread_id": item_id}, gate, repo)
+    if kind == "interrupt":  # 멈춘 순간의 세상을 적어 둔다 — 재개 때 비교한다. ADR repo가 아니라 상태 파일 안이라 R9에 걸리지 않는다
+        _pause(state_path, item_id, conv, val)
+        scope = hitl.scope_of(pending_draft(val) or {})
         fp = hitl.fingerprint_for(ctx, fingerprint)
         store.put(item_id, fp.compute(ctx, scope), scope)
     diag = {**log.totals(), "usage": log.calls,
             "p3_errors": [] if ops.matched(ctx) else [{"kind": "tool_call_missing", "message": "match_adr를 부르지 않음"}]}
-    return _report(ctx, now, r, item_id), diag
+    return _report(ctx, now, kind, val, item_id), diag
 
 
 def _finish_thread(state_path, store, item_id):
-    """항목이 끝났다 — checkpoint thread와 지문을 지운다 (§4-4). 별도 파일은 history와 함께 남는다."""
-    with SqliteSaver.from_conn_string(state_path) as cp:
-        cp.delete_thread(item_id)
+    """항목이 끝났다 — 멈춘 대화와 지문을 지운다 (§4-4). 별도 파일은 history와 함께 남는다."""
+    hitl.ThreadStore(state_path).delete(item_id)
     store.delete(item_id)
 
 
-def _answer(decision, edited_draft):
-    if decision == "approve":
-        return {"type": "approve"}
-    if decision == "edit":
-        return {"type": "edit", "edited_action": {"name": "propose_adr", "args": {"draft": edited_draft}}}
-    return {"type": "reject", "message": "사용자가 이 초안을 거부했다. 저장하지 않는다."}
+def _decisions(pending, decision, edited_draft):
+    """사람의 답 → 대기 중인 propose_adr 호출마다의 결정 (loop.run_tools의 decisions). 다른 호출은 그대로 실행한다."""
+    out = {}
+    for c in pending:
+        if c["name"] not in GATED:
+            continue
+        if decision == "edit":
+            out[c["id"]] = ("edit", {**(c.get("input") or {}), "draft": edited_draft})
+        elif decision == "reject":
+            out[c["id"]] = ("reject", REJECT_MESSAGE)
+        else:
+            out[c["id"]] = ("approve", None)
+    return out
 
 
 def capture_turn2(ctx, model, state_path, decision, now, model_name, *, item_id=None, edited=None, stale_answer=None, fingerprint=None):
     """새 프로세스에서 부른다. decision: approve | edit | reject — 사람의 답을 여기로만 넣는다.
 
     edit이면 edited(고친 초안 dict)가 필요하다. 쓰기 전에 hitl.check_edit이 검사하고, 실패하면 아무것도 쓰지 않고 오류를 보고서(`hitl.edit_errors`)에
-    담아 다시 승인 대기로 돌려준다 (interrupt는 그대로 남는다).
+    담아 다시 승인 대기로 돌려준다 (멈춘 대화는 그대로 남는다).
     지문이 달라졌으면 재개하지 않고 `hitl.stale`에 무엇이 바뀌었는지 담아 다시 승인을 기다린다 — 답은 stale_answer: continue | rejudge | discard.
     """
     ctx.now, ctx.calls = now, 0
@@ -170,15 +159,12 @@ def capture_turn2(ctx, model, state_path, decision, now, model_name, *, item_id=
         if len(threads) != 1:
             raise hitl.HitlError(f"item_id가 필요하다 — 대기 중인 항목 {threads}")
         item_id = threads[0]
-    cfg = thread_config(item_id)
 
-    with SqliteSaver.from_conn_string(state_path) as cp:
-        agent = capture_agent(model, cp)
-        before = agent.get_state(cfg)
-        pending = list(before.interrupts)
+    saved = hitl.ThreadStore(state_path).get(item_id)
+    pending = list((saved or {}).get("pending") or [])
     diag = {"usage": log.calls, "pending_restored": len(pending)}
     preview = _preview(pending)
-    original = _pending_draft(pending)
+    original = pending_draft(pending)
     stored_fp, scope = store.get(item_id)
     if scope is None:
         scope = hitl.scope_of(original or {})
@@ -216,8 +202,8 @@ def capture_turn2(ctx, model, state_path, decision, now, model_name, *, item_id=
             return stop(f"회복: {plan['recovery']['action']}", recovery=plan["recovery"]["action"], validate_errors=plan["recovery"]["result"]["validate_errors"])
         if act == "done":
             _finish_thread(state_path, store, item_id)
-            return stop("이미 완료된 항목 — checkpoint만 정리했다", recovery="already_done")
-        if act in ("blocked", "orphan"):  # 덮지 않고 사람에게 보인다 — checkpoint는 남긴다
+            return stop("이미 완료된 항목 — 멈춘 대화만 정리했다", recovery="already_done")
+        if act in ("blocked", "orphan"):  # 덮지 않고 사람에게 보인다 — 멈춘 대화는 남긴다
             return stop(f"멈춤: {plan.get('reason')}", awaiting=False, blocked={k: v for k, v in plan.items() if k != "recovery"})
         if act == "stale":
             if stale_answer is None:
@@ -235,13 +221,20 @@ def capture_turn2(ctx, model, state_path, decision, now, model_name, *, item_id=
     if decision == "approve" and not pending:
         raise hitl.HitlError(f"{item_id}: 대기 중인 승인이 없다")
 
-    answer = _answer(decision, edited_draft)
-    resume = {it.id: {"decisions": [answer] * len((it.value or {}).get("action_requests", []))} for it in pending}
-    cfg = thread_config(item_id, radar_approval=approval)
-    with SqliteSaver.from_conn_string(state_path) as cp:
-        r = capture_agent(model, cp).invoke(Command(resume=resume), config={**cfg, "recursion_limit": limit(ops.CAPTURE_MAX_TURNS)}, context=ctx)
+    conv = loop.Conversation.from_json(saved["conversation"]) if saved else loop.Conversation()
+    decisions = _decisions(pending, decision, edited_draft)
+    if decision == "edit":  # 고친 초안을 대화에도 반영한다 — 모델이 다음 턴에 실제로 쓰인 초안을 본다
+        for b in (conv.messages[-1]["content"] if conv.messages and conv.messages[-1]["role"] == "assistant" else []):
+            if b.get("id") in decisions:
+                b["input"] = decisions[b["id"]][1]
+    config = {"thread_id": item_id, "radar_approval": approval}
+    if pending:
+        loop.run_tools(conv, pending, CAPTURE_TOOLS, ctx, config, decisions)
+    kind, val, conv = _run(model, conv, ctx, config)
+    if kind == "interrupt":  # 승인 뒤 모델이 또 초안을 냈다 — 다시 대기로 둔다
+        _pause(state_path, item_id, conv, val)
     item = hitl.read_item(ctx, item_id)
-    if decision == "reject" or (item and (item.get("write_intent") or {}).get("state") == "done"):
+    if kind != "interrupt" and (decision == "reject" or (item and (item.get("write_intent") or {}).get("state") == "done")):
         _finish_thread(state_path, store, item_id)  # 거부(별도 파일 없음)·쓰기 완료 — 끝난 항목
     exp = (item or {}).get("export")  # 내보내기를 쓴 항목만 — stale·blocked면 review.py로 이어 간다 (결정 8)
-    return _report(ctx, now, r, item_id, {"export": exp} if exp else None), {**diag, "usage": log.calls}
+    return _report(ctx, now, kind, val, item_id, {"export": exp} if exp else None), {**diag, "usage": log.calls}

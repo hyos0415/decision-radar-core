@@ -1,14 +1,19 @@
-# product/radar — Decision Radar 제품 (LangGraph 비교 모드)
+# product/radar — Decision Radar 제품
 
-런타임: LangGraph + Claude Sonnet 5.5 · effort medium (ADR 0009). 기준: `docs/design/comparison-protocol.md` §3·§4·§8·§9 · 명세 `docs/spec-work-order.md` R1~R16.
-스파이크(`../spike/`)는 기록이다 — 지우거나 고치지 않았다. 여기는 그 위에 올린 제품 패키지다 (HYO-42·43·24·45의 스텁 단계).
+런타임: 직접 쓴 흐름(asyncio) + 에이전트 루프(`loop.py`) + Claude Sonnet 5.5 · effort medium (ADR 0030 — 처음 0009는 LangGraph + LangChain).
+기준: `docs/design/comparison-protocol.md` §3·§4·§8·§9 · 명세 `docs/spec-work-order.md` R1~R16.
+스파이크(`../spike/`)는 기록이다 — 지우거나 고치지 않았다(`langgraph_spike`는 그 패키지 없이 돌지 않는다). 여기는 그 위에 올린 제품 패키지다 (HYO-42·43·24·45의 스텁 단계).
 
 ```
-revisit   list(radar.py list) ─Send─▶ judge(create_agent+Verdict) ─▶ decide(radar.py decide --apply)           [스파이크에서 옮김]
-capture   create_agent(match_adr·propose_adr) + HumanInTheLoopMiddleware(approve·edit·reject) + SqliteSaver, 2턴은 새 프로세스  [스파이크에서 옮김 + HYO-44 HITL 상태: 아래 「HITL 상태」]
-detect    load ─▶ triage ─▶ screen ─Send─▶ draft ─▶ write ─▶ (validate 실패 시) repair ─▶ report              [새로 만듦]
-          (코드) (모델)    (코드)         (모델)   (코드)                  (모델+코드)
+revisit   list(radar.py list) ─조건마다 병렬─▶ judge(루프 + Verdict) ─▶ decide(radar.py decide --apply)           [스파이크에서 옮김]
+capture   루프(match_adr·propose_adr) — propose_adr에서 멈춤(approve·edit·reject) · 멈춘 대화는 hitl.ThreadStore, 2턴은 새 프로세스  [스파이크에서 옮김 + HYO-44 HITL 상태: 아래 「HITL 상태」]
+detect    load ─▶ triage ─▶ screen ─후보마다 병렬─▶ draft ─▶ write ─▶ (validate 실패 시) repair ─▶ report        [새로 만듦]
+          (코드) (모델)    (코드)                (모델)   (코드)                  (모델+코드)
 ```
+
+에이전트 루프(`loop.py`)는 while 하나다 — 모델에 묻고, 도구 요청(tool_use)이 오면 실행해 결과(tool_result)를 붙이고, 도구 요청 없이 답하면
+스키마로 검증해 끝낸다. 모델 자리는 `models.AnthropicModel`(API, 요청 body는 예전 ChatAnthropic과 같다)과 `stub_model.StubChat`(스텁)이다.
+구독 CLI 엔진(`engines.ClaudeCliRunner`)은 이 루프를 쓰지 않는다 — Claude Code가 루프를 돈다.
 
 ## detect — 누가 무엇을 하나
 

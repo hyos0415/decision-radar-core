@@ -1,64 +1,63 @@
-"""정해진 답을 돌려주는 가짜 LangChain 채팅 모델 — 판단은 stub_policy, 여기는 AIMessage로 바꾸기만 한다.
+"""정해진 답을 돌려주는 가짜 모델 — 판단은 stub_policy, 여기는 Anthropic 응답 모양(content 블록)으로 바꾸기만 한다.
 
-잴 수 있는 것: 흐름, P4, P5, P6, 채점기가 제품 trace를 무는지. 잴 수 없는 것: **P3** (langchain-anthropic 요청 모양·400)와 모델의 판단.
-usage_metadata는 글자 수/4 추정이다 — 호출 기록(llm_log)의 배관을 타게 하려는 것이다.
+잴 수 있는 것: 흐름, P4, P5, P6, 채점기가 제품 trace를 무는지. 잴 수 없는 것: **P3** (API 요청 모양·400)와 모델의 판단.
+토큰은 글자 수/4 추정이다(estimated=true) — 호출 기록(llm_log)의 배관을 타게 하려는 것이다.
+처음엔 LangChain BaseChatModel이었다 — 루프를 직접 돌린 뒤로 loop.py의 모델 자리 약속(call · acall · attach_log)만 지킨다 (ADR 0030, HYO-220).
 """
 
 import json
-from typing import Any
 
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
-
-from . import stub_policy
+from . import llm_log, stub_policy
+from .loop import Reply, text_of
 
 
-def _text(content):
-    if isinstance(content, str):
-        return content
-    return "".join(c.get("text", "") if isinstance(c, dict) else str(c) for c in content or [])
+class StubChat:
+    engine = "stub"
 
+    def __init__(self, script, flow):
+        self.script = script
+        self.flow = flow  # "revisit" | "capture" | "detect"
+        self.n = 0
+        self.log = None
 
-class StubChat(BaseChatModel):
-    script: dict
-    flow: str  # "revisit" | "capture" | "detect"
-    n: int = 0
-
-    @property
-    def _llm_type(self) -> str:
-        return "jhs-stub"
-
-    def bind_tools(self, tools, **kwargs: Any):
-        return self.bind(**{k: v for k, v in kwargs.items() if k != "tool_choice"})  # 도구 목록은 스텁 판단에 쓰지 않는다
+    def attach_log(self, ctx, flow, model_name):
+        self.log = llm_log.CallLog(ctx, flow, model_name)
+        return self.log
 
     def _id(self, p):
         self.n += 1
         return f"{p}_{self.n}"
 
-    def _action(self, messages):
+    def _action(self, conv_messages):
+        prompt = next(m["content"] for m in conv_messages if m["role"] == "user" and isinstance(m["content"], str))
+        names = {b["id"]: b["name"] for m in conv_messages if m["role"] == "assistant" and isinstance(m["content"], list)
+                 for b in m["content"] if b.get("type") == "tool_use"}
+        results = [(names.get(b.get("tool_use_id")), text_of(b.get("content"))) for m in conv_messages
+                   if m["role"] == "user" and isinstance(m["content"], list) for b in m["content"] if b.get("type") == "tool_result"]
         if self.flow == "revisit":
-            prompt = next(_text(m.content) for m in messages if isinstance(m, HumanMessage))
-            outputs = [_text(m.content) for m in messages if isinstance(m, ToolMessage)]
-            return stub_policy.revisit_step(self.script, prompt, outputs)
+            return stub_policy.revisit_step(self.script, prompt, [out for _, out in results])
         if self.flow == "detect":
-            prompt = next(_text(m.content) for m in messages if isinstance(m, HumanMessage))
             if "<feed>" in prompt:
                 return stub_policy.detect_triage_step(self.script, prompt)
             if "<repair>" in prompt:
                 return stub_policy.detect_repair_step(self.script, prompt)
             return stub_policy.detect_draft_step(self.script, prompt)
-        names = {tc["id"]: tc["name"] for m in messages if isinstance(m, AIMessage) for tc in (m.tool_calls or [])}
-        history = [(names.get(m.tool_call_id), _text(m.content)) for m in messages if isinstance(m, ToolMessage)]
-        return stub_policy.capture_step(self.script, history)
+        return stub_policy.capture_step(self.script, results)
 
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs: Any) -> ChatResult:
-        action = self._action(messages)
+    def call(self, req):
+        action = self._action(req.messages)
         if action[0] == "call":
-            msg = AIMessage(content="", tool_calls=[{"name": action[1], "args": action[2], "id": self._id("call"), "type": "tool_call"}])
+            content = [{"type": "tool_use", "id": self._id("call"), "name": action[1], "input": action[2]}]
+            stop = "tool_use"
         else:
-            msg = AIMessage(content=action[1] if action[0] == "text" else json.dumps(action[1], ensure_ascii=False))
-        i = sum(len(_text(m.content)) for m in messages) // 4
-        o = (len(_text(msg.content)) + len(json.dumps(msg.tool_calls, ensure_ascii=False))) // 4
-        msg.usage_metadata = {"input_tokens": i, "output_tokens": o, "total_tokens": i + o}
-        return ChatResult(generations=[ChatGeneration(message=msg)])
+            content = [{"type": "text", "text": action[1] if action[0] == "text" else json.dumps(action[1], ensure_ascii=False)}]
+            stop = "end_turn"
+        seen = len(req.system or "") + sum(len(text_of(m["content"])) if isinstance(m["content"], str)
+                                           else len(json.dumps(m["content"], ensure_ascii=False)) for m in req.messages)
+        if self.log is not None:
+            self.log.add_call(agent=req.agent, model="stub", input_tokens=seen // 4,
+                              output_tokens=len(json.dumps(content, ensure_ascii=False)) // 4, estimated=True)
+        return Reply(content=content, stop_reason=stop)
+
+    async def acall(self, req):
+        return self.call(req)

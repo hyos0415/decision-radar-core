@@ -543,6 +543,43 @@ class StateStore:
         self._run("DELETE FROM radar_hitl WHERE thread_id=?", (thread_id,))
 
 
+class ThreadStore:
+    """사람 승인에서 멈춘 capture 대화 — StateStore와 같은 SQLite 파일의 별도 표 (ADR 0030, HYO-220).
+    처음엔 LangGraph 체크포인트(SqliteSaver)가 이 자리였다. 저장하는 것은 대화(Anthropic 형식 메시지 목록) · 대기 중인 도구 호출 · 멈춘 시각뿐이다.
+    ADR repo가 아니라서 R9(승인 전 쓰기 0)에 안 걸린다. 항목이 끝나면 StateStore 줄과 같이 지운다."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def _run(self, sql, args=()):
+        con = sqlite3.connect(self.path)
+        try:
+            con.execute("CREATE TABLE IF NOT EXISTS radar_thread (thread_id TEXT PRIMARY KEY, conversation TEXT, pending TEXT, created_at TEXT)")
+            rows = con.execute(sql, args).fetchall()
+            con.commit()
+            return rows
+        finally:
+            con.close()
+
+    def put(self, thread_id, conversation, pending):
+        now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        self._run("INSERT OR REPLACE INTO radar_thread VALUES (?,?,?,?)",
+                  (thread_id, json.dumps(conversation, ensure_ascii=False), json.dumps(pending, ensure_ascii=False), now))
+
+    def get(self, thread_id):
+        """→ {conversation, pending, created_at} | None."""
+        rows = self._run("SELECT conversation, pending, created_at FROM radar_thread WHERE thread_id=?", (thread_id,))
+        if not rows:
+            return None
+        return {"conversation": json.loads(rows[0][0]), "pending": json.loads(rows[0][1]), "created_at": rows[0][2]}
+
+    def threads(self):
+        return [r[0] for r in self._run("SELECT thread_id FROM radar_thread ORDER BY thread_id")]
+
+    def delete(self, thread_id):
+        self._run("DELETE FROM radar_thread WHERE thread_id=?", (thread_id,))
+
+
 # ── 내보내기 (결정 8, §5-2) ──────────────────────────────────────────
 # git 기계장치는 export.py. 여기는 「무엇을 언제 내보내나」다.
 #   capture  승인(approve·edit) → write-ahead로 로컬에 쓴 뒤 바로 내보낸다 (`_complete` → `export_item`)
