@@ -43,4 +43,4 @@
 
 ### 알려진 병목
 
-- **검색 능력은 측정된 적이 없다** — `radar.py snapshot search`가 질의를 무시한다 (`docs/design/doc-pipeline.md` §1-2). 수집 파이프라인(E9)과 `skill@v2` 짝 비교(HYO-75)가 메운다
+- **detect의 소식 검색은 실사용에서 꺼져 있고 효과를 잰 적이 없다** — `radar.py snapshot search`는 `RADAR_CORPUS`(얼린 코퍼스)가 있으면 BM25로 찾고 detect에 `corpus_grep`(S8 DCI)도 붙는다(HYO-201 1·2단계). 앱 정기 실행은 이를 켜지 않아 예전처럼 질의와 무관한 `search.json`을 돌려준다(`run_detect.py --corpus-weeks`로만 켠다, `docs/design/doc-pipeline.md` §1-2). 켤지 · 효과 측정은 HYO-201
