@@ -216,6 +216,11 @@ excludes:
 - 공식 Data API는 2025-11부터 승인제(Responsible Builder Policy). 신청은 사용자 몫. RSS는 Reddit이 다음에 닫을 대상으로 거론된다
 - **4주 뒤**: 세 작은 서브레딧은 필터를 통과한 글의 flair 분포를 보고 flair로 자를지 정한다
 
+변경 (2026-11-22, HYO-189): **Reddit이 RSS를 끝내 수집을 멈춘다** — `pool.yaml` reddit에 `retired`(version 4), 수집기는 은퇴한 출처를 기본 실행에서 뺀다(`--sources reddit`으로 직접 부르면 돈다). 어댑터 `collector/sources/reddit.py`는 그대로 둔다(원칙 6 — 공식 API로 갈아 끼울 자리).
+- 무엇이 일어났나: W47(11/17 07:00 UTC 수집)에 flair 검색 6개가 403(HYO-189로 신고됨), 11/22 다시 보니 `top.rss` · `new.rss`까지 www.reddit.com의 모든 `.rss`가 404 — 본문은 `rss.reddit.com`의 빈 Atom 「Not Found」. 외부 보고: Reddit이 11/13에 RSS 중단을 알렸고 11/17 19:08 UTC쯤부터 전부 404 (Reddit 공식 문서로는 확인하지 못했다 — GitHub 이슈 nuntz/sema#72 · kEchiCZ/GEX#1845 · mbologna/reddit-rss-fetcher#110)
+- 잃는 것: 한 주 reddit 약 450건(인기글 약 330 + flair로만 잡힌 약 120, W42~W46). 관문(레인 A)은 릴리스 · 공식 공지만 받아 영향이 없다. 레인 B 관심사 · 화제 신호와 경보 그물의 「Reddit 10위」 기준이 빠진다 — 경보 그물은 HN 점수로 계속 돈다(W44 LiteLLM 백도어는 HN 596점이었다)
+- 남은 길: 공식 Data API(승인제, 신청은 사용자 몫 — 외부 보고로는 2027-03에 닫힐 수 있다). 다른 커뮤니티 출처로 메울지와 함께 별도 이슈로 본다
+
 ### 4-2. Hacker News (Algolia)
 
 - `search_by_date`, `tags=story`, **points ≥ 25**, **2일 지연** — 매주 「2~9일 전에 올라온 글」을 받는다
