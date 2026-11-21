@@ -1,11 +1,34 @@
 # judge 루브릭 채점 (HYO-20, 틈 ⑥)
 
-`run_judge.py` — 케이스의 `judge` 루브릭(관찰 가능한 Y/N + pass/fail 앵커, `eval/cases/*.jsonl`)을 **평가 대상과 다른 회사 모델**로 채점한다.
+`run_judge.py` — 케이스의 `judge` 루브릭(관찰 가능한 Y/N + pass/fail 앵커, `eval/cases/*.jsonl`)을 채점한다. 처음(HYO-20)엔 **평가 대상과 다른 회사 모델**이 원칙이었다 — 2026-11-21부터 기본 judge는 그 예외다 (아래).
 
-- 모델: **GPT-6 Sol** (`codex exec -m gpt-6-sol -s read-only`, 구독) — Sonnet급 판단은 Sol (사용자 2026-09-30, adr 0008). `gpt-6.1-sol`은 ChatGPT 계정 codex에서 지원 안 됨 (2026-10-01)
-- 실행마다 빈 디렉터리에 `prompt.md`·`items.json`만. judge는 파일·웹을 더 보지 않는다
+- 모델: **Claude Sonnet 5.5, 구독 `claude -p`** (`claude-sonnet-5-5`, effort medium, 기본 `--judge claude`) — 2026-11-21부터 (HYO-210, 아래 「결과 — 2026-11-21」)
+  - 처음(HYO-20)엔 **GPT-6 Sol** (`codex exec -m gpt-6-sol -s read-only`, ChatGPT 구독 — Sonnet급 판단은 Sol, 사용자 2026-09-30, adr 0008). 그 구독이 11월 말에 끝나고 유료 API는 상시로 쓰지 않아서, 남는 구독인 Claude로 바꿨다 — **평가 대상과 같은 회사**다
+  - 다른 회사 judge로 가끔 교차 확인: `--judge gemini`(Gemini 4 Carbon API — `.env`의 `GEMINI_API_KEY`, 시험용 선불 크레딧이 있을 때) · `--judge codex`(구독이 살아 있을 때)
+- judge는 문구와 표본만 받는다 — 파일·웹을 더 보지 않는다 (codex는 빈 디렉터리에 `prompt.md`·`items.json`만, Claude · Gemini는 한 번의 요청에 둘 다. Claude는 도구 없음 · API 키를 지워 구독으로만)
 - **음성 대조**: 루브릭의 fail 앵커로 만든 표본을 섞는다 — judge가 그것만 N으로 골라야 무는 것이다 (CLAUDE.md 규율 3)
 - **k회 반복**: 같은 표본에 다른 답 = 루브릭 버그 (eval-precondition 항목 4 — 판정 분산은 평균 내지 않고 없앤다)
+
+## 결과 — 2026-11-21: judge 바꾸기 (HYO-210)
+
+codex(ChatGPT 구독)가 11월 말에 끝나, 같은 표본 · 같은 루브릭 · 같은 문구(`PROMPT`)로 후보 셋을 3번씩 견줬다 (원자료 `pipeline/out/hyo210/`, gitignore).
+
+- 표본: 레포 `eval/runs/`의 실제 모델 실행 10개(스텁 제외 — JHS-022 2 · JHS-036 8. 10/1 표본의 원자료는 Windows 기기에만 있어 다시 만들었다)
+  + 쉬운 음성 3(fail 앵커 그대로) + **어려운 음성 4**(실제 표본을 고쳐 만든 것 — 「사실상 지원이 추가된 것으로 판단」 · 미확인 사유 지움 · Context와 결정 절에 「99%」)
+
+| judge | 형식 | 흔들린 표본 | 쉬운 음성 | 어려운 음성 | 실제 표본 Y | codex와 같음 | 실행당 | 비용 |
+|---|---|---|---|---|---|---|---|---|
+| codex GPT-6 Sol (구독) | 6/6 | 0 | 3/3 | 4/4 | 12/12 | — | 21~27초 | 구독 |
+| **Claude Sonnet 5.5 (구독 `claude -p`)** | 6/6 | 0 | 3/3 | 4/4 | 12/12 | 19/19 | 6~7초 | 구독 (정가 환산 $0.22) |
+| Gemini 4 Carbon (API) | 6/6 | 0 | 3/3 | 4/4 | 12/12 | 19/19 | 13~22초 | 약 $0.13 |
+
+셋이 모든 칸에서 같아 품질로는 가를 수 없다. **표본이 작다** — judge 루브릭이 있는 케이스가 53개 중 둘(JHS-022 · JHS-036)뿐이고, 그 실제 실행 기록이 레포에 10개라 견준 칸이 19칸이다. 19칸이 다 같아도 실제로 어긋나는 비율이 15%쯤까지일 수 있고(3/n), 표본이 전부 잘 쓴 답이라 쉽다.
+
+**기본을 Claude로 둔 이유**: codex 구독이 11월 말에 끝나고, 유료 API는 상시로 쓰지 않는다 — Gemini 결제는 성능 시험용 선불이다 (사용자 2026-11-21). 남는 구독이 Claude뿐이고, 이 표본에서는 codex와 같았다. 대신 **평가 대상과 같은 회사**라 HYO-20 원칙의 예외다 — 같은 회사 편향은 이 표본으로 못 잰다. 다른 회사 judge(Gemini · codex)는 선택지로 남겨 가끔 교차 확인한다.
+
+바꾼 `run_judge.py`로 다시 돌린 기록 (어려운 음성은 넣지 않았다 — 실제 표본 문장에 기대어 만들어서, 표본이 바뀌면 다시 만들어야 한다):
+- `results-20261121-215601.json` — **Claude Sonnet 5.5 (기본)**, k=3: 흔들림 0 · 음성 3/3 · 실제 표본 10/10 Y
+- `results-20261121-215027.json` — Gemini 4 Carbon(시험용 선불), k=3: 같은 결과
 
 ## 결과 — 2026-10-01 (`results-20261001-165200.json`)
 
