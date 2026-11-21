@@ -44,6 +44,7 @@ function App(): React.JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<InboxDetail | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [detailError, setDetailError] = useState<{ id: string; msg: string } | null>(null) // detail request only (HYO-107), keyed by item
   const [view, setView] = useState<View>('inbox')
   const [decisionId, setDecisionId] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
@@ -242,11 +243,13 @@ function App(): React.JSX.Element {
       .detail(selectedId)
       .then((d) => {
         if (cancelled) return
+        setDetailError(null)
         setDetail(d)
         api.event('item_opened', selectedId)
       })
       .catch((e) => {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : String(e))
+        if (!cancelled)
+          setDetailError({ id: selectedId, msg: e instanceof Error ? e.message : String(e) })
       })
     return () => {
       cancelled = true
@@ -256,6 +259,7 @@ function App(): React.JSX.Element {
   const closeItem = useCallback((): void => {
     setSelectedId(null)
     setDetail(null)
+    setDetailError(null)
   }, [])
 
   // Esc closes the Inbox panel — not while the edit · reject dialog is open (it closes first)
@@ -359,7 +363,9 @@ function App(): React.JSX.Element {
             aria-busy={loading}
             inert={loading}
           >
-            {detail ? (
+            {detailError?.id === selectedId ? (
+              <div className="empty-state">{COPY.inbox.detailFailed(detailError.msg)}</div>
+            ) : detail ? (
               <ItemDetail
                 key={detail.id}
                 detail={detail}

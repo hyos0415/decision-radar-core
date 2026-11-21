@@ -52,18 +52,34 @@ export function postEvent(
   }).catch(() => {})
 }
 
+function notifyRunFailed(flow: string, body: string): void {
+  if (!Notification.isSupported()) return
+  new Notification({ title: COPY.tray.runFailedTitle(flow), body }).show()
+}
+
 export async function postRun(flow: 'detect' | 'revisit'): Promise<void> {
   const b = base()
   if (!b) return
   try {
     // job + polling (HYO-85): returns as soon as it is accepted; the poller sees the run when it ends
-    await fetch(`${b}/jobs/${flow}`, {
+    const res = await fetch(`${b}/jobs/${flow}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}'
     })
+    if (!res.ok) {
+      let msg = COPY.app.requestFailed(res.status)
+      try {
+        const d = ((await res.json()) as { detail?: unknown }).detail
+        if (typeof d === 'string') msg = d
+      } catch {
+        // body is not JSON: keep the status line
+      }
+      notifyRunFailed(flow, msg)
+    }
   } catch (e) {
     console.error(`[run] ${flow} failed`, e)
+    notifyRunFailed(flow, COPY.app.connectFailed)
   }
 }
 

@@ -56,10 +56,14 @@ export const COPY = {
     backendFailed: '앱을 시작하지 못했어요',
     backendStarting: '앱을 준비하고 있어요…',
     jobFailed: (kind: string) => `${kind} 실행에 실패했어요`,
-    requestFailed: (status: number) => `요청에 실패했어요 (${status})`
+    requestFailed: (status: number) => `요청에 실패했어요 (${status})`,
+    connectFailed: '백엔드에 연결하지 못했어요',
+    crashTitle: '문제가 생겼어요',
+    reload: '다시 불러오기'
   },
 
   inbox: {
+    detailFailed: (msg: string) => `항목을 불러오지 못했어요: ${msg}`,
     empty: '확인할 항목이 없어요',
     listLabel: 'Inbox 항목',
     detailLabel: 'Inbox 항목 상세',
@@ -330,6 +334,7 @@ export const COPY = {
     open: '열기',
     captureFailed: `${term.capture} (단축키 없음)`,
     run: (flow: string) => flow,
+    runFailedTitle: (flow: string) => `${flow} 실행에 실패했어요`,
     quit: '종료'
   },
 
