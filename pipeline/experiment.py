@@ -58,11 +58,20 @@ class Dependency:
         if checks is None:
             return {"ready": False, "reason": "검사 설정(radar-checks.json)이 ADR repo에 없다 — 무엇을 설치하고 무엇을 돌릴지 모른다"}
         try:
-            repo, comp, _ = tryout.choose_target(adr, targets, checks)
+            repo, comp, check = tryout.choose_target(adr, targets, checks)
         except ValueError as e:
             return {"ready": False, "reason": str(e)}
+        # 고정 줄이 지금 대상 repo에 있나 미리 본다 (읽기만) — 이미 걷어낸 의존성(langchain · ADR 0030)이 「돌릴 수 있음」으로 보이지 않게 (HYO-116).
+        # 실제 실행은 원격 기본 브랜치의 사본에서 다시 본다
+        _, pins = tryout.bump_all(targets[repo], check.get("manifests") or [], [(adr["technology"], version)])
+        if not pins:
+            return {"ready": False, "reason": f"{repo}의 manifest({', '.join(check.get('manifests') or []) or '없음'})에 "
+                                              f"{adr['technology']} 고정 줄(`이름==버전`)이 없다 — 이미 뺐거나 범위로 고정했다"}
+        frm = pins[0]["from"]
+        if frm == version:
+            return {"ready": False, "reason": f"이미 {version}이다 — 올릴 것이 없다 ({pins[0]['manifest']})"}
         return {"ready": True, "params": {"package": adr["technology"], "to": version, "repo": repo, "component": comp},
-                "detail": f"{adr['technology']} → {version} ({repo} · {comp}) — 격리된 사본에서 기준 검사 → 고정 버전 올림 → 같은 검사"}
+                "detail": f"{adr['technology']} {frm} → {version} ({repo} · {comp}) — 격리된 사본에서 기준 검사 → 고정 버전 올림 → 같은 검사"}
 
     def run(self, adr, root, plan, out, export=False):
         p = plan["params"]

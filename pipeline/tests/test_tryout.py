@@ -9,6 +9,7 @@
 뒤쪽 변이 검사(규율 3): 기준을 안 보거나 · 올렸는지를 안 보거나 · 고정 줄을 못 찾아도 넘어가면 위 테스트가 빨개져야 한다.
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,9 @@ REQS = "# 앱\nzz-web==1.0.0  # 웹\nzz-web-extra==1.0.0\nzz_core[fast]==2.1 ; p
 USES = "import json, sys\nsys.modules.setdefault('zz_web', sys)\nv = json.load(open('installed.json'))\nsys.exit(1 if v.get('zz-web', '').startswith('2.') else 0)\n"
 PLAIN = "import sys\nsys.exit(0)\n"
 BROKEN = "import sys\nsys.exit(3)\n"
+# 부른 쪽 설정이 검사로 새면 실패한다 (HYO-116 — 실사용 앱의 RADAR_APP_MODE=real이 test_backend를 실사용 모드로 열었다). zz_web도 올린다
+ENVCHECK = ("import os, sys\nsys.modules.setdefault('zz_web', sys)\n"
+            "sys.exit(9 if os.environ.get('RADAR_APP_MODE') or os.environ.get('ANTHROPIC_API_KEY') else 0)\n")
 
 
 class FakeEnv:
@@ -59,7 +63,7 @@ def _target(d):
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(up)], check=True)
     subprocess.run(["git", "clone", "-q", str(up), str(wc)], check=True, capture_output=True)
     (wc / "app").mkdir()
-    for name, body in (("requirements.txt", REQS), ("app/uses.py", USES), ("app/plain.py", PLAIN), ("app/broken.py", BROKEN)):
+    for name, body in (("requirements.txt", REQS), ("app/uses.py", USES), ("app/plain.py", PLAIN), ("app/broken.py", BROKEN), ("app/envcheck.py", ENVCHECK)):
         (wc / name).write_text(body, encoding="utf-8")
     git = ["git", "-C", str(wc), "-c", "user.name=t", "-c", "user.email=t@example.com"]
     subprocess.run(git + ["add", "-A"], check=True)
@@ -117,7 +121,26 @@ def test_fail_only_when_baseline_passed():
         _, r = _run(d, ["app/broken.py"], name="out2")
         assert r["verdict"] == "baseline_failed", r                                                    # 원래 실패뿐이면 기준이 없다 — 통과도 깨짐도 아니다
         _, r = _run(d, ["app/broken.py", "app/uses.py"], version="1.5.0", name="out3")
-        assert r["verdict"] == "pass" and r["checks"][0]["state"] == "원래 실패", r                       # 원래 실패는 올린 탓이 아니다
+        # 원래 실패는 올린 탓이 아니다 — 그래도 남은 검사로 「통과」라 하지 않는다 (HYO-116: 일부만 · 내보내지 않는다)
+        assert r["verdict"] == "pass_partial" and r["checks"][0]["state"] == "원래 실패" and not tryout.may_export(r["verdict"]), r
+        _, r = _run(d, ["app/uses.py"], version="1.5.0", name="out4")
+        assert r["verdict"] == "pass", r                                                               # 원래 실패가 없으면 통과
+
+
+def test_check_env_drops_app_settings():
+    base = {"PATH": "/bin", "HOME": "/h", "RADAR_APP_MODE": "real", "RADAR_REAL_ADR": "/adr", "ANTHROPIC_API_KEY": "k", "GEMINI_API_KEY": "g",
+            "OPENAI_API_KEY": "o", "ELECTRON_RUN_AS_NODE": "1"}
+    env = tryout.check_env(base)
+    assert env == {"PATH": "/bin", "HOME": "/h", "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"}, env
+    old = {k: os.environ.get(k) for k in ("RADAR_APP_MODE", "ANTHROPIC_API_KEY")}
+    os.environ.update(RADAR_APP_MODE="real", ANTHROPIC_API_KEY="k")      # 부른 쪽(실사용 앱)에 있어도 검사에는 안 간다
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            _, r = _run(d, ["app/envcheck.py"], version="1.5.0")
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+    assert r["verdict"] == "pass" and r["checks"][0]["base_exit"] == 0, r
 
 
 def test_cannot_check_cases():
@@ -276,7 +299,9 @@ def test_judge_table():
     assert j([row(0)], [row(0, True)]) == "pass" and j([row(0)], [row(0)]) == "pass_not_exercised"
     assert j([row(0)], [row(1, True)]) == "fail" and j([row(1)], [row(1)]) == "baseline_failed"
     assert j([row(1), row(0)], [row(0, True), row(0)]) == "pass_not_exercised"                           # 원래 실패하던 검사가 올린 것은 근거로 안 쓴다
-    assert set(tryout.VERDICTS) >= {"pass", "pass_not_exercised", "fail", "install_failed", "not_applied", "baseline_failed", "no_pin", "no_checks", "already"}
+    assert j([row(1), row(0)], [row(1), row(0, True)]) == "pass_partial"                                 # 올린 검사는 통과 · 원래 실패도 있다 → 일부만 (HYO-116)
+    assert set(tryout.VERDICTS) >= {"pass", "pass_not_exercised", "pass_partial", "fail", "install_failed", "not_applied", "baseline_failed",
+                                    "no_pin", "no_checks", "already"}
 
 
 MUTATIONS = [
@@ -292,6 +317,9 @@ MUTATIONS = [
     ("같은 브랜치가 있어도 다시 push한다", "remote_has_branch", lambda repo, branch: False, test_export_is_idempotent),
     ("기본 브랜치에도 내보낸다", "is_default_branch", lambda branch, base: False, test_export_refuses_default_branch),
     ("날짜도 버전으로 읽는다", "_VER", __import__("re").compile(r"(\d[\d.\-]+\d)"), test_release_version_from_adr),
+    ("원래 실패가 있어도 통과", "judge", lambda base, after, package: (lambda v: ("pass" if v[0] == "pass_partial" else v[0], v[1]))(
+        tryout._judge0(base, after, package)), test_fail_only_when_baseline_passed),
+    ("부른 쪽 설정이 검사로 샌다", "check_env", lambda base=None: {**(os.environ if base is None else base)}, test_check_env_drops_app_settings),
 ]
 
 
