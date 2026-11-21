@@ -22,7 +22,7 @@ sys.path[0] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = os.path.dirname(sys.path[0])
 sys.path.insert(1, REPO)
 
-from radar import runtime  # noqa: E402
+from radar import detect_ops, runtime  # noqa: E402
 from radar.adr_copy import copy_adr  # noqa: E402
 from radar import script as stub_scripts  # noqa: E402
 from common.core import SKILL_RADAR, Ctx  # noqa: E402
@@ -64,6 +64,7 @@ def summarize(rep, funnel, adr_dir):
     if tr:  # 거르기의 답을 코드가 맞춘 것 (HYO-206)
         lines.append(f"같은 내용이라 다른 후보에 붙임 {len(tr.get('folded') or [])}건 · 거르기가 답을 빠뜨려 다시 물음 {len(tr.get('missing') or [])}건 · "
                      f"끝내 답 없음 {len(tr.get('unanswered') or [])}건 · 관문 이름으로 고친 기술 이름 {len(tr.get('renamed') or [])}건")
+        lines += detect_ops.affected_lines(tr)
     drafts = []
     for c in cands:
         f = next(iter(sorted(p for p in os.listdir(adr_dir) if p.startswith(f"{c['adr']}-"))), None) if c.get("adr") else None

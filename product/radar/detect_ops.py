@@ -5,6 +5,7 @@
 
 import json
 import os
+import re
 
 from common import ops
 from common.core import radar
@@ -68,6 +69,149 @@ def read_stack(c):
     return "\n\n".join(parts)
 
 
+def missing_targets(c):
+    """폴더가 없는 대상 repo → [{repo, path}]. 없으면 CLAUDE.md · manifest를 하나도 못 읽고 모델이 component를 지어낸다 (HYO-246 —
+    11/21 미리 검증: 사본 ADR 폴더 기준 상대 경로가 없는 곳을 가리켜 초안 21건이 llm-inference · agent-engine 같은 이름이었다). 조용히 넘기지 않는다."""
+    return [{"repo": r, "path": c.targets[r]} for r in sorted(c.targets) if not os.path.isdir(c.targets[r])]
+
+
+# ── R16: 의존성 릴리스의 affected = CLAUDE.md 「의존성 → component」 매핑 그대로 (HYO-246) ──────────────
+# 프롬프트(detect_prompts · detect_schemas)에만 있던 규칙을 코드가 집행한다 (규율 1). 표는 hitl.stack_rows(스택 절 — 같은 절 찾기 규칙)로 읽는다.
+# 첫 칸 이름 뽑기는 collector `names_from_cell`과 같은 규칙 — product는 collector를 import하지 않으므로 여기 같은 규칙을 두고,
+# 같은 이름이 나오는지는 test_product가 collector 함수와 맞춰 본다.
+
+def names_of(cell):
+    """표 첫 칸 → 이름들 (= collector.sources.github.names_from_cell)."""
+    cell = re.sub(r"\(.*?\)", "", cell)
+    cell = re.sub(r"`[^`]*`", "", cell)
+    out = []
+    for part in re.split(r"[·,]|\s\+\s", cell):
+        name = part.strip().split(" ")[0].strip()
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def components_of(cell):
+    """표 둘째 칸 → component 이름들. 「앱 (설명) · eval (`코드`로 설명). 덧붙인 문장 — …」 → [앱, eval].
+    괄호 설명(겹친 것까지) · 백틱을 지우고, 덧붙인 문장(「. 」 · 「 — 」 뒤)을 자른 뒤 `·` `,`로 나눠 조각마다 첫 단어."""
+    prev = None
+    while prev != cell:
+        prev, cell = cell, re.sub(r"\([^()]*\)", "", cell)
+    cell = re.sub(r"`[^`]*`", "", cell)
+    cell = re.split(r"\.\s|\.$|\s—\s", cell)[0]
+    out = []
+    for part in re.split(r"[·,]", cell):
+        words = part.split()
+        name = words[0].strip(".;:") if words else ""
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def _key(name):
+    """이름 비교용 — 대소문자 · 기호 무시 (llama.cpp = llama-cpp, Langfuse = langfuse)."""
+    return re.sub(r"[^0-9a-z가-힣]", "", (name or "").lower())
+
+
+def dependency_map(c):
+    """{repo: [{"names", "components"}]} — 대상 repo CLAUDE.md 「의존성 → component」 표. CLAUDE.md가 없는 repo는 빈 목록 (그때는 맞추지 않는다).
+    **표(`|` 줄)만 읽는다** — 수집기(collector dependency_rows_from_claude_md)와 같은 규칙. 표가 아닌 목록 형식(eval 픽스처의
+    「- `fastapi`, `pydantic` → chat-api」)은 맞추지 않고 모델이 쓴 그대로 둔다 — 그 경로는 채점기의 affected 정확 일치 검사가 보고,
+    음성 대조 CTRL-detect-widened-affected가 그대로 잡히는 것으로 확인했다 (HYO-246)."""
+    out = {}
+    for repo in sorted(c.targets):
+        p = os.path.join(c.targets[repo], "CLAUDE.md")
+        rows = []
+        if os.path.isfile(p):
+            for line in hitl.stack_rows(open(p, encoding="utf-8").read())["deps"]:
+                if not line.startswith("|"):
+                    continue
+                cells = [x.strip() for x in line.strip().strip("|").split("|")]
+                if len(cells) < 2 or not cells[0] or cells[0].startswith("의존성"):
+                    continue
+                rows.append({"names": names_of(cells[0]), "components": components_of(cells[1])})
+        out[repo] = rows
+    return out
+
+
+def mapped_affected(dmap, technology):
+    """technology가 표 첫 칸의 이름과 같으면 그 행들의 component 전부(대상 repo 전체의 합) → [{repo, component}]. 표에 없으면 None."""
+    key, out = _key(technology), []
+    for repo in sorted(dmap):
+        for row in dmap[repo]:
+            if key and key in {_key(n) for n in row["names"]}:
+                out += [a for a in ({"repo": repo, "component": comp} for comp in row["components"]) if a not in out]
+    return out or None
+
+
+def fix_affected(cands, dmap):
+    """R16을 코드로 — 후보의 technology가 매핑 표에 있으면 affected를 매핑 그대로로, dependency를 true로 맞춘다 → 바꾼 목록
+    [{technology, source_urls, before, after, dependency_was}]. 표에 없는 기술(새 모델 · 서비스)은 손대지 않는다 — R10만 적용된다.
+    빠뜨림 · 덧붙임 모두 위반이다(R16). 같은 집합이면(순서만 다르면) 모델이 쓴 그대로 둔다. fix_names 뒤에 부른다 — 이름이 관문 이름으로 맞춰진 뒤."""
+    changed = []
+    for cand in cands:
+        exact = mapped_affected(dmap, cand["technology"])
+        if not exact:
+            continue
+        same = {(a["repo"], a["component"]) for a in cand.get("affected") or []} == {(a["repo"], a["component"]) for a in exact}
+        if same and cand.get("dependency"):
+            continue
+        changed.append({"technology": cand["technology"], "source_urls": list(cand.get("source_urls") or []),
+                        "before": list(cand.get("affected") or []), "after": exact, "dependency_was": bool(cand.get("dependency"))})
+        if not same:
+            cand["affected"] = exact
+        cand["dependency"] = True
+    return changed
+
+
+def _pairs(xs):
+    return {(a["repo"], a["component"]) for a in xs or []}
+
+
+def fix_slot_affected(cands, feed):
+    """자리 후보의 affected를 자리 설정대로 (HYO-219) — 근거 소식의 candidate_for(자리)에 component가 적혀 있으면 (자리 repo, component) 전부로.
+    component가 빈 자리(설정에 칸이 없다 · 예전 입력)는 그 repo에 대해 모델이 쓴 줄을 그대로 둔다. 같은 집합이면 손대지 않는다 → 바꾼 목록
+    [{technology, source_urls, before, after}]. fix_affected(R16)보다 먼저 부른다 — 의존성 릴리스면 매핑이 이긴다."""
+    slots_of = {it["url"]: it.get("candidate_for") or [] for it in feed or [] if it.get("candidate_for")}
+    changed = []
+    for cand in cands:
+        hits = [h for u in cand.get("source_urls") or [] for h in slots_of.get(u, [])]
+        if not any(h.get("component") for h in hits):
+            continue
+        want = []
+        for h in hits:
+            rows = ([{"repo": h["repo"], "component": comp} for comp in h["component"]] if h.get("component")
+                    else [a for a in cand.get("affected") or [] if a["repo"] == h.get("repo")])
+            want += [a for a in rows if a not in want]
+        if _pairs(want) == _pairs(cand.get("affected")):
+            continue
+        changed.append({"technology": cand["technology"], "source_urls": list(cand.get("source_urls") or []),
+                        "before": list(cand.get("affected") or []), "after": want})
+        cand["affected"] = want
+    return changed
+
+
+def affected_lines(triage):
+    """보고서 triage 칸 → 사람이 읽는 요약 줄 — 코드가 고친 affected · 폴더가 없는 대상 repo (CLI run_detect · 앱 실행 요약이 같이 쓴다). 없으면 빈 목록."""
+    tr, lines = triage or {}, []
+    names = lambda xs: ", ".join(f"{a['repo']}/{a['component']}" for a in xs) or "(없음)"   # noqa: E731
+    if tr.get("missing_targets"):
+        lines.append(f"폴더가 없는 대상 repo {', '.join(tr['missing_targets'])} — CLAUDE.md · manifest를 못 읽었다. 그 repo 후보는 뺐다 (radar-targets.json 경로 확인)")
+    slot = tr.get("slot_affected") or []
+    if slot:
+        lines.append(f"자리 설정의 component로 affected를 고친 후보 {len(slot)}건 — "
+                     + "; ".join(f"{f['technology']} {names(f['before'])} → {names(f['after'])}" for f in slot))
+    fixed = tr.get("r16") or []
+    if fixed:
+        def one(f):
+            if _pairs(f["before"]) == _pairs(f["after"]):
+                return f"{f['technology']} affected 그대로 · dependency만 true로"
+            return f"{f['technology']} {names(f['before'])} → {names(f['after'])}"
+        lines.append(f"R16: affected를 CLAUDE.md 매핑대로 고친 후보 {len(fixed)}건 — " + "; ".join(one(f) for f in fixed))
+    return lines
+
+
 def release_of(cand, feed):
     """의존성 릴리스 후보의 릴리스 표기 = 근거 소식의 제목 (radar.py match --release가 버전 토막을 뽑는다). 의존성 밖이면 None."""
     if not cand.get("dependency"):
@@ -76,10 +220,10 @@ def release_of(cand, feed):
     return next((it.get("title") for it in feed or [] if it.get("url") in urls and it.get("title")), None)
 
 
-def screen(c, candidates, feed=None):
-    """후보마다 R10·R14를 코드로 집행한다.
+def screen(c, candidates, feed=None, missing=()):
+    """후보마다 R10·R14를 코드로 집행한다. R16(의존성 릴리스의 affected = 매핑)은 그 앞의 fix_affected가 맞춘다.
 
-    R10  affected가 비었거나 대상 repo에 없는 repo를 가리키면 버린다 → dropped
+    R10  affected가 비었거나 대상 repo에 없는 repo · 폴더가 없는 대상 repo(missing — 매핑을 못 읽어 component가 근거 없다)를 가리키면 버린다 → dropped
     R14  radar.py match가 overlap(기술 같고 component 겹침)을 주면 초안을 만들지 않는다 → skipped.
          의존성 릴리스 대응형 ADR은 같은 릴리스일 때만 overlap — 릴리스 표기는 소식 제목 (R14 변경 2026-10-23, HYO-136)
     남은 후보는 related(같은 기술이거나 같은 component의 ADR)와 함께 돌려준다 — 초안 본문에 적는다.
@@ -88,9 +232,11 @@ def screen(c, candidates, feed=None):
     for i, cand in enumerate(candidates):
         aff = cand["affected"]
         bad = [a for a in aff if a["repo"] not in c.targets]
-        if not aff or bad:
+        gone = [a for a in aff if a["repo"] in set(missing)]
+        if not aff or bad or gone:
             dropped.append({"technology": cand["technology"], "source_urls": cand.get("source_urls") or [],
-                            "reason": "R10: affected가 비었다" if not aff else f"R10: 대상 repo에 없는 repo {sorted({a['repo'] for a in bad})}"})
+                            "reason": "R10: affected가 비었다" if not aff else f"R10: 대상 repo에 없는 repo {sorted({a['repo'] for a in bad})}" if bad
+                            else f"R10: 폴더가 없는 대상 repo {sorted({a['repo'] for a in gone})} — 매핑을 못 읽어 component가 근거 없다"})
             continue
         overlap, related = [], {}
         rel = release_of(cand, feed)
@@ -284,7 +430,9 @@ def detect_report(c, now, *, skipped, dropped, excluded, written, failed, securi
         # 관문이 security로 남긴 소식이 어떻게 됐나 (HYO-205) — rescued: 「안 쓴다」며 버린 것을 코드가 후보로 되돌림 · excluded: 다른 이유로 버림(사람이 본다)
         **({"security": security} if security else {}),
         # 거르기의 답을 코드가 맞춘 것 (HYO-206) — folded: 같은 내용이라 다른 후보의 근거에 붙인 소식 · missing: 거르기가 답을 빠뜨려 다시 물은 소식 ·
-        # unanswered: 다시 물어도 답이 없던 소식(사람이 본다) · renamed: 관문 이름으로 고친 technology
+        # unanswered: 다시 물어도 답이 없던 소식(사람이 본다) · renamed: 관문 이름으로 고친 technology ·
+        # slot_affected: 자리 설정의 component로 고친 후보 (HYO-219) · r16: affected를 CLAUDE.md 매핑대로 고친 후보 (before → after, HYO-246) ·
+        # missing_targets: 폴더가 없어 못 읽은 대상 repo
         **({"triage": notes} if notes and any(notes.values()) else {}),
     }
 

@@ -311,8 +311,8 @@ def test_check_json_written_not_sent_to_detect():
     chk = json.loads((out / detect_feed.CHECK).read_text(encoding="utf-8"))
     assert chk["week"] == "snap" and chk["made_at"] and chk["missing"] == ["gone:1"], chk.get("missing")
     hf, hn = chk["items"]
-    assert hf["slots"] == [{"id": "eval-judge", "name": "eval judge", "repo": "decision-radar", "role": "답 채점"},
-                           {"id": "gate-classifier", "name": "관문 분류", "repo": "decision-radar", "role": "변화 종류 분류"}], hf["slots"]
+    assert hf["slots"] == [{"id": "eval-judge", "name": "eval judge", "repo": "decision-radar", "role": "답 채점", "component": []},   # 자리 설정에 칸이 없으면 [] (HYO-219)
+                           {"id": "gate-classifier", "name": "관문 분류", "repo": "decision-radar", "role": "변화 종류 분류", "component": []}], hf["slots"]
     assert (hf["model"], hf["reason"], hf["switch"]) == ("tiny-judge", "판정 모델이지만 한국어 표시가 없다", "한국어 확인")
     assert hf["item"]["text"] == "Tiny judge model. Korean: no." and hf["item"]["meta"]["tags"] == ["en"], hf["item"]   # text_file은 지금 풀어 둔다
     assert hn["also"] == ["reddit:k3"] and "primary" not in hf["item"]

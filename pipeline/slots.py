@@ -115,7 +115,20 @@ def load_slots(path):
     for sl in slots:
         if "lang" in sl and not (isinstance(sl["lang"], str) and re.fullmatch(r"[a-z]{2}", sl["lang"])):
             raise SlotError(f"{path}: 자리 {sl.get('id')}의 lang은 소문자 두 글자 언어 코드여야 한다 ({sl['lang']!r})")
+        if "component" in sl and not slot_components(sl):
+            raise SlotError(f"{path}: 자리 {sl.get('id')}의 component는 비지 않은 이름 하나 또는 이름 목록이어야 한다 ({sl['component']!r})")
     return {"version": d.get("version"), "slots": slots}
+
+
+def slot_components(slot):
+    """자리 설정의 component 칸 → 이름 목록 (이름 하나 · 목록 둘 다 받는다). 없으면 [] — 그 자리 후보는 detect 모델이 고른 그대로 둔다.
+    자리 후보의 affected는 repo는 자리가, component는 이 칸이 정한다 — 모델이 고르지 않는다 (HYO-219, 규율 1)."""
+    c = slot.get("component")
+    if isinstance(c, str):
+        return [c.strip()] if c.strip() else []
+    if isinstance(c, list):
+        return [x.strip() for x in c if isinstance(x, str) and x.strip()]
+    return []
 
 
 def _channels(it):
@@ -418,6 +431,7 @@ def run(items, slots, engine="claude", out=None, reuse=False, model=None):
             "slot_current": {s["id"]: s.get("current") or [] for s in slots["slots"]},
             "slot_repos": {s["id"]: s.get("repo") for s in slots["slots"]},       # detect가 「어느 repo의 어느 역할 후보인가」를 받게 (HYO-205)
             "slot_roles": {s["id"]: s.get("role") for s in slots["slots"]},
+            "slot_components": {s["id"]: slot_components(s) for s in slots["slots"]},  # 자리 후보의 affected component — detect가 그대로 쓴다 (HYO-219)
             "per_slot": per, "to_detect": to_detect, "candidate_list": cands,
             "check": check_list(cands, judged, per) if is_v2(slots) else []}     # 「확인 필요」 — 목록에만, detect 아님 (v2)
 

@@ -2300,6 +2300,24 @@ def scenario_hyo158_blocked(tmp):
               all(len(hitl.read_item(svc.ctx(), ids[n])["history"]) == n_hist[n] for n in (1, 2)) and not any(str(ids[1]) in x or str(ids[2]) in x for x in out), out)
         check("PR #3은 그대로 열려 있고 Inbox에서 PR로 답한다", gh.prs[3]["state"] == "OPEN" and rows[ids[3]]["actions"] == ["approve", "reject"])
 
+        # HYO-225 — gh가 PR을 못 읽으면(pr_view_failed) 이유까지 한 번만 알리고, 풀리면 한 줄 (11/16~19: 5분마다 15줄, 이유 없음)
+        from radar.export import ExportRefused
+        real_view = gh.view
+
+        def broken(number):
+            if number == 3:
+                raise ExportRefused("gh pr view exit 1: HTTP 401: Bad credentials")
+            return real_view(number)
+
+        gh.view = broken
+        first, second = svc.sync_prs(), svc.sync_prs()
+        check("HYO-225: PR을 못 읽으면 이유(gh 오류)까지 한 줄 · 같은 막힘은 다음 확인에 다시 안 찍는다",
+              first == [f"{ids[3]}: PR 반영 막힘 (pr_view_failed) — gh pr view exit 1: HTTP 401: Bad credentials"] and second == [], (first, second))
+        gh.view = real_view
+        third, fourth = svc.sync_prs(), svc.sync_prs()
+        check("HYO-225: 풀리면 「다시 됨」 한 줄 · 그 뒤로는 조용하다 (아직 열린 PR)",
+              third == [f"{ids[3]}: PR 반영 다시 됨 (PR #3 아직 열림)"] and fourth == [] and gh.prs[3]["state"] == "OPEN", (third, fourth))
+
 
 if __name__ == "__main__":
     sys.exit(main())
