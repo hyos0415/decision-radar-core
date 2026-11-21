@@ -15,5 +15,5 @@ anthropic==1.9.0
 # 설치하지 않는다. 예전 준비 단계는 spike/agents_sdk/README.md에 기록으로만 남는다
 
 # 데스크톱 앱 백엔드 (E6, desktop/backend — localhost API). 2026-10-06 설치, 메인 .venv (pip check 통과)
-fastapi==0.142.2
+fastapi==0.162.6
 uvicorn==0.54.0
