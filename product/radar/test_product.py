@@ -195,10 +195,26 @@ with tempfile.TemporaryDirectory() as td:
           and cands[4]["affected"] == A(("b", "eval")), cands[3:])
     check("R16 맞춤: 바꾼 것만 before → after로 남긴다", [(f["technology"], f["before"], f["after"]) for f in fixed] ==
           [("FastAPI", A(("a", "backend")), A(("a", "api"), ("b", "desktop"))), ("pyyaml", A(("b", "skill"), ("b", "product")), A(("b", "skill"), ("b", "product")))], fixed)
-    lines = detect_ops.r16_lines({"r16": fixed, "missing_targets": ["gone"]})
+    lines = detect_ops.affected_lines({"r16": fixed, "missing_targets": ["gone"]})
     check("R16 요약 줄: 폴더 없는 repo · 고친 후보 (dependency만 바꾼 것은 그렇게)", len(lines) == 2 and "gone" in lines[0]
           and "a/backend → a/api, b/desktop" in lines[1] and "pyyaml affected 그대로 · dependency만 true로" in lines[1], lines)
-    check("R16 요약 줄: 고친 것이 없으면 없다", detect_ops.r16_lines({}) == [] and detect_ops.r16_lines(None) == [])
+    check("R16 요약 줄: 고친 것이 없으면 없다", detect_ops.affected_lines({}) == [] and detect_ops.affected_lines(None) == [])
+    # HYO-219: 자리 후보의 affected = (자리 repo, 자리 설정의 component) — 모델이 고르지 않는다
+    sfeed = [{"url": "s1", "candidate_for": [{"slot": "rd", "repo": "a", "component": ["arena"]}]},
+             {"url": "s2", "candidate_for": [{"slot": "rd", "repo": "a", "component": ["arena"]}, {"slot": "od", "repo": "b", "component": []}]},
+             {"url": "s3", "candidate_for": [{"slot": "od", "repo": "b", "component": []}]}]
+    scands = [{"technology": "KURE-v3", "affected": A(("a", "retrieval-dense")), "source_urls": ["s1"]},            # 자리 id를 component로 씀 → arena
+              {"technology": "Multi", "affected": A(("a", "eval"), ("b", "앱"), ("b", "x")), "source_urls": ["s2"]},   # 칸 없는 자리(od)는 모델 줄 그대로
+              {"technology": "OnlyOd", "affected": A(("b", "앱")), "source_urls": ["s3"]},                             # 칸 없는 자리뿐 → 손 안 댄다
+              {"technology": "Same", "affected": A(("a", "arena")), "source_urls": ["s1"]}]                            # 이미 같다 → 기록 없음
+    sfix = detect_ops.fix_slot_affected(scands, sfeed)
+    check("HYO-219 자리 component: 자리 id 같은 지어낸 이름 → 자리 설정의 component", scands[0]["affected"] == A(("a", "arena")), scands[0])
+    check("HYO-219 자리 component: 칸 없는 자리는 그 repo의 모델 줄을 그대로 · 칸 있는 자리는 설정대로",
+          scands[1]["affected"] == A(("a", "arena"), ("b", "앱"), ("b", "x")), scands[1])
+    check("HYO-219 자리 component: 칸 없는 자리뿐이면 · 이미 같으면 손대지 않는다 (기록도 없다)",
+          scands[2]["affected"] == A(("b", "앱")) and [f["technology"] for f in sfix] == ["KURE-v3", "Multi"], sfix)
+    sl_lines = detect_ops.affected_lines({"slot_affected": sfix})
+    check("HYO-219 요약 줄: 자리 설정으로 고친 후보", len(sl_lines) == 1 and "a/retrieval-dense → a/arena" in sl_lines[0], sl_lines)
     miss = detect_ops.missing_targets(tc)
     check("폴더가 없는 대상 repo를 찾는다", miss == [{"repo": "gone", "path": os.path.join(td, "nope")}], miss)
     sc2 = Ctx(radar_py=SKILL_RADAR, env=dict(os.environ, PYTHONIOENCODING="utf-8"), adr_dir=os.path.join(td, "adr"), targets=tc.targets, dry_run=True)

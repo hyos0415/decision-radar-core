@@ -165,16 +165,47 @@ def fix_affected(cands, dmap):
     return changed
 
 
-def r16_lines(triage):
-    """보고서 triage 칸 → 사람이 읽는 요약 줄 (CLI run_detect · 앱 실행 요약이 같이 쓴다). 고친 것이 없으면 빈 목록."""
+def _pairs(xs):
+    return {(a["repo"], a["component"]) for a in xs or []}
+
+
+def fix_slot_affected(cands, feed):
+    """자리 후보의 affected를 자리 설정대로 (HYO-219) — 근거 소식의 candidate_for(자리)에 component가 적혀 있으면 (자리 repo, component) 전부로.
+    component가 빈 자리(설정에 칸이 없다 · 예전 입력)는 그 repo에 대해 모델이 쓴 줄을 그대로 둔다. 같은 집합이면 손대지 않는다 → 바꾼 목록
+    [{technology, source_urls, before, after}]. fix_affected(R16)보다 먼저 부른다 — 의존성 릴리스면 매핑이 이긴다."""
+    slots_of = {it["url"]: it.get("candidate_for") or [] for it in feed or [] if it.get("candidate_for")}
+    changed = []
+    for cand in cands:
+        hits = [h for u in cand.get("source_urls") or [] for h in slots_of.get(u, [])]
+        if not any(h.get("component") for h in hits):
+            continue
+        want = []
+        for h in hits:
+            rows = ([{"repo": h["repo"], "component": comp} for comp in h["component"]] if h.get("component")
+                    else [a for a in cand.get("affected") or [] if a["repo"] == h.get("repo")])
+            want += [a for a in rows if a not in want]
+        if _pairs(want) == _pairs(cand.get("affected")):
+            continue
+        changed.append({"technology": cand["technology"], "source_urls": list(cand.get("source_urls") or []),
+                        "before": list(cand.get("affected") or []), "after": want})
+        cand["affected"] = want
+    return changed
+
+
+def affected_lines(triage):
+    """보고서 triage 칸 → 사람이 읽는 요약 줄 — 코드가 고친 affected · 폴더가 없는 대상 repo (CLI run_detect · 앱 실행 요약이 같이 쓴다). 없으면 빈 목록."""
     tr, lines = triage or {}, []
+    names = lambda xs: ", ".join(f"{a['repo']}/{a['component']}" for a in xs) or "(없음)"   # noqa: E731
     if tr.get("missing_targets"):
         lines.append(f"폴더가 없는 대상 repo {', '.join(tr['missing_targets'])} — CLAUDE.md · manifest를 못 읽었다. 그 repo 후보는 뺐다 (radar-targets.json 경로 확인)")
+    slot = tr.get("slot_affected") or []
+    if slot:
+        lines.append(f"자리 설정의 component로 affected를 고친 후보 {len(slot)}건 — "
+                     + "; ".join(f"{f['technology']} {names(f['before'])} → {names(f['after'])}" for f in slot))
     fixed = tr.get("r16") or []
     if fixed:
         def one(f):
-            names = lambda xs: ", ".join(f"{a['repo']}/{a['component']}" for a in xs) or "(없음)"
-            if {(a["repo"], a["component"]) for a in f["before"]} == {(a["repo"], a["component"]) for a in f["after"]}:
+            if _pairs(f["before"]) == _pairs(f["after"]):
                 return f"{f['technology']} affected 그대로 · dependency만 true로"
             return f"{f['technology']} {names(f['before'])} → {names(f['after'])}"
         lines.append(f"R16: affected를 CLAUDE.md 매핑대로 고친 후보 {len(fixed)}건 — " + "; ".join(one(f) for f in fixed))
@@ -400,7 +431,8 @@ def detect_report(c, now, *, skipped, dropped, excluded, written, failed, securi
         **({"security": security} if security else {}),
         # 거르기의 답을 코드가 맞춘 것 (HYO-206) — folded: 같은 내용이라 다른 후보의 근거에 붙인 소식 · missing: 거르기가 답을 빠뜨려 다시 물은 소식 ·
         # unanswered: 다시 물어도 답이 없던 소식(사람이 본다) · renamed: 관문 이름으로 고친 technology ·
-        # r16: affected를 CLAUDE.md 매핑대로 고친 후보 (before → after, HYO-246) · missing_targets: 폴더가 없어 못 읽은 대상 repo
+        # slot_affected: 자리 설정의 component로 고친 후보 (HYO-219) · r16: affected를 CLAUDE.md 매핑대로 고친 후보 (before → after, HYO-246) ·
+        # missing_targets: 폴더가 없어 못 읽은 대상 repo
         **({"triage": notes} if notes and any(notes.values()) else {}),
     }
 

@@ -322,6 +322,34 @@ def test_old_raw_without_missing_validates_and_lang_adjusted_recorded():
     assert "hf-model:LiquidAI/LFM3-1.7B" in res["to_detect"]
 
 
+# --- HYO-219: 자리 설정의 component — 자리 후보의 affected는 repo도 component도 자리가 정한다 (모델이 고르지 않는다) ---
+def test_slot_component_field_to_hits_and_check_rows():
+    assert slots.slot_components({"component": "arena"}) == ["arena"]
+    assert slots.slot_components({"component": ["llm", " eval "]}) == ["llm", "eval"]
+    assert slots.slot_components({}) == [] and slots.slot_components({"component": "  "}) == []
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "s.yaml"
+        for body, ok in (("slots:\n- {id: a, component: arena}\n- {id: b}\n", True), ("slots:\n- {id: a, component: [llm, eval]}\n", True),
+                         ("slots:\n- {id: a, component: []}\n", False), ("slots:\n- {id: a, component: 3}\n", False)):
+            f.write_text(body, encoding="utf-8")
+            try:
+                slots.load_slots(f)
+                got_ok = True
+            except slots.SlotError:
+                got_ok = False
+            assert got_ok == ok, body
+    sl = {**SLOTS, "slots": [{**SLOTS["slots"][0], "component": "pipeline"}] + SLOTS["slots"][1:]}
+    res = slots.run(ITEMS, sl, engine="stub")
+    assert res["slot_components"]["gate-classifier"] == ["pipeline"] and res["slot_components"]["medical-ondevice"] == [], res["slot_components"]
+    fake = {"per_slot": {"gate-classifier": [{"id": "x", "fit": 2, "reason": "r"}], "medical-ondevice": [{"id": "x", "fit": 2, "reason": "r"}]},
+            "slot_repos": {"gate-classifier": "decision-radar", "medical-ondevice": "medical-mate-ai"}, "slot_components": {"gate-classifier": ["pipeline"]}}
+    hits = detect_feed.slot_hits(fake, "x")
+    assert [(h["slot"], h["repo"], h["component"]) for h in hits] == [("gate-classifier", "decision-radar", ["pipeline"]),
+                                                                     ("medical-ondevice", "medical-mate-ai", [])], hits
+    rows, _ = detect_feed.check_rows({**fake, "check": [{"id": "hf", "slots": ["gate-classifier"]}]}, {"hf": {"id": "hf", "url": "u", "title": "t"}})
+    assert rows[0]["slots"][0]["component"] == ["pipeline"], rows
+
+
 TESTS = [(n, f) for n, f in globals().items() if n.startswith("test_")]
 
 
@@ -356,6 +384,7 @@ def mutations():
         return ("pass", "?") if st[0] == "unknown" else st
 
     orig_load = slots.load_slots
+    orig_components = slots.slot_components
 
     def lenient_load(path):                   # lang 검사 없이
         import yaml
@@ -381,6 +410,8 @@ def mutations():
         ("태그 없는(unknown)도 통과로 봄", lambda: setattr(slots, "lang_status", unknown_as_pass), lambda: setattr(slots, "lang_status", orig_status)),
         ("태그에서 언어 · 기반 · 크기를 안 뽑음", lambda: setattr(slots, "derive_fields", lambda it: {"langs": [], "base_model": "", "size": ""}),
          lambda: setattr(slots, "derive_fields", orig_derive)),
+        ("자리 component를 안 넘김 (HYO-219)", lambda: setattr(slots, "slot_components", lambda s: []),
+         lambda: setattr(slots, "slot_components", orig_components)),
     ]
 
 

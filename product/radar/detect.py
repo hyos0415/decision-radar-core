@@ -139,8 +139,11 @@ def detect_flow(ctx, model):
         silent = detect_ops.unanswered(feed, cands, excluded)  # 다시 물어도 답이 없는 소식 — 버린 것으로 적되 사람이 보게 따로 센다
         excluded += [{"url": u, "reason": "거르기도 되돌리기도 답하지 않았다 — 판정 없음", "why": "other", "unanswered": True} for u in silent]
         renamed = detect_ops.fix_names(cands, detect_ops.gate_tech(ctx))  # technology는 관문이 붙인 이름으로 (실행마다 Electron / Node.js로 갈렸다)
-        r16 = detect_ops.fix_affected(cands, detect_ops.dependency_map(ctx))  # 이름을 맞춘 뒤 — 매핑에 있는 기술은 affected를 매핑 그대로 (R16, HYO-246)
-        notes = {"folded": folded, "missing": missing, "unanswered": silent, "renamed": renamed, "r16": r16, "missing_targets": state.get("missing") or []}
+        # affected는 코드가 맞춘다 — 자리 후보는 자리 설정의 component로(HYO-219), 그 뒤 매핑에 있는 기술은 매핑 그대로(R16, HYO-246 — 의존성이면 매핑이 이긴다)
+        slot_fixed = detect_ops.fix_slot_affected(cands, feed)
+        r16 = detect_ops.fix_affected(cands, detect_ops.dependency_map(ctx))
+        notes = {"folded": folded, "missing": missing, "unanswered": silent, "renamed": renamed, "slot_affected": slot_fixed, "r16": r16,
+                 "missing_targets": state.get("missing") or []}
         kept, skipped, dropped = detect_ops.screen(ctx, cands, state["feed"], missing=state.get("missing") or ())
         excluded = detect_ops.check_unused(ctx, excluded)  # 「안 쓴다」는 말을 repo_grep 기록과 대조 (HYO-205)
         security = {"total": len(sec), "rescued": [u for u in rescued if u in sec],

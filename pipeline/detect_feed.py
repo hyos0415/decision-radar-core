@@ -370,15 +370,16 @@ def links_note(rows):
 
 
 def slot_hits(slots, item_id):
-    """항목이 든 자리 전부 → [{slot, name, repo, role, fit, reason, model}] (자리 순). slot_picks는 처음 자리 하나만 남긴다 — detect에는 전부 넘긴다 (HYO-205).
+    """항목이 든 자리 전부 → [{slot, name, repo, role, component, fit, reason, model}] (자리 순). slot_picks는 처음 자리 하나만 남긴다 — detect에는 전부 넘긴다 (HYO-205).
     model = 자리 질의가 그 출시에 붙인 모델 이름 (HYO-206 — detect가 실행마다 다른 이름을 붙였다: EmbeddingGemma / EmbeddingGemma 2 / embeddinggemma-2.
-    이름은 앞 단계가 한 번 정한 것을 쓴다). 예전 slots.json에는 없다 — None."""
+    이름은 앞 단계가 한 번 정한 것을 쓴다). 예전 slots.json에는 없다 — None. component = 자리 설정의 component 칸 (HYO-219) — 없으면 []."""
     out = []
     for slot, xs in ((slots or {}).get("per_slot") or {}).items():
         for x in xs:
             if x["id"] == item_id:
                 out.append({"slot": slot, "name": (slots.get("slot_names") or {}).get(slot), "repo": (slots.get("slot_repos") or {}).get(slot),
-                            "role": (slots.get("slot_roles") or {}).get(slot), "fit": x["fit"], "reason": x["reason"], "model": x.get("model")})
+                            "role": (slots.get("slot_roles") or {}).get(slot), "component": list((slots.get("slot_components") or {}).get(slot) or []),
+                            "fit": x["fit"], "reason": x["reason"], "model": x.get("model")})
     return out
 
 
@@ -398,7 +399,7 @@ def check_rows(slots, by_id, snap_dir=None, fetcher=None, domains=()):
     """slots.json의 check → check.json의 items (HYO-245). 자리 id에 이름 · repo · 역할을 붙이고 소식 칸(check_item)을 담는다.
     커뮤니티 글은 fetcher가 있으면 1차 출처를 지금 받아 item.primary에 얼린다 (HYO-174와 같은 규칙 — 화면에서 고를 때는 받지 않는다).
     스냅숏에 없는 id는 뺀다 → (줄, 빠진 id)."""
-    names, repos, roles = ((slots or {}).get(k) or {} for k in ("slot_names", "slot_repos", "slot_roles"))
+    names, repos, roles, comps = ((slots or {}).get(k) or {} for k in ("slot_names", "slot_repos", "slot_roles", "slot_components"))
     rows, missing = [], []
     for x in (slots or {}).get("check") or []:
         item = by_id.get(x["id"])
@@ -406,7 +407,8 @@ def check_rows(slots, by_id, snap_dir=None, fetcher=None, domains=()):
             missing.append(x["id"])
             continue
         rec = {k: x.get(k) or "" for k in ("id", "title", "url", "source", "model", "reason", "switch")}
-        rec["slots"] = [{"id": s, "name": names.get(s), "repo": repos.get(s), "role": roles.get(s)} for s in x.get("slots") or []]
+        rec["slots"] = [{"id": s, "name": names.get(s), "repo": repos.get(s), "role": roles.get(s), "component": list(comps.get(s) or [])}
+                        for s in x.get("slots") or []]
         if x.get("also"):  # 같은 모델로 접힌 다른 글 — 기각하면 같이 기억한다
             rec["also"] = list(x["also"])
         rec["item"] = check_item(item, snap_dir)
@@ -430,7 +432,7 @@ def check_input(rec, out_dir):
         entry["summary"] = (entry["summary"] + "\n\n" + links_note(rows)).strip()
         body += "\n" + links_note(rows) + "\n"
     (out / "items" / "F01.md").write_text(body, encoding="utf-8", newline="\n")
-    hits = [{"slot": s["id"], "name": s.get("name"), "repo": s.get("repo"), "role": s.get("role"), "fit": 1,
+    hits = [{"slot": s["id"], "name": s.get("name"), "repo": s.get("repo"), "role": s.get("role"), "component": list(s.get("component") or []), "fit": 1,
              "reason": rec.get("reason") or "", "model": rec.get("model") or None} for s in rec.get("slots") or []]
     why = {item["url"]: {"id": item["id"], "reason": "자리 질의 확인 필요 → 사람이 초안을 골랐다: " + (rec.get("reason") or ""),
                          "kept_by": [], "shown": True, "check": True, "slots": hits}}
