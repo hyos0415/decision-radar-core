@@ -4,11 +4,15 @@ import { toast } from 'sonner'
 import {
   api,
   SUCCESS_OUTCOMES,
+  type Action,
   type ActionResult,
   type AdrDraft,
+  type CheckDetail,
+  type CheckRow,
   type InboxDetail,
   type StaleAnswer
 } from '@renderer/lib/api'
+import { CheckList } from './CheckList'
 import { EditDialog } from './EditDialog'
 import { Markdown } from './Markdown'
 import { STATE_ICON, STATE_LABEL, waitText } from '@renderer/lib/inbox'
@@ -41,6 +45,7 @@ const STALE_BUTTONS: {
 export function ItemDetail({
   detail,
   onResolved,
+  onChanged,
   onClose,
   onPrev,
   onNext,
@@ -49,6 +54,8 @@ export function ItemDetail({
 }: {
   detail: InboxDetail
   onResolved: () => void
+  // the item stays open but the Inbox list changed (a check row made a new detect draft)
+  onChanged: () => void
   onClose: () => void
   onPrev: (() => void) | null
   onNext: (() => void) | null
@@ -62,9 +69,43 @@ export function ItemDetail({
   const [stale, setStale] = useState<StaleState | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [rejectOpen, setRejectOpen] = useState(false)
+  // 자리 질의 「확인 필요」 (HYO-245) — 줄마다 답하면 서버가 돌려준 목록으로 바꾼다. working = 초안을 만드는 줄
+  const [check, setCheck] = useState<CheckDetail | null>(detail.check ?? null)
+  const [working, setWorking] = useState<string | null>(null)
+  const [rejectRestOpen, setRejectRestOpen] = useState(false)
 
-  const has = (a: 'approve' | 'edit' | 'reject' | 'ack'): boolean => detail.actions.includes(a)
+  const has = (a: Action): boolean => detail.actions.includes(a)
   const stateLabel = STATE_LABEL[detail.state]
+  const isCheck = detail.kind === 'check'
+
+  // Rows answered one by one; when no open row is left the server returns check=null and the item leaves the Inbox.
+  async function runCheck(kind: 'draft' | 'reject' | 'rest', row?: CheckRow): Promise<void> {
+    setBusy(true)
+    setNotice(null)
+    setWorking(kind === 'draft' && row ? row.id : null)
+    try {
+      const res =
+        kind === 'draft' && row
+          ? await api.checkDraft(detail.id, row.id)
+          : kind === 'reject' && row
+            ? await api.checkReject(detail.id, row.id)
+            : await api.checkRejectRest(detail.id)
+      if (res.outcome === 'drafted' || res.outcome === 'rejected')
+        toast(res.message ?? COPY.item.done)
+      else setNotice(res.message ?? COPY.item.error)
+      if (res.check) {
+        setCheck(res.check)
+        onChanged()
+      } else {
+        onResolved()
+      }
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+      setWorking(null)
+    }
+  }
 
   // Returns the result so the edit dialog can show edit_errors.
   // Outside the dialog (plain approve — R18 affected, or after a stale answer) they go in the action bar.
@@ -170,7 +211,9 @@ export function ItemDetail({
 
       <div className="panel-scroll">
         <header className="detail-header">
-          <h2 className="panel-title">{detail.title}</h2>
+          <h2 className="panel-title">
+            {isCheck && check ? COPY.check.title(check.week, check.open) : detail.title}
+          </h2>
           <div className="detail-meta">
             <span className="tag mono">{detail.kind}</span>
             {stateLabel && <Status status={STATE_ICON[detail.state]} label={stateLabel} />}
@@ -181,7 +224,7 @@ export function ItemDetail({
               </span>
             )}
             <span>{waitText(detail.waiting_days)}</span>
-            <span>{detail.number_note || COPY.item.numberNote}</span>
+            {!isCheck && <span>{detail.number_note || COPY.item.numberNote}</span>}
           </div>
         </header>
 
@@ -209,7 +252,17 @@ export function ItemDetail({
           </div>
         )}
 
-        <Markdown>{detail.markdown}</Markdown>
+        {isCheck && check ? (
+          <CheckList
+            check={check}
+            busy={busy}
+            working={working}
+            onDraft={(r) => void runCheck('draft', r)}
+            onReject={(r) => void runCheck('reject', r)}
+          />
+        ) : (
+          <Markdown>{detail.markdown}</Markdown>
+        )}
       </div>
 
       <div className="action-bar">
@@ -240,6 +293,11 @@ export function ItemDetail({
                 ))}
               </ul>
             )}
+          </div>
+        )}
+        {working && (
+          <div className="inline-notice" role="status">
+            {COPY.check.draftNote}
           </div>
         )}
         {notice && (
@@ -302,9 +360,29 @@ export function ItemDetail({
                 </kbd>
               </Button>
             )}
+            {has('reject_rest') && check && check.open > 0 && (
+              <Button variant="outline" disabled={busy} onClick={() => setRejectRestOpen(true)}>
+                {COPY.check.rejectRest}
+              </Button>
+            )}
           </div>
         )}
       </div>
+
+      <AlertDialog open={rejectRestOpen} onOpenChange={setRejectRestOpen}>
+        <AlertDialogContent>
+          <AlertDialogTitle>{COPY.check.rejectRestConfirm.title}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {COPY.check.rejectRestConfirm.body(check?.open ?? 0)}
+          </AlertDialogDescription>
+          <div className="flex justify-end gap-2">
+            <AlertDialogCancel>{COPY.term.cancel}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void runCheck('rest')}>
+              {COPY.check.rejectRest}
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {editOpen && (
         <EditDialog

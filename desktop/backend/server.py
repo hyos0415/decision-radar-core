@@ -92,6 +92,22 @@ def create_app(svc: RadarService = None, scheduler_on: bool = False, jobs: Jobs 
         """「확인함」 — 접수된 capture(끝난 것)·revisit 충족 알림을 Inbox에서 치운다. ADR은 안 바꾼다 (R8)."""
         return svc.ack(item_id)
 
+    # 자리 질의 「확인 필요」 (HYO-245) — 줄 id(코퍼스 항목 id)에 `/`·`:`가 들어 있어 경로가 아니라 본문으로 받는다
+    @app.post("/inbox/{item_id}/check/draft", response_model=S.ActionResult, operation_id="checkDraft")
+    def check_draft(item_id: str, body: S.CheckRowRequest):
+        """후보 하나로 초안 만들기 — 그 한 건만 detect를 돌린다(모델을 부르는 유일한 답: 실사용은 거르기 + 초안 세션 둘). 초안은 detect 항목으로 Inbox에 온다."""
+        return svc.check_draft(item_id, body.row)
+
+    @app.post("/inbox/{item_id}/check/reject", response_model=S.ActionResult, operation_id="checkReject")
+    def check_reject(item_id: str, body: S.CheckRowRequest):
+        """후보 하나 기각 — detect 거부와 같은 기억(HYO-142)이라 같은 소식이 다시 와도 detect가 뺀다. 모델을 안 부른다."""
+        return svc.check_reject(item_id, body.row)
+
+    @app.post("/inbox/{item_id}/check/reject-rest", response_model=S.ActionResult, operation_id="checkRejectRest")
+    def check_reject_rest(item_id: str):
+        """아직 안 답한 후보 전부 기각 — 기록 하나. 항목이 Inbox에서 빠진다."""
+        return svc.check_reject_rest(item_id)
+
     @app.post("/capture", response_model=S.CaptureResult, operation_id="capture")
     def capture(body: S.CaptureRequest):
         return svc.submit_capture(body.conversation, repo=body.repo, topic=body.topic.model_dump() if body.topic else None)
@@ -246,6 +262,8 @@ def main(argv=None):
             print("개발 데이터에 화제 예시를 더했다", flush=True)
         if devdata.ensure_lists(a.data_dir):
             print("개발 데이터에 이번 주 목록 예시를 더했다", flush=True)
+    if devdata.ensure_check(a.data_dir):
+        print("개발 데이터에 자리 질의 「확인 필요」 예시를 더했다", flush=True)
     try:
         svc = RadarService(a.data_dir, profile=profile)  # 폴더를 만든 프로필과 다르면 거부한다
     except ServiceError as e:

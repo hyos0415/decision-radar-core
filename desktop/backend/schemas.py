@@ -16,12 +16,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from common.schemas import AdrDraft, Affected  # noqa: F401 — 계약에 그대로 쓴다
 
-Action = Literal["approve", "edit", "reject", "ack"]
+Action = Literal["approve", "edit", "reject", "ack", "reject_rest"]  # reject_rest = 자리 질의 「확인 필요」 나머지 전부 기각 (HYO-245)
 StaleAnswer = Literal["continue", "rejudge", "discard"]
 Mode = Literal["stub", "demo", "real"]
+InboxKind = Literal["capture", "detect", "pending", "revisit", "check"]
 ItemState = Literal["awaiting_approval", "stale", "review", "pending", "blocked",  # capture · detect
                     "queued", "running", "error", "linked", "no_draft",  # 접수된 capture (화면 설계 ①)
-                    "met", "not_met", "undetermined"]  # revisit 충족 알림 (화면 설계 ③)
+                    "met", "not_met", "undetermined",  # revisit 충족 알림 (화면 설계 ③)
+                    "check"]  # 자리 질의 「확인 필요」 (HYO-245)
 Flow = Literal["detect", "revisit"]
 
 
@@ -128,26 +130,64 @@ class CardAction(BaseModel):
 
 class InboxItem(BaseModel):
     """Inbox 한 줄. kind: capture(승인 대기 초안) · detect(검토 대기 초안) · pending(접수된 capture — 처리 중이거나 초안 없이 끝남, 화면 설계 ①) ·
-    revisit(재검토 조건 충족 알림, 화면 설계 ③). pending·revisit의 답은 「확인함」(ack)뿐 — Inbox에서 치울 뿐 ADR은 안 바꾼다 (R8)."""
+    revisit(재검토 조건 충족 알림, 화면 설계 ③) · check(자리 질의 「확인 필요」 — 주당 한 항목, HYO-245). pending·revisit의 답은 「확인함」(ack)뿐 —
+    Inbox에서 치울 뿐 ADR은 안 바꾼다 (R8). check는 상세의 후보마다 초안 만들기 · 기각, 항목에는 나머지 전부 기각(reject_rest)."""
     id: str
-    kind: Literal["capture", "detect", "pending", "revisit"]
+    kind: InboxKind
     title: str
     technology: Optional[str]
     affected: list[Affected]
     since: str = Field(description="처음 도착 시각 — 처리 중에 stale·보류로 바뀌어도 그대로다 (HYO-144)")
     waiting_days: int = Field(description="since부터 지난 날 수")
     state: ItemState = Field(description="capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked / "
-                                         "pending: queued · running · error · linked · no_draft / revisit: met (판정 결과)")
+                                         "pending: queued · running · error · linked · no_draft / revisit: met (판정 결과) / check: check (확인 필요)")
     actions: list[Action] = Field(description="이 항목에 할 수 있는 답. 빈 목록이면 보기만")
     why: Optional[str] = Field(description="detect만: 왜 왔나 — 관문 판정 (예 `anthropic L5 × deprecation`). 관문 없이 만든 입력·capture는 null")
     action: Optional[CardAction] = Field(default=None, description="detect만: 남김 카드 표시 (HYO-132) — 관문 kept_by로 코드가 정한다 "
                                          "(모델 은퇴·EOL → 강제 이전 + 마감일 · 후속 모델 → 선택 실험). 그 밖은 null")
     adr: Optional[str] = Field(default=None, description="revisit: 조건이 충족된 ADR 번호 (「ADR 열기」 → /decisions/{adr})")
-    message: Optional[str] = Field(default=None, description="pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장")
+    message: Optional[str] = Field(default=None, description="pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장 / check: 후보 · 자리 수 한 줄")
 
 
 class InboxList(BaseModel):
     items: list[InboxItem]
+
+
+class CheckRow(BaseModel):
+    """「확인 필요」 후보 한 줄 — 자리 질의가 적합도 1로 본 출시 하나 (같은 모델의 다른 글은 접혀 있다)."""
+    id: str = Field(description="소식 id (코퍼스 항목 id) — 답할 때 row로 보낸다")
+    title: str
+    url: str
+    source: str = Field(description="vendor · huggingface · hn · reddit …")
+    model: str = Field(description="자리 질의가 붙인 모델 이름 (없으면 빈 문자열)")
+    reason: str = Field(description="적합도 1의 이유 — 무엇이 모자라나")
+    switch: str = Field(description="바꾸려면 필요한 것 (v2 now_via) — 없으면 빈 문자열")
+    other_slots: list[str] = Field(description="이 후보가 함께 든 다른 자리 이름 — 줄은 처음 자리 아래 한 번만 나온다")
+    state: Literal["open", "drafted", "rejected"] = Field(description="open: 아직 안 답함 · drafted: 초안 만듦(detect 항목) · rejected: 기각함")
+    actions: list[Literal["draft", "reject"]] = Field(description="open이면 [draft, reject], 답했으면 빈 목록")
+    answered_at: Optional[str] = Field(description="답한 시각")
+    new_item: Optional[str] = Field(description="drafted: 만든 detect 항목 id")
+    adr: Optional[str] = Field(description="drafted: 초안의 ADR 번호")
+    message: Optional[str] = Field(description="초안 만들기가 초안 없이 끝났으면 그 이유 (줄은 열린 채로)")
+
+
+class CheckGroup(BaseModel):
+    slot: str = Field(description="자리 id (radar-slots.yaml)")
+    name: Optional[str] = Field(description="자리 이름")
+    repo: Optional[str] = Field(description="그 자리의 대상 repo")
+    rows: list[CheckRow]
+
+
+class CheckDetail(BaseModel):
+    """자리 질의 「확인 필요」 (HYO-245) — 그 주 후보를 자리마다 묶은 목록. 다른 데서 이미 거부한 소식은 빠져 있다."""
+    week: str
+    open: int = Field(description="아직 안 답한 줄 수 — 0이 되면 항목이 Inbox에서 빠진다")
+    total: int = Field(description="보이는 줄 수 (답한 줄 포함)")
+    groups: list[CheckGroup]
+
+
+class CheckRowRequest(BaseModel):
+    row: str = Field(description="CheckRow.id")
 
 
 class InboxDetail(InboxItem):
@@ -158,6 +198,7 @@ class InboxDetail(InboxItem):
     note: Optional[str] = Field(default=None, description="답할 수 없을 때만")
     affected_errors: list[str] = Field(default=[], description="affected repo가 레이더 대상이 아니면 그 이유 (R18) — 그대로 승인하면 쓰지 않는다. 고쳐서 승인한다")
     usage: Optional[Usage] = Field(default=None, description="이 항목을 만드는 데 든 모델 사용량 (capture 1턴). detect 초안은 실행(GET /runs)에 있다")
+    check: Optional[CheckDetail] = Field(default=None, description="check만: 자리마다 묶은 후보 목록 (markdown은 빈 문자열)")
 
 
 class AnswerRequest(BaseModel):
@@ -169,7 +210,8 @@ class EditRequest(BaseModel):
     stale_answer: Optional[StaleAnswer] = None
 
 
-Outcome = Literal["written", "rejected", "stale", "edit_errors", "discarded", "rejudge", "blocked", "recovered", "acked", "error"]
+Outcome = Literal["written", "rejected", "stale", "edit_errors", "discarded", "rejudge", "blocked", "recovered", "acked", "error",
+                  "drafted", "no_draft"]  # 「확인 필요」 초안 만들기 (HYO-245) — detect 항목이 생김 · 초안 없이 끝남(줄은 열린 채)
 
 
 class ActionResult(BaseModel):
@@ -182,9 +224,10 @@ class ActionResult(BaseModel):
     answers: Optional[list[StaleAnswer]] = Field(default=None, description="stale일 때 고를 수 있는 답")
     errors: Optional[list[str]] = Field(default=None, description="edit_errors일 때")
     validate_errors: Optional[list[str]] = None
-    new_item: Optional[str] = Field(default=None, description="rejudge로 새로 생긴 대기 항목")
+    new_item: Optional[str] = Field(default=None, description="rejudge로 새로 생긴 대기 항목 · 「확인 필요」 초안 만들기로 생긴 detect 항목")
     blocked: Optional[dict[str, Any]] = None
-    usage: Optional[Usage] = Field(default=None, description="이 답에서 모델을 불렀으면 그 사용량 (capture 2턴). 모델을 안 부르면 null")
+    usage: Optional[Usage] = Field(default=None, description="이 답에서 모델을 불렀으면 그 사용량 (capture 2턴 · 「확인 필요」 초안 만들기). 모델을 안 부르면 null")
+    check: Optional[CheckDetail] = Field(default=None, description="「확인 필요」 답의 뒤 목록 — 열린 줄이 없으면(항목이 Inbox에서 빠짐) null")
 
 
 # ── capture ───────────────────────────────────────────────────────
@@ -368,7 +411,7 @@ class NotificationItem(BaseModel):
     id: str
     status: Literal["inbox", "answered", "gone"] = Field(description="inbox: 지금 Inbox에 있다 · answered: 답했다(승인·수정·거부·확인함) · "
                                                                    "gone: 둘 다 아니다 (예전 알림의 실행 경로 kind — run_drafts·run_alerts — 는 item이 ADR 번호)")
-    kind: Optional[Literal["capture", "detect", "pending", "revisit"]] = Field(description="inbox일 때 Inbox 항목 종류")
+    kind: Optional[InboxKind] = Field(description="inbox일 때 Inbox 항목 종류")
     title: Optional[str] = Field(description="inbox일 때 Inbox 항목 제목")
     state: Optional[ItemState] = Field(description="inbox일 때 Inbox 상태")
     answer: Optional[Action] = Field(description="answered: 마지막 답")

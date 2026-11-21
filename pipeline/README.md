@@ -102,6 +102,7 @@ python pipeline/tests/test_alarm.py            # 오프라인 — 경보 그물 
 
 - `funnel.json` = 건수(수집 → 레인 A → 관문 남김 → detect 입력) + 관문이 판정 못 한 것(`gate_counts`: 모르는 기술 · 분류 불가 · 팀원 스택(`other-stack`) · 오류). 실행 요약의 첫 줄이 된다 (`run_detect` · 데스크톱 `_summarize_detect`). (모르는 기술+분류 불가)/(레인 A−팀원 스택)이 `policy.UNKNOWN_WARN_RATIO`(5%, 잠정 — 2026-10-15 20%에서 변경, 다시 잰 정상 비율 W41 0.9% · W42 0.8%)를 넘으면 같은 줄에 경고 (HYO-122)
 - `gate.json` = url → 왜 남았나(`kept_by`). **detect 입력(feed)에는 넣지 않는다** — 모델 판단을 흔들지 않게. 화면의 「왜 왔나」 칸(HYO-85)이 읽는다
+- `check.json` (HYO-245) = 자리 질의 「확인 필요」 — run 폴더의 `slots.json`에 `check`(최고 적합도 1, detect로 안 가는 출시)가 있을 때만 쓴다(없으면 지난 파일도 지운다). `{week, made_at, items: [{id, title, url, source, model, slots: [{id, name, repo, role}], reason, switch, also?, item}]}` — `item`은 그 소식을 나중에 detect 한 건으로 돌릴 칸(id · title · url · source · text(`text_file`은 풀어 둠) · meta · created_at · links), 커뮤니티 글이면 그 주에 받아 얼린 1차 출처 `primary`(HYO-174와 같은 규칙, `--no-fetch`면 없음). 스냅숏에 없는 id는 `missing`. **feed.json에는 넣지 않는다** — 데스크톱 Inbox가 주당 한 항목으로 보이고, 사람이 「초안 만들기」를 고른 줄만 `detect_feed.check_input`이 한 건짜리 detect 입력(자리를 gate.json에 적어 candidate_for로 — 거르기가 못 뺀다)으로 만든다. 건수는 깔때기 줄의 `(detect N · 확인 필요 M)`
 - 버린 이유(결정표의 행)는 옮기지 않는다 — `lane_a.json`·`gate-calls.jsonl`에 있다 (깔때기 화면은 만들지 않는다, 10/8)
 - manifest는 수집기와 같은 리더(`collector/stack.py`)로 읽는다 — git 추적 파일만, 대상별 `exclude`(radar-targets.json) 적용. `--repo`만 주면 exclude 없이 그 폴더의 추적 파일을 읽는다 (HYO-122)
 - 등급 파일은 `classify-stack`으로 만든다. 등급 스크립트 집행(HYO-67)은 데모 뒤

@@ -361,6 +361,7 @@ function App(): React.JSX.Element {
                 key={detail.id}
                 detail={detail}
                 onResolved={onResolved}
+                onChanged={() => void refresh()}
                 onClose={closeItem}
                 onPrev={step(-1)}
                 onNext={step(1)}

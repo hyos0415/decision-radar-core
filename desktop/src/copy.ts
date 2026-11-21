@@ -42,7 +42,7 @@ export const COPY = {
   } as Record<string, string>,
   revisitUnchecked: '확인 전',
   revisitMetCount: (n: number) => `조건 충족 ${n}`,
-  inboxState: { stale: '바뀜', blocked: '막힘', review: '검토' },
+  inboxState: { stale: '바뀜', blocked: '막힘', review: '검토', check: '확인 필요' },
 
   // 날짜 · 시각
   date: {
@@ -91,6 +91,29 @@ export const COPY = {
     rejectConfirm: {
       title: '이 항목을 거부할까요?',
       body: '거부하면 목록에서 사라져요'
+    }
+  },
+
+  // 자리 질의 「확인 필요」 (components/CheckList.tsx, HYO-245) — 주당 한 항목, 후보마다 초안 만들기 · 기각
+  check: {
+    // 서버 제목(service._check_item_row)과 같은 모양 — 답할 때마다 남은 건수로 다시 그린다
+    title: (week: string, open: number) => `자리 질의 확인 필요 — ${week} · ${open}건`,
+    intro: '자리 질의가 적합도 1로 본 후보예요. 초안으로 만들 것만 고르고 나머지는 기각해요',
+    draft: '초안 만들기',
+    drafting: '초안을 만들고 있어요…',
+    reject: '기각',
+    rejectRest: '나머지 전부 기각',
+    model: '모델',
+    switch: (s: string) => `바꾸려면: ${s}`,
+    otherSlots: (names: string) => `다른 자리: ${names}`,
+    open: '새 창에서 열기',
+    state: { drafted: '초안 만듦', rejected: '기각함' },
+    draftedAdr: (adr: string) => `ADR ${adr}`,
+    count: (open: number, total: number) => `남은 후보 ${open} / ${total}`,
+    draftNote: '초안 만들기는 모델을 불러요 — 실사용 모드는 몇 분 걸려요',
+    rejectRestConfirm: {
+      title: '남은 후보를 전부 기각할까요?',
+      body: (n: number) => `${n}건을 기각해요. 기각한 소식은 다음 주에 다시 와도 올라오지 않아요`
     }
   },
 
@@ -243,6 +266,7 @@ export const COPY = {
       detect: '검토할 detect 초안이 있어요',
       pending: 'capture를 접수했어요',
       revisit: '재검토 조건을 충족했어요',
+      check: '자리 질의에서 확인할 후보가 있어요',
       mixed: 'Inbox에 새 항목이 있어요',
       inbox_new: 'Inbox에 새 항목이 있어요',
       run_drafts: '새 초안이 나왔어요',
@@ -298,7 +322,8 @@ export const COPY = {
       capture: '승인할 초안이 있어요',
       detect: '검토할 detect 초안이 있어요',
       pending: 'capture를 접수했어요',
-      revisit: '재검토 조건을 충족했어요'
+      revisit: '재검토 조건을 충족했어요',
+      check: '자리 질의에서 확인할 후보가 있어요'
     },
     more: (title: string, rest: number) => `${title} 외 ${rest}건`,
     batch: (n: number) => `Inbox에 새 항목이 ${n}건 있어요`

@@ -19,6 +19,11 @@
                detect가 지금 기준과 대조해 이미 반영된 릴리스를 뺀다 (모델에는 안 보인다)
   list.json    이번 주 목록 — 「항상」 · 기술 질의 top-k · 자리 질의 top-k (HYO-168, docs/design/query-topk.md). 화면이 읽는다
   trace.jsonl  탈락 추적 — 항목마다 지나간 단계와 빠진 곳 · 이유 (pipeline.trace, HYO-171). `python -m pipeline.trace <검색어> --week <주>`가 읽는다
+  check.json   자리 질의 「확인 필요」 (HYO-245) — slots.json의 check(최고 적합도 1, detect로는 안 보낸다)가 있을 때만.
+               {week, made_at, items: [{id, title, url, source, model, slots: [{id, name, repo, role}], reason, switch, also?, item}]}.
+               item = 그 소식을 나중에 detect 한 건으로 돌릴 때 필요한 칸(id · title · url · source · text · meta · created_at · links,
+               커뮤니티 글이면 1차 출처를 그 주에 받아 얼린 primary). 데스크톱 Inbox가 주당 한 항목으로 보이고, 사람이 「초안 만들기」를 고른
+               줄만 `check_input`으로 한 건짜리 detect 입력을 만들어 돌린다 (자리를 gate.json에 적어 거르기가 다시 빼지 못한다). feed.json에는 넣지 않는다
 
 무엇을 넣나: 관문이 남기고(keep) detect로 고른 것(shown — 「항상」을 (패키지 × 줄)마다 1건으로 접은 것 + 기술마다 top-k, 2026-11-04 전에는 5/N 상한 안)
 + run 폴더에 slots.json(pipeline.slots)이 있으면 자리마다 top-k 전부 (kind model_release)
@@ -31,6 +36,7 @@
 둔갑하지 않게). 모델은 여전히 웹에 나가지 않는다 (revisit_feed HYO-159와 같은 원칙). `--no-fetch`면 받지 않는다.
 """
 import argparse
+import datetime as dt
 import json
 import re
 import sys
@@ -46,6 +52,8 @@ SLOTS = "slots.json"    # 자리 질의 결과 (pipeline.slots, HYO-168) — run
 INTEREST = "interest.json"   # 관심사 질의 결과 (pipeline.interest, HYO-187) — run 폴더에 있으면 주 10건(to_detect)을 detect에 더한다
 LIST = "list.json"      # 이번 주 목록 — 「항상」 · 기술 질의 · 자리 질의 (query-topk.md) + 경보 · 우리 스택 아님 (HYO-170). 화면이 읽는다
 ALARM = "alarm.json"    # 경보 그물 · 「우리 스택 아님」 (pipeline.alarm, profile_filter가 쓴다)
+CHECK = "check.json"    # 자리 질의 「확인 필요」 (HYO-245) — 사람이 고른 줄만 detect 한 건으로 (데스크톱 Inbox)
+CHECK_ITEM_FIELDS = ("id", "title", "url", "source", "channels", "text", "meta", "created_at", "links")
 VENDORS = Path(__file__).resolve().parents[1] / "collector" / "vendors.yaml"   # 1차 출처 도메인의 기준 (HYO-174)
 LINKS_PER_ITEM = 3      # 커뮤니티 글 하나에서 받을 1차 출처 링크 수
 _GH_RELEASES = re.compile(r"^github\.com/[^/]+/[^/]+/releases(/|$)", re.I)
@@ -248,6 +256,8 @@ def funnel(manifest, lane_a, chosen, slots=None, alarm_info=None, interest=None)
     if slots:
         f["slots"] = {"candidates": slots.get("candidates"), "releases": slots.get("releases"),
                       "listed": sum(len(v) for v in slots["per_slot"].values()), "to_detect": len(slots.get("to_detect") or [])}
+        if slots.get("check"):  # 「확인 필요」 (HYO-245) — detect로는 안 가고 화면 Inbox로
+            f["slots"]["check"] = len(slots["check"])
     if interest:
         c = interest.get("counts") or {}
         f["interest"] = {"new": c.get("picks"), "topical": c.get("topical"), "to_detect": len(interest.get("to_detect") or []),
@@ -268,7 +278,8 @@ def funnel_line(f):
     line = f"수집 {f.get('items')} → 레인 A {f.get('lane_a')} → {kept} → detect 입력 {f.get('to_detect')}{cap}"
     if f.get("slots"):
         s = f["slots"]
-        line += f" · 자리 질의 후보 {s['candidates']} → 출시 {s['releases']} → 목록 {s['listed']} (detect {s['to_detect']})"
+        line += (f" · 자리 질의 후보 {s['candidates']} → 출시 {s['releases']} → 목록 {s['listed']} (detect {s['to_detect']}"
+                 + (f" · 확인 필요 {s['check']}" if s.get("check") else "") + ")")
     if f.get("interest"):
         n = f["interest"]
         line += f" · 관심사 질의 새것 {n['new']} (detect {n['to_detect']}" + (f", 실패 {n['failed']}" if n.get("failed") else "") + ")"
@@ -317,24 +328,37 @@ def primary_links(item, domains):
     return out[:LINKS_PER_ITEM]
 
 
-def fetch_links(item, n, out, index, fetcher, domains):
-    """1차 출처를 받아 items/F{n}-L{k}.md로 얼린다 → [{url, source_type, status}]. 같은 url이면 받은 문서가 이긴다(HN 글 본문보다) ·
-    못 받으면 index에 실제 상태만 — 이미 있는 항목은 덮지 않는다 (revisit_feed와 같다)."""
+def fetch_primary(item, fetcher, domains):
+    """커뮤니티 항목이 가리키는 1차 출처를 받는다 → [{url, source_type, status, text?}] (받은 것만 text). 쓰지는 않는다 — `freeze_links`가 쓴다."""
     from .revisit_feed import page_text
-    rows = []
-    for k, (key, st) in enumerate(primary_links(item, domains), 1):
+    docs = []
+    for key, st in primary_links(item, domains):
         code, body = fetcher.get("https://" + key)
         text = page_text(body) if code == 200 else ""
-        if text:
+        status = 200 if text else (code if isinstance(code, int) and code != 200 else "fetch_error")
+        docs.append({"url": key, "source_type": st, "status": status, **({"text": text} if text else {})})
+    return docs
+
+
+def freeze_links(docs, n, out, index):
+    """받은 1차 출처를 items/F{n}-L{k}.md로 얼린다 → [{url, source_type, status}]. 같은 url이면 받은 문서가 이긴다(HN 글 본문보다) ·
+    못 받으면 index에 실제 상태만 — 이미 있는 항목은 덮지 않는다 (revisit_feed와 같다)."""
+    rows = []
+    for k, d in enumerate(docs, 1):
+        key, st = d["url"], d["source_type"]
+        if d.get("text"):
             name = f"items/F{n:02d}-L{k}.md"
-            (out / name).write_text(f"# {key}\n\n{text}\n", encoding="utf-8", newline="\n")
+            (out / name).write_text(f"# {key}\n\n{d['text']}\n", encoding="utf-8", newline="\n")
             index[key] = {"source_type": st, "file": name}
-            status = 200
         else:
-            status = code if isinstance(code, int) and code != 200 else "fetch_error"
-            index.setdefault(key, {"source_type": st, "status": status})
-        rows.append({"url": key, "source_type": st, "status": status})
+            index.setdefault(key, {"source_type": st, "status": d["status"]})
+        rows.append({"url": key, "source_type": st, "status": d["status"]})
     return rows
+
+
+def fetch_links(item, n, out, index, fetcher, domains):
+    """1차 출처를 받아 얼린다 (HYO-174) → [{url, source_type, status}]."""
+    return freeze_links(fetch_primary(item, fetcher, domains), n, out, index)
 
 
 def links_note(rows):
@@ -356,6 +380,65 @@ def slot_hits(slots, item_id):
                 out.append({"slot": slot, "name": (slots.get("slot_names") or {}).get(slot), "repo": (slots.get("slot_repos") or {}).get(slot),
                             "role": (slots.get("slot_roles") or {}).get(slot), "fit": x["fit"], "reason": x["reason"], "model": x.get("model")})
     return out
+
+
+def check_item(item, snap_dir=None):
+    """「확인 필요」 한 줄이 나중에 detect 한 건이 될 때 필요한 소식 칸 (HYO-245). 전문은 지금 풀어 둔다(meta.text_file → text) —
+    화면이 고를 때는 그 주 스냅숏이 없을 수 있다."""
+    out = {k: item[k] for k in CHECK_ITEM_FIELDS if item.get(k) is not None}
+    meta = item.get("meta") or {}
+    if not out.get("text") and meta.get("text_file") and snap_dir:
+        p = Path(snap_dir) / meta["text_file"]
+        if p.exists():
+            out["text"] = p.read_text(encoding="utf-8")
+    return out
+
+
+def check_rows(slots, by_id, snap_dir=None, fetcher=None, domains=()):
+    """slots.json의 check → check.json의 items (HYO-245). 자리 id에 이름 · repo · 역할을 붙이고 소식 칸(check_item)을 담는다.
+    커뮤니티 글은 fetcher가 있으면 1차 출처를 지금 받아 item.primary에 얼린다 (HYO-174와 같은 규칙 — 화면에서 고를 때는 받지 않는다).
+    스냅숏에 없는 id는 뺀다 → (줄, 빠진 id)."""
+    names, repos, roles = ((slots or {}).get(k) or {} for k in ("slot_names", "slot_repos", "slot_roles"))
+    rows, missing = [], []
+    for x in (slots or {}).get("check") or []:
+        item = by_id.get(x["id"])
+        if item is None:
+            missing.append(x["id"])
+            continue
+        rec = {k: x.get(k) or "" for k in ("id", "title", "url", "source", "model", "reason", "switch")}
+        rec["slots"] = [{"id": s, "name": names.get(s), "repo": repos.get(s), "role": roles.get(s)} for s in x.get("slots") or []]
+        if x.get("also"):  # 같은 모델로 접힌 다른 글 — 기각하면 같이 기억한다
+            rec["also"] = list(x["also"])
+        rec["item"] = check_item(item, snap_dir)
+        if fetcher and slot_entry(item)["source_type"] == "community":
+            rec["item"]["primary"] = fetch_primary(item, fetcher, domains)
+        rows.append(rec)
+    return rows, missing
+
+
+def check_input(rec, out_dir):
+    """「확인 필요」 한 줄(check.json의 items 하나) → detect 한 건짜리 입력 폴더 (HYO-245 — 데스크톱 「초안 만들기」). 모양은 build와 같다
+    (feed.json · index.json · items/ · search.json · gate.json). gate.json에 그 줄의 자리(repo · 역할 · 모델 이름)를 적는다 — 제품 detect가
+    candidate_for로 받아 거르기가 다시 빼지 못한다 (HYO-205). 얼려 둔 1차 출처는 F01-L{k}로. → feed 칸 하나"""
+    out = Path(out_dir)
+    (out / "items").mkdir(parents=True, exist_ok=True)
+    item = rec["item"]
+    entry, body = slot_entry(item), body_of(item)
+    index = {url_key(item["url"]): {"source_type": entry["source_type"], "file": "items/F01.md"}}
+    rows = freeze_links(item.get("primary") or [], 1, out, index)
+    if rows:
+        entry["summary"] = (entry["summary"] + "\n\n" + links_note(rows)).strip()
+        body += "\n" + links_note(rows) + "\n"
+    (out / "items" / "F01.md").write_text(body, encoding="utf-8", newline="\n")
+    hits = [{"slot": s["id"], "name": s.get("name"), "repo": s.get("repo"), "role": s.get("role"), "fit": 1,
+             "reason": rec.get("reason") or "", "model": rec.get("model") or None} for s in rec.get("slots") or []]
+    why = {item["url"]: {"id": item["id"], "reason": "자리 질의 확인 필요 → 사람이 초안을 골랐다: " + (rec.get("reason") or ""),
+                         "kept_by": [], "shown": True, "check": True, "slots": hits}}
+    write_json(out / "feed.json", [entry])
+    write_json(out / "index.json", index)
+    write_json(out / "search.json", [])
+    write_json(out / "gate.json", why)
+    return entry
 
 
 def choose(lane_a, slots, all_kept=False, interest=None):
@@ -453,6 +536,12 @@ def build(run_dir, out_dir, snapshot=None, all_kept=False, fetcher=None):
     write_json(out / "gate.json", why)
     wl = week_list(lane_a, slots, {e["id"] for e in chosen}, alarm_info)
     write_json(out / LIST, wl)
+    if (slots or {}).get("check"):  # 「확인 필요」 (HYO-245) — 화면 Inbox가 읽는다. 없으면 지난 실행이 남긴 파일도 지운다
+        rows, missing = check_rows(slots, by_id, snap_dir, fetcher, domains)
+        write_json(out / CHECK, {"week": snap_dir.name, "made_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                                 "items": rows, **({"missing": missing} if missing else {})})
+    else:
+        (out / CHECK).unlink(missing_ok=True)
     try:   # 탈락 추적 (HYO-171) — 보조 기록이다. 실패해도 detect 입력 · 게시는 그대로 (리뷰 11/4: 사슬을 멈추지 않게)
         lane_b = {p.name[len("lane_b."):-len(".json")]: json.loads(p.read_text(encoding="utf-8")) for p in sorted(run_dir.glob("lane_b.*.json"))}
         slots_raw = json.loads((run_dir / "slots-raw.json").read_text(encoding="utf-8")) if (run_dir / "slots-raw.json").exists() else None

@@ -86,6 +86,23 @@ def ensure_lists(data_dir):
     return True
 
 
+CHECK_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_example.json")
+
+
+def ensure_check(data_dir):
+    """자리 질의 「확인 필요」 예시 (HYO-245) — default 프로필이고 `<data>/lists/<주차>/check.json`이 하나도 없으면 합성 예시(check_example.json,
+    전부 [예시], 자리 repo는 픽스처 대상 repo)를 목록 예시 주차에 둔다. 만들었으면 True. 시드(seed)에는 넣지 않는다 — 회귀의 Inbox 건수를 흔들지 않게
+    서버가 뜰 때만 더한다. 모양은 `pipeline.detect_feed`의 check.json과 같다 (test_backend가 대조한다)."""
+    if devprofiles.read_marker(data_dir) != devprofiles.DEFAULT:
+        return False
+    root = os.path.join(data_dir, "lists")
+    if os.path.isdir(root) and any(os.path.exists(os.path.join(root, n, "check.json")) for n in os.listdir(root)):
+        return False
+    os.makedirs(os.path.join(root, LIST_FIXTURE_WEEK), exist_ok=True)
+    shutil.copyfile(CHECK_FIXTURE, os.path.join(root, LIST_FIXTURE_WEEK, "check.json"))
+    return True
+
+
 def seed_profile(data_dir, profile):
     """프로필 폴더 → 데이터 폴더. ADR 사본(adr-fixture) · 대상 repo 사본 · 스냅숏 · 스텁 capture 대기 항목."""
     meta = devprofiles.load_json(profile, "profile.json")

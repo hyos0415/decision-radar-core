@@ -166,6 +166,66 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/inbox/{item_id}/check/draft': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Check Draft
+     * @description 후보 하나로 초안 만들기 — 그 한 건만 detect를 돌린다(모델을 부르는 유일한 답: 실사용은 거르기 + 초안 세션 둘). 초안은 detect 항목으로 Inbox에 온다.
+     */
+    post: operations['checkDraft']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/inbox/{item_id}/check/reject': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Check Reject
+     * @description 후보 하나 기각 — detect 거부와 같은 기억(HYO-142)이라 같은 소식이 다시 와도 detect가 뺀다. 모델을 안 부른다.
+     */
+    post: operations['checkReject']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/inbox/{item_id}/check/reject-rest': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Check Reject Rest
+     * @description 아직 안 답한 후보 전부 기각 — 기록 하나. 항목이 Inbox에서 빠진다.
+     */
+    post: operations['checkRejectRest']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/capture': {
     parameters: {
       query?: never
@@ -545,6 +605,8 @@ export interface components {
         | 'recovered'
         | 'acked'
         | 'error'
+        | 'drafted'
+        | 'no_draft'
       /** Message */
       message?: string | null
       /** Adr */
@@ -570,15 +632,17 @@ export interface components {
       validate_errors?: string[] | null
       /**
        * New Item
-       * @description rejudge로 새로 생긴 대기 항목
+       * @description rejudge로 새로 생긴 대기 항목 · 「확인 필요」 초안 만들기로 생긴 detect 항목
        */
       new_item?: string | null
       /** Blocked */
       blocked?: {
         [key: string]: unknown
       } | null
-      /** @description 이 답에서 모델을 불렀으면 그 사용량 (capture 2턴). 모델을 안 부르면 null */
+      /** @description 이 답에서 모델을 불렀으면 그 사용량 (capture 2턴 · 「확인 필요」 초안 만들기). 모델을 안 부르면 null */
       usage?: components['schemas']['Usage'] | null
+      /** @description 「확인 필요」 답의 뒤 목록 — 열린 줄이 없으면(항목이 Inbox에서 빠짐) null */
+      check?: components['schemas']['CheckDetail'] | null
     } & {
       [key: string]: unknown
     }
@@ -704,6 +768,125 @@ export interface components {
        * @description 마감일이 없을 때의 안내 (「마감일 확인 필요」). 있으면 null
        */
       deadline_note: string | null
+    }
+    /**
+     * CheckDetail
+     * @description 자리 질의 「확인 필요」 (HYO-245) — 그 주 후보를 자리마다 묶은 목록. 다른 데서 이미 거부한 소식은 빠져 있다.
+     */
+    CheckDetail: {
+      /** Week */
+      week: string
+      /**
+       * Open
+       * @description 아직 안 답한 줄 수 — 0이 되면 항목이 Inbox에서 빠진다
+       */
+      open: number
+      /**
+       * Total
+       * @description 보이는 줄 수 (답한 줄 포함)
+       */
+      total: number
+      /** Groups */
+      groups: components['schemas']['CheckGroup'][]
+    }
+    /** CheckGroup */
+    CheckGroup: {
+      /**
+       * Slot
+       * @description 자리 id (radar-slots.yaml)
+       */
+      slot: string
+      /**
+       * Name
+       * @description 자리 이름
+       */
+      name: string | null
+      /**
+       * Repo
+       * @description 그 자리의 대상 repo
+       */
+      repo: string | null
+      /** Rows */
+      rows: components['schemas']['CheckRow'][]
+    }
+    /**
+     * CheckRow
+     * @description 「확인 필요」 후보 한 줄 — 자리 질의가 적합도 1로 본 출시 하나 (같은 모델의 다른 글은 접혀 있다).
+     */
+    CheckRow: {
+      /**
+       * Id
+       * @description 소식 id (코퍼스 항목 id) — 답할 때 row로 보낸다
+       */
+      id: string
+      /** Title */
+      title: string
+      /** Url */
+      url: string
+      /**
+       * Source
+       * @description vendor · huggingface · hn · reddit …
+       */
+      source: string
+      /**
+       * Model
+       * @description 자리 질의가 붙인 모델 이름 (없으면 빈 문자열)
+       */
+      model: string
+      /**
+       * Reason
+       * @description 적합도 1의 이유 — 무엇이 모자라나
+       */
+      reason: string
+      /**
+       * Switch
+       * @description 바꾸려면 필요한 것 (v2 now_via) — 없으면 빈 문자열
+       */
+      switch: string
+      /**
+       * Other Slots
+       * @description 이 후보가 함께 든 다른 자리 이름 — 줄은 처음 자리 아래 한 번만 나온다
+       */
+      other_slots: string[]
+      /**
+       * State
+       * @description open: 아직 안 답함 · drafted: 초안 만듦(detect 항목) · rejected: 기각함
+       * @enum {string}
+       */
+      state: 'open' | 'drafted' | 'rejected'
+      /**
+       * Actions
+       * @description open이면 [draft, reject], 답했으면 빈 목록
+       */
+      actions: ('draft' | 'reject')[]
+      /**
+       * Answered At
+       * @description 답한 시각
+       */
+      answered_at: string | null
+      /**
+       * New Item
+       * @description drafted: 만든 detect 항목 id
+       */
+      new_item: string | null
+      /**
+       * Adr
+       * @description drafted: 초안의 ADR 번호
+       */
+      adr: string | null
+      /**
+       * Message
+       * @description 초안 만들기가 초안 없이 끝났으면 그 이유 (줄은 열린 채로)
+       */
+      message: string | null
+    }
+    /** CheckRowRequest */
+    CheckRowRequest: {
+      /**
+       * Row
+       * @description CheckRow.id
+       */
+      row: string
     }
     /**
      * CliStatus
@@ -958,7 +1141,7 @@ export interface components {
        * Kind
        * @enum {string}
        */
-      kind: 'capture' | 'detect' | 'pending' | 'revisit'
+      kind: 'capture' | 'detect' | 'pending' | 'revisit' | 'check'
       /** Title */
       title: string
       /** Technology */
@@ -977,7 +1160,7 @@ export interface components {
       waiting_days: number
       /**
        * State
-       * @description capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked / pending: queued · running · error · linked · no_draft / revisit: met (판정 결과)
+       * @description capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked / pending: queued · running · error · linked · no_draft / revisit: met (판정 결과) / check: check (확인 필요)
        * @enum {string}
        */
       state:
@@ -994,11 +1177,12 @@ export interface components {
         | 'met'
         | 'not_met'
         | 'undetermined'
+        | 'check'
       /**
        * Actions
        * @description 이 항목에 할 수 있는 답. 빈 목록이면 보기만
        */
-      actions: ('approve' | 'edit' | 'reject' | 'ack')[]
+      actions: ('approve' | 'edit' | 'reject' | 'ack' | 'reject_rest')[]
       /**
        * Why
        * @description detect만: 왜 왔나 — 관문 판정 (예 `anthropic L5 × deprecation`). 관문 없이 만든 입력·capture는 null
@@ -1013,7 +1197,7 @@ export interface components {
       adr?: string | null
       /**
        * Message
-       * @description pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장
+       * @description pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장 / check: 후보 · 자리 수 한 줄
        */
       message?: string | null
       /** @description 편집용 초안. detect는 초안 파일을 읽어 만든다 — 못 읽으면 null */
@@ -1043,11 +1227,14 @@ export interface components {
       affected_errors: string[]
       /** @description 이 항목을 만드는 데 든 모델 사용량 (capture 1턴). detect 초안은 실행(GET /runs)에 있다 */
       usage?: components['schemas']['Usage'] | null
+      /** @description check만: 자리마다 묶은 후보 목록 (markdown은 빈 문자열) */
+      check?: components['schemas']['CheckDetail'] | null
     }
     /**
      * InboxItem
      * @description Inbox 한 줄. kind: capture(승인 대기 초안) · detect(검토 대기 초안) · pending(접수된 capture — 처리 중이거나 초안 없이 끝남, 화면 설계 ①) ·
-     *     revisit(재검토 조건 충족 알림, 화면 설계 ③). pending·revisit의 답은 「확인함」(ack)뿐 — Inbox에서 치울 뿐 ADR은 안 바꾼다 (R8).
+     *     revisit(재검토 조건 충족 알림, 화면 설계 ③) · check(자리 질의 「확인 필요」 — 주당 한 항목, HYO-245). pending·revisit의 답은 「확인함」(ack)뿐 —
+     *     Inbox에서 치울 뿐 ADR은 안 바꾼다 (R8). check는 상세의 후보마다 초안 만들기 · 기각, 항목에는 나머지 전부 기각(reject_rest).
      */
     InboxItem: {
       /** Id */
@@ -1056,7 +1243,7 @@ export interface components {
        * Kind
        * @enum {string}
        */
-      kind: 'capture' | 'detect' | 'pending' | 'revisit'
+      kind: 'capture' | 'detect' | 'pending' | 'revisit' | 'check'
       /** Title */
       title: string
       /** Technology */
@@ -1075,7 +1262,7 @@ export interface components {
       waiting_days: number
       /**
        * State
-       * @description capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked / pending: queued · running · error · linked · no_draft / revisit: met (판정 결과)
+       * @description capture: awaiting_approval · stale / detect(별도 파일 export.state): review · pending · stale · blocked / pending: queued · running · error · linked · no_draft / revisit: met (판정 결과) / check: check (확인 필요)
        * @enum {string}
        */
       state:
@@ -1092,11 +1279,12 @@ export interface components {
         | 'met'
         | 'not_met'
         | 'undetermined'
+        | 'check'
       /**
        * Actions
        * @description 이 항목에 할 수 있는 답. 빈 목록이면 보기만
        */
-      actions: ('approve' | 'edit' | 'reject' | 'ack')[]
+      actions: ('approve' | 'edit' | 'reject' | 'ack' | 'reject_rest')[]
       /**
        * Why
        * @description detect만: 왜 왔나 — 관문 판정 (예 `anthropic L5 × deprecation`). 관문 없이 만든 입력·capture는 null
@@ -1111,7 +1299,7 @@ export interface components {
       adr?: string | null
       /**
        * Message
-       * @description pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장
+       * @description pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장 / check: 후보 · 자리 수 한 줄
        */
       message?: string | null
     }
@@ -1273,7 +1461,7 @@ export interface components {
        * Kind
        * @description inbox일 때 Inbox 항목 종류
        */
-      kind: ('capture' | 'detect' | 'pending' | 'revisit') | null
+      kind: ('capture' | 'detect' | 'pending' | 'revisit' | 'check') | null
       /**
        * Title
        * @description inbox일 때 Inbox 항목 제목
@@ -1298,13 +1486,14 @@ export interface components {
             | 'met'
             | 'not_met'
             | 'undetermined'
+            | 'check'
           )
         | null
       /**
        * Answer
        * @description answered: 마지막 답
        */
-      answer: ('approve' | 'edit' | 'reject' | 'ack') | null
+      answer: ('approve' | 'edit' | 'reject' | 'ack' | 'reject_rest') | null
       /**
        * Outcome
        * @description answered: 마지막 답의 결과
@@ -1321,6 +1510,8 @@ export interface components {
             | 'recovered'
             | 'acked'
             | 'error'
+            | 'drafted'
+            | 'no_draft'
           )
         | null
       /** Answered At */
@@ -2809,6 +3000,242 @@ export interface operations {
     }
   }
   ack: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        item_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ActionResult']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  checkDraft: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        item_id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CheckRowRequest']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ActionResult']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  checkReject: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        item_id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CheckRowRequest']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ActionResult']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+      /** @description 서비스 오류 — detail 한 줄 */
+      500: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ErrorBody']
+        }
+      }
+    }
+  }
+  checkRejectRest: {
     parameters: {
       query?: never
       header?: never
