@@ -38,6 +38,29 @@ flowchart LR
 - **레이더가 올린 새 모델을 실제 평가셋으로 재고 바꾸지 않기로 했습니다.** Gemini 4 두 모델을 진료 도우미 앱의 추출 평가 88호출로 쟀습니다. 정확도는 가장 좋은 비교 기준과 같았지만 운영 모델보다 7배 느리고 3~4배 비쌌습니다.
 - **놓친 것도 기록합니다.** 예를 들어 Qwen3-Embedding은 레이더가 올리지 못했습니다. 따로 재 보니 지금 쓰는 BGE-M3보다 낫다고 할 수 없었고, 문서 인코딩은 2.6배 느렸습니다.
 
+## 결정 기록 예시
+
+레이더가 쓴 초안이 사람 결정을 거쳐 어떻게 남는지 보여 주는 실제 기록 세 건입니다. 결정 기록 레포에서 그대로 옮겼습니다([`docs/examples/adr/`](docs/examples/adr/)).
+
+| 기록 | 레이더가 올린 것 | 사람이 정한 것 |
+|---|---|---|
+| [0017 FastAPI 0.162.6](docs/examples/adr/0017-fastapi.md) | Python 3.10 지원 중단이 든 릴리스 대응 초안 | 채택. 앱 실험이 격리된 사본에서 기존 검사를 앞뒤로 통과시켰고, 그 PR을 merge했습니다 |
+| [0024 Electron · Node 보안 릴리스](docs/examples/adr/0024-electron.md) | Node 24.x 보안 릴리스가 Electron에 번들된 Node에 닿는지 검토 | 채택. Electron 45.4.1(Node 24.22.3)로 올리고, 앱이 쓰는 Node 서버 API를 점검한 결과도 적었습니다 |
+| [0029 Gemini 4 Carbon](docs/examples/adr/0029-gemini-4-carbon.md) | 진료 도우미 앱 평가 후보로 새 모델 검토 | 보류. 정확도는 같지만 느리고 비싸서입니다. 아래 재검토 조건을 레이더가 매주 확인합니다 |
+
+보류한 결정에는 "이게 바뀌면 다시 본다"는 조건을 근거 문장과 함께 남깁니다. 근거 문장이 없는 조건은 코드(`radar.py validate`)가 막습니다. 근거가 입력에 실제로 있는 문장인지는 평가에서 채점합니다.
+
+```yaml
+revisit_when:
+- id: rv-1
+  check_type: web
+  condition: Gemini 4 Carbon의 도입 가격 적용 기간(2026-11-30)이 끝난 뒤 공식 가격 페이지의 gemini-4-carbon
+    가격이 $2.00/$10.00 per 1M tokens에서 바뀌었는지 확인한다
+  source_hint: https://aistudio.google.com/docs/changelog.md#november-10-2026
+  basis: available at introductory [pricing](/docs/pricing#gemini-4-carbon) of $2.00
+    per 1M input tokens and $10.00 per 1M output tokens through November 30, 2026.
+```
+
 ## 만들면서 지킨 것
 
 - **안전 규칙은 코드가 집행합니다.** 모델에게 규칙을 더 말하기 전에, 그 규칙을 스크립트로 옮길 수 있는지 먼저 봅니다. 영향 범위가 의존성 표와 다르면 코드가 고칩니다. 근거 없는 판정은 「확인 못 함」으로 돌립니다.
@@ -81,6 +104,13 @@ cd desktop && npm ci && npm run dev                        # 데스크톱 앱 (�
 ```
 
 스텁 통과는 배관이 맞게 이어졌다는 뜻일 뿐, 모델의 판단을 잰 것은 아닙니다.
+
+### 실제 모델로 돌릴 때
+
+실행 엔진은 둘입니다.
+
+- **API 키**(`--engine api`): `.env`의 `ANTHROPIC_API_KEY`로 부릅니다. 다른 사람이 쓰거나 서비스로 돌릴 때는 이 경로를 씁니다.
+- **내 Claude Code 로그인**(`--engine claude-cli`): 내 기기에 설치하고 로그인한 공식 `claude` CLI를 `claude -p`로 부릅니다. 이 도구는 인증 정보를 읽거나 저장하지 않습니다. 로그인도 공식 CLI의 흐름(`claude auth login`)에 맡깁니다. 구독 사용은 [Anthropic의 약관과 사용 한도](https://code.claude.com/docs/en/legal-and-compliance)를 따릅니다. 그 한도는 개인의 일반적인 사용을 전제로 합니다.
 
 ## 측정 결과
 
