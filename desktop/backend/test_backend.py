@@ -278,7 +278,7 @@ def scenario_engine(tmp):
     print("\n— HYO-99: 엔진 상태 · 로그인 —")
     import engine_status as es
     fake = _fake_claude(os.path.join(tmp, "engine"))
-    with _Env(RADAR_CLAUDE_BIN=fake, FAKE_CLAUDE_AUTH="sub", ANTHROPIC_API_KEY=None):
+    with _Env(RADAR_CLAUDE_BIN=fake, FAKE_CLAUDE_AUTH="sub", ANTHROPIC_API_KEY=None, PATH=os.environ.get("PATH")):  # PATH는 아래 리눅스 터미널 대역 뒤 되돌린다
         svc = RadarService(os.path.join(tmp, "engine", "data"))
         c = TestClient(server.create_app(svc))
         e = c.get("/engine").json()
@@ -301,6 +301,15 @@ def scenario_engine(tmp):
         check("엔진: 상태를 못 읽으면 error (죽지 않음)", e["cli"]["installed"] and "못 읽었다" in (e["cli"]["error"] or ""), e["cli"])
 
         # 로그인 창 — 대역 launcher가 받은 argv · env를 본다
+        # 리눅스(CI 우분투, HYO-242)는 x-terminal-emulator가 없으면 창을 못 연다 — 이름만 있는 대역을 PATH 앞에 둔다(launcher가 대역이라 실행되지 않는다)
+        if sys.platform not in ("win32", "darwin"):
+            fake_bin = os.path.join(tmp, "engine", "fake-term-bin")
+            os.makedirs(fake_bin, exist_ok=True)
+            term = os.path.join(fake_bin, "x-terminal-emulator")
+            with open(term, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\nexit 0\n")
+            os.chmod(term, 0o755)
+            os.environ["PATH"] = fake_bin + os.pathsep + os.environ.get("PATH", "")
         seen = {}
         def rec(argv, **kw):
             seen.update(argv=argv, kw=kw)

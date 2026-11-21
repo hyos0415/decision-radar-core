@@ -1,27 +1,35 @@
-# 데스크톱 앱 검사 — PR마다 · main push마다 (desktop/를 건드렸을 때)
+# 데스크톱 앱 검사 — PR마다 (desktop/ · 코어를 건드렸을 때). main push에서는 돌지 않는다
 # 브랜치 보호가 없는 요금제라 merge를 막지는 못한다. 초록불을 보고 merge하는 것은 약속이다 (ONBOARDING.md §7)
 #
-# 백엔드는 쓰는 기기 두 OS에서 돈다 (10/26 사용자: Windows로 쓰다 Mac으로 옮긴다 — 두 경로 다 검증).
-#   Windows  PR마다 (GitHub 러너, 사용 시간 2배로 셈)
-#   macOS    켤 때만 — PR에 `mac` 라벨 · 수동 실행(workflow_dispatch) · 저장소 변수 MAC_RUNNER=on.
+# 사용 시간을 아낀다 (변경 2026-11-21, 사용자 — HYO-242: 11월 무료 시간을 거의 다 썼다. 1회 약 18분, 대부분이 Windows 2배)
+#   - main push 검사를 껐다 — PR에서 검사한 코드를 merge 뒤 다시 돌리지 않는다 (11/21 묶어 merge하니 연달아 6회)
+#   - 같은 PR에 새 push가 오면 앞선 실행을 멈춘다 (concurrency)
+#   - draft PR은 건너뛴다 — 「Ready for review」로 바꿀 때 돈다
+#   - 백엔드는 PR마다 우분투(1배). 주 기기가 M1이 되어 Windows는 켤 때만 — 처음(10/26)엔 「두 OS 다 검증」으로 PR마다 Windows였다
+#
+#   Linux    PR마다 (backend)
+#   Windows  켤 때만 — PR에 `windows` 라벨 · 수동 실행(workflow_dispatch). GitHub 러너, 사용 시간 2배로 셈
+#   macOS    켤 때만 — PR에 `mac` 라벨 · 수동 실행 · 저장소 변수 MAC_RUNNER=on.
 #            MAC_RUNNER=on이면 GitHub 러너(10배로 셈) 대신 등록한 M1(self-hosted, 차감 없음)에서 PR마다 돈다 — desktop/README.md 「Mac 검증」
 name: desktop
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
-    paths: ["desktop/**", "product/**", "collector/**", "pipeline/**", "registry/**", "requirements.txt", ".github/workflows/desktop.yml"]
-  push:
-    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths: ["desktop/**", "product/**", "collector/**", "pipeline/**", "registry/**", "requirements.txt", ".github/workflows/desktop.yml"]
   workflow_dispatch:
+
+# 같은 PR의 앞선 실행은 멈춘다. 라벨 이벤트(mac · windows 켜기)는 라벨마다 따로 묶어 진행 중인 검사를 멈추지 않는다
+concurrency:
+  group: desktop-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'labeled' && github.event.label.name || 'run' }}
+  cancel-in-progress: true
 
 env:
   PYTHONIOENCODING: utf-8   # Windows 러너 콘솔은 cp1252 — 한국어 출력에서 죽는다
 
 jobs:
   frontend:
-    if: github.event.action != 'labeled'
+    if: github.event.action != 'labeled' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -42,8 +50,8 @@ jobs:
         run: npm run gen:api && git diff --exit-code src/renderer/src/lib/api.gen.ts
 
   backend:
-    if: github.event.action != 'labeled'
-    runs-on: windows-latest
+    if: github.event.action != 'labeled' && github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -66,8 +74,38 @@ jobs:
       - name: 계약(openapi.json)이 백엔드 모델과 같은가 (HYO-91)
         run: python desktop/backend/export_openapi.py --check
 
+  backend-windows:
+    if: >-
+      github.event.pull_request.draft != true &&
+      (github.event_name == 'workflow_dispatch' ||
+       (contains(github.event.pull_request.labels.*.name, 'windows') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'windows')))
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            product/requirements.txt
+            registry/requirements.txt
+      - run: pip install -r requirements.txt -r product/requirements.txt -r registry/requirements.txt
+      - run: python registry/build.py --check
+      - run: python registry/tests/test_registry.py
+      - run: python desktop/backend/test_backend.py
+      - run: python product/radar/test_engines.py
+      - run: python product/radar/test_export.py
+      - run: python collector/tests/test_weekly.py
+      - run: python collector/tests/test_health.py
+      - run: python desktop/backend/export_openapi.py --check
+
   backend-mac:
-    if: vars.MAC_RUNNER == 'on' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'mac')
+    if: >-
+      github.event.pull_request.draft != true &&
+      (github.event.action != 'labeled' || github.event.label.name == 'mac') &&
+      (vars.MAC_RUNNER == 'on' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'mac'))
     runs-on: ${{ vars.MAC_RUNNER == 'on' && fromJSON('["self-hosted", "macOS", "ARM64"]') || 'macos-latest' }}
     steps:
       - uses: actions/checkout@v4
