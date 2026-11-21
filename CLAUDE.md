@@ -33,7 +33,7 @@
 | Anthropic `claude-sonnet-5-5` (effort medium) — `claude -p`(eval 러너 · 제품 구독 CLI 엔진 `engines.ClaudeCliRunner`, HYO-99 · 자리 질의 `pipeline/slots.py` · 관심사 질의 `pipeline/interest.py`, HYO-187) · API(스파이크 · 제품 API 엔진 · 관문 주간 등급 재분류 `weekly-tiers`, HYO-122) | eval · product · pipeline |
 | Anthropic `claude-haiku-5-5` (effort medium) — `claude -p` 레인 A 관문 (주간 사슬 `DEFAULT_GATE`, 묶음 10, W48부터 — W47까지 OpenAI `gpt-6.1-sol` API, HYO-169) | pipeline |
 | Claude Code routines (스킬 실사용, HYO-21) | skill |
-| OpenAI `gpt-6-sol` — `codex exec` (judge, HYO-20) | eval |
+| Google `gemini-4-carbon` — API (eval judge, `eval/judge/run_judge.py`, HYO-210 · 2026-11-21부터 — 그 전엔 OpenAI `gpt-6-sol` `codex exec`, HYO-20) | eval |
 | OpenAI `gpt-6-luna` (tier-screen, ADR 0007) | eval |
 
 ### 평가셋
