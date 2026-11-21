@@ -28,9 +28,15 @@ from .runtime import Runtime
 rc = ea.rc
 
 
-def all_case_ids():
+def is_synthetic(cid):
+    return str(cid).startswith("SYN-")
+
+
+def all_case_ids(synthetic=False):
+    """기본은 53케이스(eval/cases), synthetic이면 합성 케이스(eval/synthetic, SYN-*). 섞지 않는다 — 합성은 배관 확인용이다."""
+    pattern = os.path.join(rc.EVAL, "synthetic", "*.jsonl") if synthetic else os.path.join(rc.EVAL, "cases", "batch-*.jsonl")
     out = []
-    for f in sorted(glob.glob(os.path.join(rc.EVAL, "cases", "batch-*.jsonl"))):
+    for f in sorted(glob.glob(pattern)):
         out += [json.loads(l)["id"] for l in open(f, encoding="utf-8") if l.strip()]
     return out
 
@@ -103,11 +109,13 @@ def stub_spec(case):
     return {"kind": "stub", "script": S.revisit_script(S.SCRIPT["cases"].get(cid, {}))}
 
 
-def controls():
-    """(이름, 설정, flow) — 음성 대조. 채점기가 무력하지 않다는 것을 보인다 (CLAUDE.md 규율 3)."""
-    return ([(n, c, "revisit") for n, c in S.SCRIPT["controls"].items()]
-            + [(n, c, "capture") for n, c in S.SCRIPT["capture_controls"].items()]
-            + [(n, c, "detect") for n, c in S.SCRIPT["detect_controls"].items()])
+def controls(synthetic=False):
+    """(이름, 설정, flow) — 음성 대조. 채점기가 무력하지 않다는 것을 보인다 (CLAUDE.md 규율 3).
+    synthetic이면 합성 케이스에 건 대조만, 아니면 53케이스에 건 대조만 — 공개 사본은 53케이스가 없어 합성 대조로 채점기를 보인다."""
+    out = ([(n, c, "revisit") for n, c in S.SCRIPT["controls"].items()]
+           + [(n, c, "capture") for n, c in S.SCRIPT["capture_controls"].items()]
+           + [(n, c, "detect") for n, c in S.SCRIPT["detect_controls"].items()])
+    return [(n, c, f) for n, c, f in out if is_synthetic(c["case"]) == synthetic]
 
 
 def run_control(rt, name, c, flow, root):
@@ -143,6 +151,8 @@ def build_parser(rt):
     ap.add_argument("--model", choices=["stub", "anthropic"], default=None, help="anthropic = 실제 Claude (API 과금, .env 키)")
     ap.add_argument("--k", type=int, default=1)
     ap.add_argument("--controls", action="store_true", help="케이스를 지정해도 음성 대조를 돈다 (스텁)")
+    ap.add_argument("--synthetic", action="store_true",
+                    help="합성 케이스(eval/synthetic, SYN-*)와 그 음성 대조만 — 공개 사본에서 도는 것. 53케이스 정답지는 비공개다 (HYO-235)")
     rt.add_args(ap)  # --engine api|claude-cli (HYO-99) — 빠져 있어 제품 eval이 늘 API로 돌았다
     return ap
 
@@ -162,7 +172,9 @@ def main(argv=None):
     root = os.path.join(rc.EVAL, "runs", stamp)
     os.makedirs(root)
     p4 = ea.radar_unmodified()
-    cases = a.cases or all_case_ids()
+    cases = a.cases or all_case_ids(a.synthetic)
+    if not cases:   # 조용히 0건 「통과」를 내지 않는다 (규율 3) — 공개 사본에는 53케이스가 없다
+        sys.exit("돌릴 케이스가 없다 — eval/cases(53케이스 정답지)는 비공개다. 공개 사본에서는 --synthetic으로 합성 케이스를 돈다")
     rows = []
     for cid in cases:
         case = rc.load_case(cid)
@@ -177,7 +189,7 @@ def main(argv=None):
 
     ctrl = {}
     if stub and (not a.cases or a.controls):
-        for name, c, flow in controls():
+        for name, c, flow in controls(a.synthetic or all(is_synthetic(x) for x in cases)):
             ctrl[name] = run_control(rt, name, c, flow, root)
     ctrl_ok = all(ctrl.values())
 

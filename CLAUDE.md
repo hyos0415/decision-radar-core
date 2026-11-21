@@ -38,6 +38,7 @@
 ### 평가셋
 
 - 스킬 회귀: 53케이스 정답지(`eval/cases/`)는 비공개다 — 공개 사본에는 없다
+- 합성 케이스: `eval/synthetic/` (5케이스 + 음성 대조 6, `run_eval.py --stub --synthetic`) — 53케이스 정답지를 비공개로 두는 공개 사본에서 도는 것 (HYO-235). 스텁만 돌렸다
 - 스크립트 테스트: `test_radar.py` 40/40 · `eval/runner/test_leak.py` · `collector/tests/test_collector.py` · `collector/tests/test_snapshot.py` · `collector/tests/test_health.py` · `infra/smoke.py`
 
 ### 알려진 병목

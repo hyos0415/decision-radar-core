@@ -8,6 +8,7 @@ from . import _spike
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _SPIKE = os.path.join(_spike.SPIKE_DIR, "common", "stub_script.json")
+_SYNTHETIC = os.path.join(HERE, "..", "..", "eval", "synthetic", "stub_script.json")   # 합성 케이스(SYN-*) 대본 · 대조 (HYO-235)
 
 
 def load():
@@ -18,6 +19,10 @@ def load():
     s["controls"].update(x["controls"])
     s["detect"] = x["detect"]
     s["detect_controls"] = x["detect_controls"]
+    if os.path.exists(_SYNTHETIC):
+        y = json.load(open(_SYNTHETIC, encoding="utf-8"))
+        for key in ("cases", "capture", "controls", "capture_controls", "detect_controls"):
+            s.setdefault(key, {}).update(y.get(key) or {})
     return s
 
 
