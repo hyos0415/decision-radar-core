@@ -141,6 +141,23 @@ python pipeline/tests/test_replay.py                                          # 
 - 단계는 주간 사슬처럼 제품 CLI를 자식 프로세스로 부른다 (`profile_filter run` → `slots run` → `detect_feed --no-fetch` → `run_detect.py --model claude-cli` × k). 자식 env에서 `RADAR_UNION` · `RADAR_EXPORT` · 실제 폴더 env를 지운다
 - 출력 `<out>/<주>/`: `week.json`(시각 · 커밋 · 자른 등급 · 사람 결정) · `basis.json` · `adr/`(그 시점 사본) · `tiers.json` · `gate/` · `feed/`(trace.jsonl 포함) · `detect/k1..k3/` · `skill/` · `steps.log`. 루트에 `plan.json` · `replay.json`(실행 기록) · `compare.json` · `compare.md`
 
+## 승인 뒤 — 올려 보기 (HYO-239: `tryout.py`)
+
+레이더는 「볼 만하다」까지 알린다. 사람이 승인한 **의존성 릴리스**를 대상 프로젝트의 격리된 사본에서 올려 보고, 그 component의 기존 검사를 올리기 전 · 후로 돌려 결과를 남긴다. 모델을 부르지 않는다.
+
+```bash
+python -m pipeline.tryout --adr ../adr/docs/adr/0017-fastapi.md --repo decision-radar --component desktop --checks ../adr/radar-checks.json
+python -m pipeline.tryout --adr ../adr/docs/adr/0019-langchain.md --repo decision-radar --component product --with langchain-core==1.8.0   # 혼자서는 설치가 안 될 때
+
+python pipeline/tests/test_tryout.py           # 오프라인 — 가짜 대상 repo · 가짜 환경 + 변이 6개
+```
+
+- 순서: 사본(대상의 `origin/<기본>`) → 기준(지금 고정 버전으로 설치 · 검사) → manifest의 `이름==버전` 줄을 올림 → 다시 설치 · 같은 검사 → `result.json` · `report.md` (기본 `pipeline/out/tryout/<기록>-<패키지>-<버전>-<repo>-<component>/`)
+- 판정: `pass`(통과 + 검사가 그 패키지를 실제로 올렸다) · `pass_not_exercised`(통과했지만 올린 검사가 없다 — **이 검사로는 모른다**) · `fail`(기준에서 통과하던 검사가 깨짐) · `install_failed` · `not_applied` · `baseline_failed` · `no_pin` · `no_checks` · `already`. 기준에서 실패하던 검사는 「원래 실패」로 따로 적고 올린 탓으로 치지 않는다
+- **대상에 쓰지 않는다** — clone한 사본에서만 돈다. 브랜치 push · PR · ADR 수정은 하지 않는다 (결정은 사람, HYO-116). uv가 필요하다(임시 가상환경)
+- 검사 설정(`--checks`, 기본 = 대상 목록 옆 `radar-checks.json`): repo · component마다 `manifests`(고정 줄을 찾을 파일) · `install`(`uv pip install -r …`) · `run`(스크립트와 인자). 버전은 결정 기록의 `use`(「의존성 릴리스 0.162.6 대응」)에서 읽고, 못 읽으면 `--to`
+- 한계: `이름==버전` 고정 줄만 고친다(범위 고정 · package.json은 아직) · 「그 패키지를 올렸나」는 검사 프로세스 안의 `sys.modules`만 본다(자식 프로세스에서만 쓰면 「아니오」) · 기존 검사가 덮지 않는 동작은 알 수 없다
+
 ## 레인 C 화제 (HYO-127: `topics.py`)
 
 분야를 가리지 않고 그 주에 인기 있던 소식을 토픽으로 묶어 상위 k (doc-pipeline §2-3 변경 2026-10-19). A·B와 점수를 합치지 않는다. 네트워크·모델 호출 없음.
