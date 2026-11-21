@@ -49,10 +49,15 @@ for f in sorted(glob.glob(os.path.join(HERE, "*.py"))):
             bad.append(f"{os.path.basename(f)}:{i}")
 check("소스에 다른 status 값을 쓰는 곳 없음", not bad, bad)
 
-print("2. detect 그래프")
+print("2. detect 흐름 (plain Python — ADR 0030, HYO-220)")
 src = open(os.path.join(HERE, "detect.py"), encoding="utf-8").read()
-added = set(re.findall(r'g\.add_node\("(\w+)"', src))
-check("노드 = {load, triage, draft, write, repair, report}", added == {"load", "triage", "draft", "write", "repair", "report"}, sorted(added))
+from radar import detect as detect_mod  # noqa: E402
+flow = detect_mod.detect_flow(Ctx(radar_py="x", env={}, adr_dir=".", targets={}, dry_run=True), object())
+check("단계 = {load, triage, draft, write, repair, report} — status 단계 · 승인 우회 단계 없음",
+      tuple(flow.steps) == detect_mod.STEPS == ("load", "triage", "draft", "write", "repair", "report"), tuple(flow.steps))
+check("흐름 코드가 langgraph를 부르지 않는다", not re.search(r"^\s*(from|import) langgraph", src, re.M))
+check("detect 상태 합치기: drafts · p3는 이어 붙이고 나머지는 덮는다",
+      detect_mod.merge({"p3": [1], "drafts": ["a"], "kept": [1]}, {"p3": [2], "drafts": ["b"], "kept": []}) == {"p3": [1, 2], "drafts": ["a", "b"], "kept": []})
 check("모델에게 주는 도구는 읽기뿐 (snapshot_* · repo_grep)", [t.name for t in DETECT_TOOLS] == ["snapshot_fetch", "snapshot_search", "repo_grep"])
 
 # 제품 eval이 엔진을 고를 수 있다 (HYO-99) — run_eval.py가 --engine을 안 받아 CLI 스모크가 늘 API로 돌던 틈

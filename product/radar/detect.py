@@ -1,7 +1,10 @@
-"""detect 그래프 — 스킬 SKILL.md 흐름 2와 같은 명세 (R10·R14·R16·R17). 새로 만들었다 (HYO-43).
+"""detect 흐름 — 스킬 SKILL.md 흐름 2와 같은 명세 (R10·R14·R16·R17). 새로 만들었다 (HYO-43).
 
-  load ─▶ triage ─▶ screen ─Send로 후보마다─▶ draft ─▶ write ─▶ (validate 실패가 있으면) repair ─▶ report
-  (코드)  (모델)    (코드)                    (모델)   (코드)                              (모델+코드)
+  load ─▶ triage ─▶ screen ─후보마다 병렬─▶ draft ─▶ write ─▶ (validate 실패가 있으면) repair ─▶ report
+  (코드)  (모델)    (코드)                  (모델)   (코드)                              (모델+코드)
+
+순서는 plain Python(asyncio)이 부른다 — 처음(0009)엔 LangGraph StateGraph + Send였다. 단계 함수와 그 안의 규칙 집행은 그대로이고
+부르는 순서 · 병렬만 코드가 직접 한다 (ADR 0030, HYO-220). 단계 이름은 STEPS — test_product가 설계와 대조한다.
 
   load    대상 repo의 CLAUDE.md·manifest 읽기 + 소식 수집(radar.py snapshot feed). 거부한 소식(HYO-142)·이미 반영된 릴리스(HYO-162)는 코드가 뺀다
   triage  모델이 소식을 거른다 — 후보(technology·affected·dependency)와 버린 것(이유). 의존성 릴리스는 breaking·security·major만 (A5b)
@@ -14,13 +17,11 @@ status를 쓰는 노드는 없다 (R8): AdrDraft에 status 칸이 없고 ops.ren
 기존 ADR은 읽기만 한다 — radar.py match가 읽고, write는 새 번호의 새 파일만 만든다 (INV-1).
 """
 
+import asyncio
 import json
 import operator
 import uuid
 from typing import Annotated, TypedDict
-
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send
 
 from common.core import check_scope
 from common.schemas import AdrDraft
@@ -32,11 +33,12 @@ from .detect_schemas import DraftBody, Rescued, Triage
 from .engines import as_runner
 from .tools import detect_tools
 
+STEPS = ("load", "triage", "draft", "write", "repair", "report")  # 단계 — status를 쓰는 단계 · 승인을 건너뛰는 단계가 끼면 test_product가 잡는다
 DETECT_MAX_TURNS = 8  # draft · repair — 소식 몇 건을 열어 보고 답 한 번이면 끝난다. 넘으면 루프로 보고 오류로 센다 (P3)
 TRIAGE_MAX_TURNS = 24  # triage는 소식 전체(주 20~40건)를 본다 — 8이면 열기·코드 찾기를 합쳐 8번뿐이라 찾아볼 여유가 없었다 (HYO-205, W47 세 번 모두 검색 0회)
 
 
-class DetectState(TypedDict, total=False):
+class DetectState(TypedDict, total=False):  # 흐름이 단계 사이에 넘기는 값. Annotated(operator.add) 칸은 단계 결과를 덮지 않고 이어 붙인다 (merge)
     now: str
     stack: str
     feed: list
@@ -56,7 +58,18 @@ def _item_for(feed, urls):
     return next((it for it in feed if it.get("url") in urls), None)
 
 
-def detect_graph(ctx, model):
+_APPEND = {k for k, t in DetectState.__annotations__.items() if getattr(t, "__metadata__", None) == (operator.add,)}   # drafts · p3
+
+
+def merge(state, update):
+    """단계 결과를 흐름 상태에 합친다 — drafts · p3는 이어 붙이고 나머지는 덮는다 (LangGraph 리듀서가 하던 일)."""
+    for k, v in (update or {}).items():
+        state[k] = list(state.get(k) or []) + list(v or []) if k in _APPEND else v
+    return state
+
+
+def detect_flow(ctx, model):
+    """→ 흐름 하나 (`await flow(now)` → 상태 dict). 단계 함수는 `flow.steps`."""
     runner = as_runner(model)  # 에이전트 셋(triage·draft·repair)을 돌리는 실행 엔진 (engines.py, HYO-99)
 
     def agent(name, system, schema, user):
@@ -119,10 +132,11 @@ def detect_graph(ctx, model):
                                                               "excluded": [e["url"] for e in excluded if e["url"] in slotted]}}
         return {"kept": kept, "skipped": skipped, "dropped": dropped, "excluded": rejected + excluded, "security": security, "p3": p3}
 
-    def fan_out(state):
-        sends = [Send("draft", {"now": state["now"], "w": w, "item": _item_for(state["feed"], w["candidate"]["source_urls"])})
-                 for w in state["kept"]]
-        return sends or ["write"]
+    async def draft_all(state):
+        """남은 후보마다 draft를 병렬로 — 결과는 후보 순서대로 합친다 (번호는 write가 idx 순서로 준다)."""
+        outs = await asyncio.gather(*(draft_node({"now": state["now"], "w": w, "item": _item_for(state["feed"], w["candidate"]["source_urls"])})
+                                      for w in state.get("kept") or []))
+        return {"drafts": [d for o in outs for d in o.get("drafts") or []], "p3": [p for o in outs for p in o.get("p3") or []]}
 
     async def draft_node(inp):
         w = inp["w"]
@@ -182,28 +196,30 @@ def detect_graph(ctx, model):
                                        security=state.get("security"))
         return {"report": rep}
 
-    g = StateGraph(DetectState)
-    g.add_node("load", load_node)
-    g.add_node("triage", triage_node)
-    g.add_node("draft", draft_node)
-    g.add_node("write", write_node)
-    g.add_node("repair", repair_node)
-    g.add_node("report", report_node)
-    g.add_edge(START, "load")
-    g.add_edge("load", "triage")
-    g.add_conditional_edges("triage", fan_out, ["draft", "write"])
-    g.add_edge("draft", "write")
-    g.add_conditional_edges("write", after_write, ["repair", "report"])
-    g.add_edge("repair", "report")
-    g.add_edge("report", END)
-    return g.compile()
+    steps = {"load": load_node, "triage": triage_node, "draft": draft_all, "write": write_node, "repair": repair_node, "report": report_node}
+    assert tuple(steps) == STEPS, (tuple(steps), STEPS)
+
+    async def step(state, name):
+        out = steps[name](state)
+        return merge(state, await out if asyncio.iscoroutine(out) else out)
+
+    async def flow(now):
+        s = {"now": now, "drafts": [], "p3": []}
+        for name in ("load", "triage", "draft", "write"):
+            await step(s, name)
+        if after_write(s) == "repair":
+            await step(s, "repair")
+        return await step(s, "report")
+
+    flow.steps = steps
+    return flow
 
 
 async def detect(ctx, model, now, model_name):
     check_scope(ctx)
     runner = as_runner(model)
     log = runner.attach_log(ctx, "detect", model_name)
-    s = await detect_graph(ctx, runner).ainvoke({"now": now, "drafts": [], "p3": []})
+    s = await detect_flow(ctx, runner)(now)
     p3 = list(s.get("p3") or [])
     p3 += [{"kind": "draft_invalid", "adr": c["adr"], "errors": c["validate_errors"]}
            for c in s["report"]["candidates"] if c["validate_errors"]]

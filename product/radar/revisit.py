@@ -1,15 +1,12 @@
-"""revisit 그래프 — 스파이크 langgraph_spike/runtime.py에서 옮겨 왔다. 바뀐 것은 호출 기록(llm_log)뿐이다.
+"""revisit 흐름 — 스파이크 langgraph_spike/runtime.py에서 옮겨 왔다.
 
-StateGraph — list(radar.py list) ─Send로 조건마다─▶ judge(에이전트 + Verdict 구조화 출력) ─▶ decide(radar.py decide --apply)
-judge는 병렬이다. 판정 결과를 손으로 옮기지 않는다 — 변화·알림·기록은 radar.py decide가 정한다 (R3·R4·R8).
-에이전트는 실행 엔진(engines.py)이 돌린다 — 지금 코드는 LangChainRunner(create_agent), 구독 CLI는 HYO-99.
+list(radar.py list) ─조건마다 병렬─▶ judge(에이전트 + Verdict 구조화 출력) ─▶ decide(radar.py decide --apply)
+판정 결과를 손으로 옮기지 않는다 — 변화·알림·기록은 radar.py decide가 정한다 (R3·R4·R8).
+에이전트는 실행 엔진(engines.py)이 돌린다 — API는 LangChainRunner(create_agent), 구독 CLI는 ClaudeCliRunner (HYO-99).
+순서 · 병렬은 plain Python(asyncio)이 부른다 — 처음(0009)엔 LangGraph StateGraph + Send였다 (ADR 0030, HYO-220).
 """
 
-import operator
-from typing import Annotated, TypedDict
-
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send
+import asyncio
 
 from common import ops
 from common.core import check_scope
@@ -20,26 +17,9 @@ from .engines import as_runner, limit  # noqa: F401 — limit은 예전 자리(r
 from .tools import REVISIT_TOOLS
 
 
-class RevisitState(TypedDict, total=False):
-    now: str
-    adrs: list
-    rows: Annotated[list, operator.add]  # judge 병렬 가지들의 결과가 여기로 합쳐진다
-    p3: Annotated[list, operator.add]
-    report: dict
-
-
-def revisit_graph(ctx, model):
+def revisit_flow(ctx, model):
+    """→ 흐름 하나 (`await flow(now)` → {report, p3})."""
     runner = as_runner(model)
-
-    def list_node(state):
-        adrs = ops.radar(ctx, "list", ctx.adr_dir, "--in-scope")
-        humans = [ops.human_row(a, c) for a in adrs for c in a.get("revisit_when") or [] if c.get("check_type") == "human"]
-        return {"adrs": adrs, "rows": humans}
-
-    def fan_out(state):
-        sends = [Send("judge", {"adr": a, "cond": c, "now": state["now"]})
-                 for a in state["adrs"] for c in a.get("revisit_when") or [] if c.get("check_type") != "human"]
-        return sends or ["decide"]
 
     async def judge_node(inp):
         adr, cond = inp["adr"], inp["cond"]
@@ -53,24 +33,22 @@ def revisit_graph(ctx, model):
         err = [] if r.tool_calls else [{"adr": adr["id"], "condition_id": cond.get("id"), "kind": "tool_call_missing"}]
         return {"rows": [ops.verdict_row(adr, cond, r.structured)], "p3": err}
 
-    def decide_node(state):
-        d = ops.decide(ctx, state["rows"], state["now"])
-        return {"report": ops.revisit_report(ctx, d, state["now"])}
+    async def flow(now):
+        adrs = ops.radar(ctx, "list", ctx.adr_dir, "--in-scope")
+        rows = [ops.human_row(a, c) for a in adrs for c in a.get("revisit_when") or [] if c.get("check_type") == "human"]
+        outs = await asyncio.gather(*(judge_node({"adr": a, "cond": c, "now": now})
+                                      for a in adrs for c in a.get("revisit_when") or [] if c.get("check_type") != "human"))
+        rows += [r for o in outs for r in o["rows"]]   # 사람 조건 줄 다음에 판정 줄 — 조건 순서대로 (decide가 받는 순서)
+        p3 = [p for o in outs for p in o["p3"]]
+        d = ops.decide(ctx, rows, now)
+        return {"report": ops.revisit_report(ctx, d, now), "rows": rows, "p3": p3}
 
-    g = StateGraph(RevisitState)
-    g.add_node("list", list_node)
-    g.add_node("judge", judge_node)
-    g.add_node("decide", decide_node)
-    g.add_edge(START, "list")
-    g.add_conditional_edges("list", fan_out, ["judge", "decide"])
-    g.add_edge("judge", "decide")
-    g.add_edge("decide", END)
-    return g.compile()
+    return flow
 
 
 async def revisit(ctx, model, now, model_name):
     check_scope(ctx)
     runner = as_runner(model)
     log = runner.attach_log(ctx, "revisit", model_name)
-    s = await revisit_graph(ctx, runner).ainvoke({"now": now, "rows": [], "p3": []})
+    s = await revisit_flow(ctx, runner)(now)
     return s["report"], {"p3_errors": s.get("p3") or [], **log.totals()}
