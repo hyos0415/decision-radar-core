@@ -15,6 +15,9 @@ HYO-228 손 실험(`pipeline/out/hyo228/run_embed.py`, 2026-11-21, gitignore)을
 - pipeline_tag가 임베딩(sentence-similarity · feature-extraction)이 아니면 not_embedding — 리랭커 · 생성 모델을 임베딩으로 재지 않는다
 - fp32 가중치가 8GB를 넘으면 too_big — M1 16GB (11/21 Qwen3-8B를 못 돌렸다)
 
+비용 (사용자 2026-11-22 「구분 안 됨이면 메모리 · 속도 같은 부수적인 걸 재야」): 두 쪽 매개변수(→ fp32 가중치 메모리) · 같은 청크 표본 256개의
+문서 인코딩 속도(캐시 없이, 데운 뒤 1회) · 질의 p50 · 색인 벡터 크기를 적고, 후보가 지금 것의 몇 배인지 한 문장으로 낸다. 구분 안 됨이면 보고서 맨 앞에 둔다.
+
 후보 쓰는 법: sentence-transformers로 연다 · fp32 · normalize · 모델이 적어 둔 prompts 중 query(질의)와 document(문서)만 그대로 쓴다
 (Qwen3는 query만 — 공식 권장) · 길이 상한 = min(모델 상한, 2048), 청크가 넘으면 자르지 않고 실패. 차원은 1024가 아니어도 된다.
 결과: <out>/report.json · report.md. 결정은 사람 — 이 결과는 근거다.
@@ -38,6 +41,7 @@ MAX_LEN_CAP = 2048
 BOOT, SEED = 10000, 20261121
 EMBED_TAGS = ("sentence-similarity", "feature-extraction")
 MAX_FP32_BYTES = 8e9
+ENCODE_SAMPLE = 256          # 비용 — 문서 인코딩 속도를 잴 청크 표본 (코퍼스에서 고르게 · 두 쪽 같다)
 
 VERDICTS = {
     "better": "나음 — test 전체 nDCG@10 짝 차이의 95% 구간이 0보다 크다",
@@ -107,11 +111,43 @@ def report_md(r):
         for t, x in rows.items():
             lines.append(f"| {t} | {x['n']} | {x['base']:.3f} | {x['cand']:.3f} | {x['diff']:+.3f} | {x['ci95']} | {x['wins']}/{x['ties']}/{x['losses']} |")
     if r.get("arms"):
-        lines += ["", "| | 색인(초) | 질의 p50(ms) | 벡터(MB) | 차원 |", "|---|---|---|---|---|"]
-        for name, a in r["arms"].items():
-            lines.append(f"| {name} | {a['index_seconds']} | {a['query_ms_p50']} | {a['vectors_mb']} | {a['dim']} |")
+        a = r["arms"]
+        lines += ["", "## 비용 — 품질이 같으면 이것으로 정한다", ""]
+        if r.get("verdict") == "indistinguishable":
+            lines += [f"품질로는 구분이 안 된다. **{cost_summary(a)}**", ""]
+        else:
+            lines += [cost_summary(a), ""]
+        lines += ["| | 매개변수 | 가중치 메모리(fp32) | 차원 | 색인 벡터 | 문서 인코딩 | 질의 p50 |", "|---|---|---|---|---|---|---|"]
+        for name, x in a.items():
+            p = x.get("params")
+            lines.append(f"| {'지금 것' if name == 'base' else '후보'} | {f'{p / 1e6:,.0f}M' if p else '—'} | {f'{p * 4 / 1e9:.2f}GB' if p else '—'} | {x['dim']} | "
+                         f"{x['vectors_mb']}MB | {x.get('encode_per_s', '—')}청크/초 | {x['query_ms_p50']}ms |")
+        n = (a.get("cand") or {}).get("encode_sample")
+        bs = " · ".join(f"{'지금 것' if k == 'base' else '후보'} {v['batch_size']}" for k, v in a.items() if v.get("batch_size"))
+        lines += ["", f"문서 인코딩은 같은 청크 표본 {n}개를 캐시 없이 한 번 잰 값이다(먼저 8개로 데운 뒤 · 같은 기기"
+                  + (f" · 배치 크기는 각자 기본값 {bs}" if bs else "") + "). 지금 것은 dense만 센다(검색에 쓰는 것). "
+                  "가중치 메모리는 매개변수 × 4바이트 — 실행 중 활성 메모리는 따로 재지 않았다. 질의 p50은 질의 인코딩 + 정확 탐색."]
     lines += ["", "질의 수가 작다(유형당 4~8) — 유형별 차이는 참고다. 판정은 test 전체 하나로 한다. 채택 여부는 사람이 정한다.", ""]
     return "\n".join(lines)
+
+
+def _ratio(cand, base):
+    return cand / base if cand and base else None
+
+
+def cost_summary(arms):
+    """비용 줄 둘 → 한 문장 (후보가 지금 것에 비해). 잴 수 없었던 항목은 뺀다."""
+    b, c = arms.get("base") or {}, arms.get("cand") or {}
+    parts = []
+    if (x := _ratio(c.get("params"), b.get("params"))) is not None:
+        parts.append(f"모델 크기 {x:.2f}배")
+    if (x := _ratio(c.get("encode_per_s"), b.get("encode_per_s"))) is not None:
+        parts.append(f"문서 인코딩 속도 {x:.2f}배" + (" (느림)" if x < 0.95 else " (빠름)" if x > 1.05 else ""))
+    if (x := _ratio(c.get("query_ms_p50"), b.get("query_ms_p50"))) is not None:
+        parts.append(f"질의 지연 {x:.2f}배" + (" (느림)" if x > 1.05 else " (빠름)" if x < 0.95 else ""))
+    if (x := _ratio(c.get("vectors_mb"), b.get("vectors_mb"))) is not None:
+        parts.append(f"색인 크기 {x:.2f}배")
+    return ("후보는 지금 것에 비해 " + " · ".join(parts)) if parts else "비용을 재지 못했다"
 
 
 def finish(r, out):
@@ -213,6 +249,15 @@ def _encoders():
     return Candidate, AnyDimEmbedder, Flat
 
 
+def n_params(model):
+    """모델 객체(SentenceTransformer · FlagEmbedding 포장) → 매개변수 수 | None. 안쪽 .model까지 내려가 torch 모듈을 찾는다."""
+    import torch
+    for obj in (model, getattr(model, "model", None), getattr(getattr(model, "model", None), "model", None)):
+        if isinstance(obj, torch.nn.Module):
+            return int(sum(p.numel() for p in obj.parameters()))
+    return None
+
+
 def per_query_ndcg(qrels, run):
     from ranx import Qrels, Run, evaluate
     return {qid: float(evaluate(Qrels({qid: qrels[qid]}), Run({qid: run.get(qid) or {"__no_result__": 0.0}}), "ndcg@10")) for qid in qrels}
@@ -269,6 +314,22 @@ def run(candidate, out, revision=None, device=None, batch=8, chunk_k=100, info=N
         print(f"[{name}] 색인 {secs:.1f}s · 질의 p50 {r['arms'][name]['query_ms_p50']}ms · 차원 {strat.mat.shape[1]}", flush=True)
         (out / f"run-{name}.json").parent.mkdir(parents=True, exist_ok=True)
         (out / f"run-{name}.json").write_text(json.dumps(runs[name], ensure_ascii=False), encoding="utf-8")
+    # 비용 — 품질이 구분 안 되면 결정은 여기서 갈린다 (사용자 2026-11-22). 색인 시간은 캐시면 0이라, 같은 표본을 캐시 없이 따로 잰다
+    sample = [c["text"] for c in chunks[::max(1, len(chunks) // ENCODE_SAMPLE)][:ENCODE_SAMPLE]]
+    for name, emb in arms.items():
+        enc = emb.encoder
+        if name == "base":       # 검색에 쓰는 dense만 — sparse까지 세면 지금 것이 불리하다
+            fn = lambda xs, e=enc: e.model.encode(xs, batch_size=e.batch_size, max_length=e.max_length,  # noqa: E731
+                                                  return_dense=True, return_sparse=False, return_colbert_vecs=False)
+        else:
+            fn = lambda xs, e=enc: e._enc(xs, "document" if e.doc_prompt else None)  # noqa: E731
+        fn(sample[:8])
+        t0 = time.perf_counter()
+        fn(sample)
+        secs = time.perf_counter() - t0
+        r["arms"][name].update(params=n_params(enc.model), encode_sample=len(sample), encode_seconds=round(secs, 1), batch_size=enc.batch_size,
+                               encode_per_s=round(len(sample) / secs, 1) if secs > 0 else None)
+        print(f"[{name}] 매개변수 {r['arms'][name]['params']} · 인코딩 {r['arms'][name]['encode_per_s']}청크/초 (표본 {len(sample)})", flush=True)
     rng = random.Random(SEED)
     qtype = {q["qid"]: q["type"] for q in queries}
     for split in ("test", "dev"):

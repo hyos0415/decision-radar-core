@@ -308,6 +308,20 @@ def test_compare_embed_judging():
     assert "구분 안 됨" in md and "| K | 2 |" in md and "채택 여부는 사람" in md, md
 
 
+def test_compare_embed_cost_when_quality_ties():
+    """품질이 구분 안 되면 결정은 비용으로 — 크기 · 문서 인코딩 속도 · 질의 지연 · 색인 크기를 지금 것과 견준 한 문장 (사용자 2026-11-22)."""
+    from arena import compare_embed as ce
+    arms = {"base": {"params": 568e6, "encode_per_s": 40.0, "query_ms_p50": 110.0, "vectors_mb": 15.8, "dim": 1024, "encode_sample": 256},
+            "cand": {"params": 596e6, "encode_per_s": 20.0, "query_ms_p50": 130.0, "vectors_mb": 15.8, "dim": 1024, "encode_sample": 256}}
+    s = ce.cost_summary(arms)
+    assert s == "후보는 지금 것에 비해 모델 크기 1.05배 · 문서 인코딩 속도 0.50배 (느림) · 질의 지연 1.18배 (느림) · 색인 크기 1.00배", s
+    assert ce.cost_summary({"base": {}, "cand": {}}) == "비용을 재지 못했다"
+    tie = ce.report_md({"candidate": {"model": "Acme/x"}, "gold": "gold@v1.2", "verdict": "indistinguishable", "arms": arms})
+    assert "품질로는 구분이 안 된다. **후보는" in tie and "| 후보 | 596M | 2.38GB | 1024 | 15.8MB | 20.0청크/초 | 130.0ms |" in tie, tie
+    win = ce.report_md({"candidate": {"model": "Acme/x"}, "gold": "gold@v1.2", "verdict": "better", "arms": arms})
+    assert "품질로는 구분이 안 된다" not in win and "후보는 지금 것에 비해" in win, win
+
+
 MUTATIONS = [
     ("비용 문 없음", experiment, "run", lambda orig: (lambda adr_path, out, export=False, confirm=False, root=None: orig(adr_path, out, export, True, root)),
      lambda: test_cost_gate_needs_confirm()),

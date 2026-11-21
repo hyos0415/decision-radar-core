@@ -147,6 +147,7 @@
 - 놓친 것
   - Haiku 5.5 · Terra: `docs/decisions/2026-11-04-missed-items.md`
   - Qwen3-Embedding: HYO-228 — Arena gold@v1.2, 같은 평면 검색. test 36문항 nDCG@10 BGE-M3 0.579 → 0.618(+0.039, 95% 신뢰구간이 0을 포함) · K 유형 +0.216(구간 0.05~0.38) · dev 19문항 −0.096. 레이더 W46 기록에서 관심사 순위로 잘림. 원자료 `pipeline/out/hyo228/report.json`(gitignore)
+    - 비용(2026-11-22, 임베딩 레시피 `arena/compare_embed.py`로 다시 잼, M1 MPS): 매개변수 596M 대 569M(1.05배) · 문서 인코딩 초당 2.8 대 7.3청크(0.38배, 표본 256개 · 배치 8 대 16) · 질의 p50 130ms 대 111ms · 색인 크기 같음. 품질이 구분 안 되는데 느리다 — 바꿀 근거가 없다는 결론이 더 분명해졌다
   - llama.cpp: medical-mate-ai PR #160(의존성 표에 줄) · ADR 0021(affected가 fineprint) · radar-snapshots `8ce07bf`(뺌 표시 되돌림)
   - Gemini 4 Neon: HYO-215(주 1회 수집의 한계)
 - 수집량: radar-snapshots `2026-W41`~`W47` `items.jsonl`(2,290 · 2,642 · 2,454 · 2,562 · 2,601 · 2,807 · 3,085). W47 `detect/2026-W47/funnel.json`(3,094 → 레인 A 344 → 남김 30 → detect 입력 43)
