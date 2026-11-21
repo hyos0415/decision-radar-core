@@ -58,8 +58,12 @@ def summarize(rep, funnel, adr_dir):
     sc = sec.get("slot_candidates") or {}
     if sc:  # 자리 질의가 고른 후보 — 거르기가 다시 빼지 못한다 (HYO-205)
         lines.append(f"자리 질의 후보 {sc.get('total', 0)}건 · 거르기가 버려 되돌림 {len(sc.get('rescued') or [])}건 · 되돌리지 못함 {len(sc.get('excluded') or [])}건")
-    if "total" in sec:  # 관문이 security로 남긴 소식 — 「안 쓴다」로는 못 뺀다 (HYO-205)
-        lines.append(f"보안 소식 {sec.get('total', 0)}건 · 「안 쓴다」며 버린 것을 되돌림 {len(sec.get('rescued') or [])}건 · 다른 이유로 뺌 {len(sec.get('excluded') or [])}건")
+    if "total" in sec:  # 관문이 security로 남긴 소식 — 거르기가 못 뺀다 (HYO-205 「안 쓴다」 → HYO-206 이유와 무관)
+        lines.append(f"보안 소식 {sec.get('total', 0)}건 · 거르기가 버려 되돌림 {len(sec.get('rescued') or [])}건 · 되돌리지 못함 {len(sec.get('excluded') or [])}건")
+    tr = rep.get("triage") or {}
+    if tr:  # 거르기의 답을 코드가 맞춘 것 (HYO-206)
+        lines.append(f"같은 내용이라 다른 후보에 붙임 {len(tr.get('folded') or [])}건 · 거르기가 답을 빠뜨려 다시 물음 {len(tr.get('missing') or [])}건 · "
+                     f"끝내 답 없음 {len(tr.get('unanswered') or [])}건 · 관문 이름으로 고친 기술 이름 {len(tr.get('renamed') or [])}건")
     drafts = []
     for c in cands:
         f = next(iter(sorted(p for p in os.listdir(adr_dir) if p.startswith(f"{c['adr']}-"))), None) if c.get("adr") else None

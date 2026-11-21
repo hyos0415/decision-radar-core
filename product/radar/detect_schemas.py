@@ -1,5 +1,7 @@
 """detect 단계별 출력 스키마. 초안(AdrDraft)은 common/schemas — status 칸이 없다 (R8)."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from common.schemas import Affected, Evidence, RevisitCondition
@@ -21,11 +23,18 @@ class Excluded(BaseModel):
     # 「안 쓴다」는 말을 코드가 repo_grep 기록과 대조한다 (HYO-205) — W47을 세 번 돌리니 코드를 안 열고 「미사용」이라 적었고 판정이 갈렸다
     unused_claim: bool = Field(default=False, description="버린 이유가 「우리 코드가 그 모듈 · 함수 · 기능을 쓰지 않는다」에 기대면 true. 그러면 checked를 채운다")
     checked: list[str] = Field(default_factory=list, description="unused_claim이 true일 때 — 이번에 repo_grep에 넣어 0곳이 나온 패턴을 넣은 글자 그대로")
+    # 버린 이유의 종류 — 이유 글은 실행마다 말이 달라 코드가 읽을 수 없다 (HYO-206, W46 세 번: 보안 소식을 「어느 manifest에도 없다」며 한 번 뺐고,
+    # 같은 내용이라며 뺀 소식은 어느 후보에 붙었는지 남지 않았다)
+    why: Literal["not_ours", "routine", "duplicate", "unclear", "other"] = Field(
+        default="other", description="버린 이유의 종류. not_ours = 우리 스택 · 코드에 없거나 쓰지 않는다 · routine = breaking · security 등이 없는 일상 릴리스 · "
+                                     "duplicate = 후보로 올린 다른 소식과 같은 내용 (duplicate_of를 채운다) · unclear = 무엇에 해당하는지 알 수 없는 글 · other = 그 밖")
+    duplicate_of: str = Field(default="", description="why가 duplicate일 때 — 같은 내용이라 본 **후보의 소식 url** (candidates의 source_urls에 있는 것 그대로). 코드가 이 소식을 그 후보의 근거에 붙인다")
 
 
 class Rescued(BaseModel):
-    """코드가 「보안 소식인데 안 쓴다는 이유로 버렸다」고 되돌린 소식을 후보로 다시 쓴 것 (HYO-205)."""
+    """코드가 되돌린 소식을 다시 쓴 것 — 못 버리는 소식(보안 · 자리 후보)은 후보로, 거르기가 답을 빠뜨린 소식은 후보나 excluded로 (HYO-205 · HYO-206)."""
     candidates: list[Candidate]
+    excluded: list[Excluded] = Field(default_factory=list, description="kept_because가 missing인 소식만 — 거르기 규칙대로 버릴 것이면 여기에 이유와 함께. security · slot은 여기에 적지 않는다")
 
 
 class Triage(BaseModel):

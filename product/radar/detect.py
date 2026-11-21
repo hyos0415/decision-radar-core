@@ -43,6 +43,7 @@ class DetectState(TypedDict, total=False):
     rejected: list  # 모델에 넘기지 않고 excluded 앞에 붙이는 소식 — 사람이 전에 거부한 것(HYO-142) · 관문 판정 뒤 이미 반영된 것(HYO-162)
     excluded: list
     security: dict  # 관문이 security로 남긴 소식의 결과 (HYO-205)
+    triage_notes: dict  # 거르기의 답을 코드가 맞춘 기록 — 붙인 소식 · 답 없던 소식 · 고친 이름 (HYO-206)
     kept: list
     skipped: list
     dropped: list
@@ -93,10 +94,15 @@ def detect_graph(ctx, model):
         # 자리 질의가 고른 후보는 어디에 쓰나를 다시 판단해 빼지 않는다(실행마다 갈렸다). 버렸으면 코드가 되돌려 후보로 다시 쓰게 한다
         sec = {it["url"] for it in feed if it.get("security")}
         slotted = {it["url"] for it in feed if it.get("candidate_for")}
-        pairs = detect_ops.to_rescue(excluded, sec, slotted)
+        # 거르기의 답을 코드가 맞춘다 (HYO-206 — W46을 세 번 돌리니 여기서 갈렸다): 같은 내용이라며 버린 소식은 그 후보의 근거에 붙이고,
+        # 후보에도 버린 것에도 없는 소식은 다시 묻는다
+        excluded, folded = detect_ops.fold_duplicates(cands, excluded)
+        missing = detect_ops.unanswered(feed, cands, excluded)
+        pairs = detect_ops.to_rescue(excluded, sec, slotted, missing)
         back, rescued = [e for e, _ in pairs], []
         if back:
             urls = [e["url"] for e in back]
+            ask = {e["url"] for e, why in pairs if why == "missing"}  # 버려도 되는 것은 답을 빠뜨린 소식뿐이다 — 보안 · 자리 후보는 후보로만 돌아온다
             try:
                 rr = await agent("detect-rescue", RESCUE_INSTRUCTIONS, Rescued,
                                  rescue_prompt(state["now"], state["stack"], [it for it in feed if it.get("url") in urls],
@@ -107,9 +113,16 @@ def detect_graph(ctx, model):
                     c["checked"] = list(dict.fromkeys(list(c.get("checked") or []) + mine))
                 rescued = sorted({u for c in got for u in c["source_urls"] if u in urls})
                 cands += got
-                excluded = [e for e in excluded if e["url"] not in rescued]
+                again = [e.model_dump() for e in rr.structured.excluded if e.url in ask and e.url not in rescued]
+                excluded = [e for e in excluded if e["url"] not in rescued] + again
+                excluded, more = detect_ops.fold_duplicates(cands, excluded)
+                folded += more
             except Exception as e:  # 되돌리기에 실패하면 버린 채로 두되 오류로 센다 — 보고서의 security.excluded에 남는다
                 p3.append({"kind": "model_error", "stage": "rescue", "type": type(e).__name__, "message": str(e)[:300]})
+        silent = detect_ops.unanswered(feed, cands, excluded)  # 다시 물어도 답이 없는 소식 — 버린 것으로 적되 사람이 보게 따로 센다
+        excluded += [{"url": u, "reason": "거르기도 되돌리기도 답하지 않았다 — 판정 없음", "why": "other", "unanswered": True} for u in silent]
+        renamed = detect_ops.fix_names(cands, detect_ops.gate_tech(ctx))  # technology는 관문이 붙인 이름으로 (실행마다 Electron / Node.js로 갈렸다)
+        notes = {"folded": folded, "missing": missing, "unanswered": silent, "renamed": renamed}
         kept, skipped, dropped = detect_ops.screen(ctx, cands, state["feed"])
         excluded = detect_ops.check_unused(ctx, excluded)  # 「안 쓴다」는 말을 repo_grep 기록과 대조 (HYO-205)
         security = {"total": len(sec), "rescued": [u for u in rescued if u in sec],
@@ -117,7 +130,7 @@ def detect_graph(ctx, model):
         if slotted:  # 자리 질의 후보의 결과 — 남은 excluded는 되돌리기에 실패한 것뿐이다
             security = {**(security or {}), "slot_candidates": {"total": len(slotted), "rescued": [u for u in rescued if u in slotted],
                                                               "excluded": [e["url"] for e in excluded if e["url"] in slotted]}}
-        return {"kept": kept, "skipped": skipped, "dropped": dropped, "excluded": rejected + excluded, "security": security, "p3": p3}
+        return {"kept": kept, "skipped": skipped, "dropped": dropped, "excluded": rejected + excluded, "security": security, "triage_notes": notes, "p3": p3}
 
     def fan_out(state):
         sends = [Send("draft", {"now": state["now"], "w": w, "item": _item_for(state["feed"], w["candidate"]["source_urls"])})
@@ -179,7 +192,7 @@ def detect_graph(ctx, model):
         failed = [p for p in state.get("p3") or [] if p.get("stage") == "draft"]
         rep = detect_ops.detect_report(ctx, state["now"], skipped=state.get("skipped") or [], dropped=state.get("dropped") or [],
                                        excluded=state.get("excluded") or [], written=state.get("written") or [], failed=failed,
-                                       security=state.get("security"))
+                                       security=state.get("security"), notes=state.get("triage_notes"))
         return {"report": rep}
 
     g = StateGraph(DetectState)
