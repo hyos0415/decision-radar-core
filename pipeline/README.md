@@ -177,7 +177,14 @@ python pipeline/tests/test_tryout.py           # 오프라인 — 가짜 대상 
 | 레시피 | 고르는 조건 | 하는 일 | 비용 |
 |---|---|---|---|
 | `dependency` 의존성 올려 보기 | use가 「의존성 릴리스 <버전> 대응」 | 위 올려 보기(`tryout.py`) — 기준 검사 → 고정 버전 올림(Python 고정 줄 · npm package.json · lockfile) → 같은 검사. 내보내기는 `pass`일 때만 draft PR | local |
-| (다음) embedding · gate · medical-llm | 자리 후보 | HYO-228 Arena 정답지 · HYO-169 정답 118건 · HYO-229 추출 평가 | local · subscription · api |
+| `embedding` 임베딩 정답지 비교 (HYO-240) | 의존성 릴리스가 아니고 affected가 자리 `retrieval-dense`(radar-slots.yaml)의 repo · component | `arena/compare_embed.py` — Arena 정답지 gold@v1.2 **test 36문항** nDCG@10을 지금 것(BGE-M3 revision 5617a9f)과 같은 문항끼리 짝 비교, paired bootstrap 95% 구간. 하한 > 0 나음 · 상한 < 0 못함 · 0 포함 구분 안 됨(사용자 2026-11-22). 지금 것이 등록값 0.5791과 ±0.002 넘게 다르면 판정 안 함. 돌리기 전 HF 카드로 거른다(임베딩 아님 · fp32 8GB 초과). 모델 id = technology(`조직/이름`) 또는 evidence의 huggingface.co 주소. 내보내지 않는다 | local (M1 약 20분) |
+| (다음) gate · medical-llm | 자리 후보 | HYO-169 정답 118건 · HYO-229 추출 평가 | subscription · api |
+
+임베딩 레시피는 torch · sentence-transformers · ranx가 든 **Arena 환경**에서 돈다 — `RADAR_ARENA_PYTHON`, 없으면 형제 폴더 `venvs/arena` · `venvs/arena-qwen`. 없으면 「환경 없음」으로 멈춘다(레시피가 수 GB를 말없이 받지 않는다). 코퍼스의 형제 폴더(radar-snapshots · 얼린 대상 repo)는 ADR repo 옆에서 찾는다. 11/22 확인: 새 코드로 HYO-228(Qwen3-Embedding-0.6B, revision 97b0c61)을 다시 돌려 11/21 손 실험의 모든 숫자(test 0.579 → 0.618 · 구간 [-0.0285, 0.109] · K +0.216 · dev)가 같았다
+
+```bash
+/path/to/arena-venv/bin/python -m arena.compare_embed --candidate Qwen/Qwen3-Embedding-0.6B --out pipeline/out/embed-qwen3
+```
 
 ```bash
 python -m pipeline.experiment plan --adr ../adr/docs/adr/0017-fastapi.md          # 무엇을 돌릴지만 (돌리지 않는다)

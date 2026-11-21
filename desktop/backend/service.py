@@ -1460,8 +1460,9 @@ class RadarService:
 
     def experiment_plan(self, adr_id):
         pl = experiment.plan(self._adr_file(adr_id), os.path.dirname(os.path.dirname(self.adr_dir)))
+        exports = bool(pl.get("exports"))     # 레시피가 내보내기를 하나 — 임베딩 비교는 근거만 낸다 (HYO-240)
         return {**{k: pl.get(k) for k in ("adr", "recipe", "label", "cost", "cost_text", "ready", "reason", "detail", "export_rule")},
-                "export_allowed": self.mode == "real"}
+                "exports": exports, "export_allowed": self.mode == "real" and exports}
 
     def check_experiment(self, adr_id, export=False):
         """접수할 때 검사 — 돌릴 수 없으면 작업이 되지 않고 409로 돌아온다."""
@@ -1470,6 +1471,8 @@ class RadarService:
             raise ServiceError(409, f"ADR {pl['adr']}: 실험할 수 없다 — {pl['reason']}")
         if pl["cost"] != "local":   # 구독 · 유료 API 레시피의 확인 단계는 다음 조각 — 그 전까지 앱에서는 local만 (비용 문)
             raise ServiceError(409, f"ADR {pl['adr']}: {pl['cost_text']} — 앱의 확인 단계가 아직 없다")
+        if export and not pl["exports"]:
+            raise ServiceError(409, f"ADR {pl['adr']}: {pl['label']}는 내보내지 않는다 — {pl['export_rule']}")
         if export and self.mode != "real":
             raise ServiceError(409, "내보내기(브랜치 push · draft PR)는 실사용 모드에서만 — 스텁 · 데모는 대상 repo에 아무것도 내지 않는다")
         return pl
