@@ -8,7 +8,7 @@ MODEL = "claude-sonnet-5-5"  # 비교 모드 (비교 프로토콜 P1, e2 결정)
 EFFORT = "medium"
 PRICE = {"input": 2.00, "output": 10.00}  # $/MTok — claude-api 스킬 모델 표 (cached 2026-09-25)
 # 모델별 단가 ($/MTok) — 앱이 호출마다 비용을 보인다 (HYO-98). 표에 없는 모델은 비용 None(모름)이지 0이 아니다.
-# 로컬 모델(HYO-90 Ollama 등)은 과금이 없어 0. pipeline/importance/agents_backend.py의 PRICES와 같은 방식
+# 로컬 모델(HYO-90 Ollama 등)은 과금이 없어 0. pipeline/importance/openai_backend.py의 PRICES와 같은 방식
 PRICES = {MODEL: PRICE}
 LOCAL_MODEL_PREFIXES = ("ollama/", "ollama:", "local/")
 

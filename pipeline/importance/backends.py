@@ -167,8 +167,8 @@ def make_backend(model, *, allow_real=False, **kw):
     if model.startswith("gpt-"):
         if not allow_real:
             raise PermissionError(f"{model}: 실제 API 실행은 --real-api 없이는 거부한다")
-        from .agents_backend import AgentsBackend
-        return AgentsBackend(model, **kw)
+        from .openai_backend import OpenAIBackend   # 처음엔 Agents SDK(agents_backend.AgentsBackend) — ADR 0030
+        return OpenAIBackend(model, **kw)
     if model.startswith("jev-"):
         if not allow_real:
             raise PermissionError(f"{model}: 실제 API 실행은 --real-api 없이는 거부한다")    # 키 파일도 읽기 전에 거부

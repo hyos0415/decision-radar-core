@@ -1,10 +1,10 @@
 # 제품 의존성 — 버전은 설치할 때 고정한다 (2026-09-30, Python 3.12). 메인 .venv 하나에 같이 설치된다 (pip check 통과)
 PyYAML==6.0.3
 
-# 런타임 1 — OpenAI Agents SDK
-openai-agents==0.22.3
-mcp==2.2.0  # 구독 CLI 엔진의 읽기 도구 서버 (radar/mcp_tools.py, HYO-99) — openai-agents도 끈다
-openai==3.22.1
+# 런타임 1 — 처음(0008)엔 OpenAI Agents SDK였다. 도구 없는 단발 분류라 하네스 기능을 쓰지 않아 뺐다 (openai-agents, 2026-11-21, ADR 0030 · HYO-220).
+# spike/agents_sdk는 그때의 기록이라 이 패키지 없이는 돌지 않는다
+mcp==2.2.0  # 구독 CLI 엔진의 읽기 도구 서버 (radar/mcp_tools.py, HYO-99)
+openai==3.22.1  # 관문의 GPT 비교 경로 (pipeline/importance/openai_backend.py — Responses API 구조화 출력)
 
 # 런타임 2 — 직접 쓴 흐름(asyncio) + 에이전트 루프(radar/loop.py) + Anthropic SDK (ADR 0030, HYO-220)
 # 처음(0009)엔 LangGraph + LangChain이었다 — langgraph · langgraph-checkpoint · langgraph-checkpoint-sqlite · langchain ·

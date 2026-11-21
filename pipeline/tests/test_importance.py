@@ -23,7 +23,7 @@ from collector import stack  # noqa: E402
 from collector.sources import github  # noqa: E402
 from pipeline import profile_filter  # noqa: E402
 from pipeline import interest_profile as ip  # noqa: E402
-from pipeline.importance import agents_backend, backends, cli as cli_mod, evaluate, gate as gate_mod, policy, scope, signals, successor, tiers  # noqa: E402
+from pipeline.importance import openai_backend, backends, cli as cli_mod, evaluate, gate as gate_mod, policy, scope, signals, successor, tiers  # noqa: E402
 from pipeline.importance.backends import (Backend, BoundaryError, CallLog, LabelAnswer, NewsQuery, StubBackend,  # noqa: E402
                                            TechQuery, labels_from_scores, make_backend)
 from pipeline.importance.tiers import TierStore  # noqa: E402
@@ -1153,8 +1153,8 @@ def test_interface_accepts_jev_shape_end_to_end():
 
 def test_make_backend_gating():
     assert isinstance(make_backend("stub"), StubBackend)
-    orig = agents_backend.openai_key
-    agents_backend.openai_key = lambda: (_ for _ in ()).throw(AssertionError("키를 읽으려 했다"))
+    orig = openai_backend.openai_key
+    openai_backend.openai_key = lambda: (_ for _ in ()).throw(AssertionError("키를 읽으려 했다"))
     try:
         for m in ("gpt-6-luna", "gpt-6.1-sol"):
             try:
@@ -1163,7 +1163,7 @@ def test_make_backend_gating():
             except PermissionError:
                 pass
     finally:
-        agents_backend.openai_key = orig
+        openai_backend.openai_key = orig
     from pipeline.importance import jev_backend
     orig_k = jev_backend.typesafe_key
     jev_backend.typesafe_key = lambda: (_ for _ in ()).throw(AssertionError("키를 읽으려 했다"))
@@ -1182,11 +1182,10 @@ def test_make_backend_gating():
         pass
 
 
-# ---------------------------------------------------------------- Agents SDK 백엔드 (가짜 모델 — 네트워크 없음)
+# ---------------------------------------------------------------- OpenAI 백엔드 (가짜 클라이언트 — 네트워크 없음)
+# 처음엔 Agents SDK 백엔드(가짜 Model)였다 — ADR 0030 뒤 openai SDK responses.parse를 직접 부른다. 검사 항목은 그대로다.
 
-from agents import ModelResponse, Usage  # noqa: E402
-from agents.models.interface import Model  # noqa: E402
-from openai.types.responses import ResponseOutputMessage, ResponseOutputText  # noqa: E402
+from types import SimpleNamespace as _NS  # noqa: E402
 
 
 class Transient(Exception):
@@ -1197,31 +1196,34 @@ class BadRequest(Exception):
     status_code = 400
 
 
-class FakeModel(Model):
-    """script: 호출마다 하나씩 — dict(출력 JSON) · Exception(던짐) · callable(부르고 dict를 돌려줌)."""
+class FakeModel:
+    """가짜 OpenAI 클라이언트 자리 (client_factory). script: 호출마다 하나씩 — dict(출력 JSON) · Exception(던짐) · callable(부르고 dict를 돌려줌).
+    seen: responses.parse에 넘긴 인자 (instructions · input · text_format)."""
 
     def __init__(self, script, tokens=(10, 5)):
         self.script, self.tokens, self.n, self.seen = list(script), tokens, 0, []
+        self.responses = self
 
-    async def get_response(self, system_instructions, input, model_settings, tools, output_schema, handoffs, tracing, **kw):
-        self.seen.append((system_instructions, input, output_schema))
+    def client(self, key):
+        return self
+
+    async def parse(self, **kw):
+        self.seen.append((kw.get("instructions"), kw.get("input"), kw.get("text_format"), kw))
         step = self.script.pop(0)
         if callable(step):
             step = step()
         if isinstance(step, Exception):
             raise step
         self.n += 1
-        msg = ResponseOutputMessage(type="message", id=f"m{self.n}", role="assistant", status="completed",
-                                    content=[ResponseOutputText(type="output_text", text=json.dumps(step, ensure_ascii=False), annotations=[])])
-        return ModelResponse(output=[msg], usage=Usage(requests=1, input_tokens=self.tokens[0], output_tokens=self.tokens[1],
-                                                         total_tokens=sum(self.tokens)), response_id=None)
+        return _NS(output_parsed=kw["text_format"].model_validate(step), usage=_NS(input_tokens=self.tokens[0], output_tokens=self.tokens[1]),
+                   service_tier=kw.get("service_tier"))
 
-    def stream_response(self, *a, **k):
-        raise NotImplementedError
+    async def close(self):
+        pass
 
 
 def _agents(fake, model="gpt-6-luna", guard=True, **kw):
-    b = agents_backend.AgentsBackend(model, key="sk-test", export_traces=False, guard=guard, model_factory=lambda client, name: fake, **kw)
+    b = openai_backend.OpenAIBackend(model, key="sk-test", guard=guard, client_factory=fake.client, **kw)
     b.retry.SLEEPER.sleep = lambda s: None
 
     async def nosleep(s):
@@ -1230,7 +1232,7 @@ def _agents(fake, model="gpt-6-luna", guard=True, **kw):
     return b
 
 
-def test_agents_backend_structured_output_log_and_trace():
+def test_openai_backend_structured_output_and_log():
     fake = FakeModel([{"tiers": ["L5", "L3"], "unsure": False, "reason": "서비스이자 SDK"},
                       {"changes": ["security", "breaking", "breaking"], "reason": "CVE"},
                       {"tiers": [], "unsure": True, "reason": "쓰임새 모른다"}], tokens=(2000, 100))
@@ -1248,13 +1250,15 @@ def test_agents_backend_structured_output_log_and_trace():
         assert rec["type"] == "llm_call" and rec["model"] == "gpt-6-luna" and rec["attempts"] == 1 and rec["flow"] == "tiers"
         assert abs(rec["cost_usd"] - (2000 / 1e6 * 0.10 + 100 / 1e6 * 0.50)) < 1e-9                  # Luna 단가 (ADR 0007)
         assert "langfuse" in str(fake.seen[0][1]) and "L0" in str(fake.seen[0][0])                   # 프롬프트가 모델에 닿았다
-        assert fake.seen[0][2] is not None                                                           # 구조화 출력(output_type)이 걸렸다
-        assert b.trace_info()["traces"] >= 3 and b.trace_info()["spans"] >= 3                        # 트레이싱이 켜져 있다
+        assert fake.seen[0][2] is openai_backend.TierOut and fake.seen[1][2] is openai_backend.ChangeOut   # 구조화 출력이 걸렸다
+        assert fake.seen[0][1] == [{"role": "user", "content": fake.seen[0][1][0]["content"]}]         # 입력은 user 메시지 하나 (Agents SDK 판과 같은 body)
+        assert fake.seen[0][3]["reasoning"] == {"effort": "medium"} and fake.seen[0][3]["model"] == "gpt-6-luna"
+        assert b.trace_info() == {"traces": 0, "spans": 0, "blocked_hosts": []}                       # OpenAI 트레이싱은 없다 (Agents SDK와 함께 빠졌다)
     finally:
         b.close()
 
 
-def test_agents_backend_unpriced_model_is_none_not_zero():
+def test_openai_backend_unpriced_model_is_none_not_zero():
     b = _agents(FakeModel([{"changes": [], "reason": "r"}]), model="gpt-6-astra")      # 단가표에 없는 모델
     try:
         b.classify_changes(NewsQuery("n", "t", "t"))
@@ -1263,20 +1267,21 @@ def test_agents_backend_unpriced_model_is_none_not_zero():
         b.close()
 
 
-def test_agents_backend_flex_sends_service_tier_and_halves_cost():
-    assert agents_backend.cost_usd("gpt-6.1-sol", 1_000_000, 1_000_000) == 12.0
-    assert agents_backend.cost_usd("gpt-6.1-sol", 1_000_000, 1_000_000, "flex") == 6.0          # Flex = Batch = 반값
-    b = _agents(FakeModel([{"changes": [], "reason": "r"}]), model="gpt-6.1-sol", service_tier="flex")
+def test_openai_backend_flex_sends_service_tier_and_halves_cost():
+    assert openai_backend.cost_usd("gpt-6.1-sol", 1_000_000, 1_000_000) == 12.0
+    assert openai_backend.cost_usd("gpt-6.1-sol", 1_000_000, 1_000_000, "flex") == 6.0          # Flex = Batch = 반값
+    fake = FakeModel([{"changes": [], "reason": "r"}])
+    b = _agents(fake, model="gpt-6.1-sol", service_tier="flex")
     try:
-        assert b.settings.extra_args == {"service_tier": "flex"} and b.settings.reasoning.effort == "medium"   # effort는 Luna와 같다
         b.classify_changes(NewsQuery("n", "t", "t"))
+        assert fake.seen[0][3]["service_tier"] == "flex" and fake.seen[0][3]["reasoning"] == {"effort": "medium"}   # effort는 Luna와 같다
         c = b.log.calls[0]
-        assert c["service_tier"] == "flex" and c["cost_usd"] == agents_backend.cost_usd("gpt-6.1-sol", c["input_tokens"], c["output_tokens"], "flex")
+        assert c["service_tier"] == "flex" and c["cost_usd"] == openai_backend.cost_usd("gpt-6.1-sol", c["input_tokens"], c["output_tokens"], "flex")
     finally:
         b.close()
     plain = _agents(FakeModel([]), model="gpt-6.1-sol")
     try:
-        assert plain.settings.extra_args is None                                                   # 기본은 Standard
+        assert "service_tier" not in plain.request("i", "p", openai_backend.ChangeOut)               # 기본은 Standard
     finally:
         plain.close()
     try:
@@ -1287,7 +1292,7 @@ def test_agents_backend_flex_sends_service_tier_and_halves_cost():
     assert evaluate.main(["--gold", str(REPO / "eval" / "importance" / "gold.example.json"), "--model", "jev-1.13.0", "--plan", "--flex"]) == 2
 
 
-def test_agents_backend_retry_policy_same_as_product():
+def test_openai_backend_retry_policy_same_as_product():
     fake = FakeModel([Transient("503"), Transient("503"), {"changes": ["major"], "reason": "r"}])
     b = _agents(fake)
     try:
@@ -1333,7 +1338,7 @@ def test_netguard_blocks_outside_api_openai_and_stops_without_retry():
             assert b.trace_info()["blocked_hosts"] == ["telemetry.example.invalid"]
             g = b.guard
             assert g._ok("api.openai.com") and not g._ok("api.anthropic.com") and not g._ok("evil.example")
-            assert agents_backend.ALLOWED_HOSTS == {"api.openai.com"}
+            assert openai_backend.ALLOWED_HOSTS == {"api.openai.com"}
         finally:
             b.close()
     finally:
@@ -1600,7 +1605,7 @@ def test_jev_netguard_allows_only_typesafe_host():
             assert g._ok("api.typesafe.ai") and not g._ok("api.openai.com") and not g._ok("api.anthropic.com") and not g._ok("evil.example")
         finally:
             b.close()
-        assert jev_backend.ALLOWED_HOSTS == {"api.typesafe.ai"} and agents_backend.ALLOWED_HOSTS == {"api.openai.com"}   # 백엔드별 허용 목록
+        assert jev_backend.ALLOWED_HOSTS == {"api.typesafe.ai"} and openai_backend.ALLOWED_HOSTS == {"api.openai.com"}   # 백엔드별 허용 목록
         # (2) TypeSafe 호스트는 가드를 통과한다 (오프라인이라 연결 오류가 나고, 가드가 막은 것은 아니다)
         b = jev_backend.JevBackend("jev-1.13.0", key="k", guard=True)
         b.sleeps = []
@@ -2728,7 +2733,7 @@ def mutations():
         ("top-k: 「항상」을 기술당 1건으로 (안 A — 줄 무시)", [(policy, "fold_key", lambda e: ("tech", policy.cap_technology(e)))], test_topk_always_then_per_technology),
         ("top-k: 우리 줄 · 다른 줄 기록 무시", [(policy, "fold_key", lambda e: (policy.release_of(e) or ("item", e["id"]))[0])], test_topk_always_then_per_technology),
         ("채점이 오류·분류 불가 상태를 무시", [(evaluate, "score_run", _score_status_ignored)], test_score_run_by_hand),
-        ("허용 호스트를 넓힘", [(agents_backend, "ALLOWED_HOSTS", {"api.openai.com", "telemetry.example.invalid"})], test_netguard_blocks_outside_api_openai_and_stops_without_retry),
+        ("허용 호스트를 넓힘", [(openai_backend, "ALLOWED_HOSTS", {"api.openai.com", "telemetry.example.invalid"})], test_netguard_blocks_outside_api_openai_and_stops_without_retry),
         ("개발 경로가 최우선이 아님 (떠 있는 태그·민감이 되살림)", [(policy, "cell", _dev_not_first)], test_dev_path_is_top_priority),
         ("S3가 호스팅 등급(L2·L3)을 떨어냄", [(tiers, "MANIFEST_DROP_TIERS", {"L0", "L1", "L2", "L3"})], test_verify_script_beats_model),
         ("S3가 호스팅 등급을 떨어냄 (Jev 두 등급 흐름)", [(tiers, "MANIFEST_DROP_TIERS", {"L0", "L1", "L2", "L3"})], test_jev_end_to_end_lane_a_and_evaluate),
