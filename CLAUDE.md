@@ -23,6 +23,7 @@
 | networkx | arena (`arena/graph.py` — S7 그래프 graph@v1 · PPR, HYO-149) |
 | rdflib · pyshacl · owlrl | registry (`registry/build.py` — 데이터 등록부 빌드 · SHACL 검사만, 실행 경로는 `registry.json`, HYO-180) |
 | Electron 45 · electron-vite 5 · React 19 · Tailwind 4 · shadcn/ui(Radix) · Geist · Pretendard 글꼴 · react-markdown + remark-gfm · remark-frontmatter (npm, `desktop/package.json`) | desktop (E6 데스크톱 앱 화면·껍데기, HYO-49) |
+| electron-builder 26 (npm devDependency, `desktop/package.json`) | desktop (설치본 묶기 `npm run app:pack` — `electron-builder.config.cjs`, HYO-251) |
 | Elasticsearch (docker `infra/`, 9.5.4 + analysis-nori, basic) | arena |
 | Neo4j (docker `infra/`, 5.26.31 + n10s) | arena |
 

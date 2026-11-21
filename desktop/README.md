@@ -137,6 +137,21 @@ RADAR_APP_MODE=real npm run dev     # [RADAR_REAL_ADR=../adr] [RADAR_SNAPSHOT_RE
 - **API 그림자** (엔진이 claude-cli일 때, `RADAR_SHADOW=off`로 끈다): detect·revisit이 끝나면 **같은 입력**(실행 직전에 뜬 ADR 사본 + 같은 detect 입력)을 API 엔진으로 한 번 더 돌려 `<data>/shadow.jsonl`에 두 엔진 결과를 나란히 한 줄 — detect는 후보·초안·제외, revisit은 조건별 판정·알림, 각자 사용량. **Inbox·알림·실행 기록·ADR repo에는 아무것도 안 쓴다**. 잠금 밖 백그라운드라 화면을 막지 않고, 죽거나 키가 없으면 그 사실만 남는다. 4주 뒤 엔진 비교용 (사용자 10/26). API 과금이다
 - **스킬 그림자** (HYO-166, 비교 프로토콜 §7 「같은 순간 짝」 — 위 API 그림자와 다른 것. 엔진이 claude-cli일 때, `RADAR_SKILL_SHADOW=off`로 끈다): **정기** detect가 끝나면 같은 기기에서 `skill@v1` detect를 라이브 모드(웹 검색) · 구독 `claude -p` · 같은 모델과 effort로 한 번 (`pipeline/skill_line.py` — 합집합 스킬 줄과 같은 실행기). 실행 루트는 tag에서 꺼낸 스킬만 든 빈 폴더(eval 러너 `prepare_runroot`), ADR은 제품 실행 직전에 뜬 사본(git 아님). 원격은 dry-run + 도구 규칙(git push · gh) + 가짜 gh · GH_TOKEN + git push 주소 바꿔치기로 막는다. 출력 · transcript는 `<data>/shadow-skill/<주>/`에만, 성공 · 실패 · 이유는 `<data>/shadow-skill/index.jsonl` 한 줄. **PR · issue · 알림 · Inbox · events · runs · 화면 · API에 아무것도 안 낸다 — 11/22까지 봉인**(사용자도 열지 않는다, index.jsonl의 ok만 본다). 주마다 한 번(k=1) · 손 실행 · 건너뛴 실행에는 안 붙는다 · 제품 실행 결과와 무관하게 돈다 · `RADAR_SKILL_SHADOW_UNTIL`(기본 2026-11-22) 뒤에는 안 돈다. 구독 세션 주 1개
 
+## 설치본 (HYO-251 — Dock · 메뉴 막대 · 알림에 「Electron」 대신 Decision Radar)
+
+```bash
+RADAR_APP_MODE=real npm run app:install   # macOS: 묶어서 /Applications/Decision Radar.app에 넣는다
+npm run app:pack                          # 묶기만 — dist/mac-arm64/Decision Radar.app (Windows: dist/win-unpacked/, 확인 안 함)
+```
+
+- 이 기기에서만 쓰는 개인 설치본이다 — 설치 프로그램 없이 .app 폴더, ad-hoc 서명. 남에게 주지 않는다
+- 설치본은 레포 밖에서 뜨지만 **백엔드는 레포의 것**을 띄운다. 묶을 때 `resources/launch.json`에 적어 두는 것: 레포 위치(메인 worktree — worktree에서 묶어도 메인, `RADAR_PACK_REPO`로 바꾼다) · 그때의 `RADAR_*` 환경 전부(실사용이면 `RADAR_APP_MODE=real`) · 커밋. 바꾸려면 다시 묶는다
+- 그래서 **백엔드(Python) · 코어 변경은 앱을 다시 띄우면 들어가고, `desktop/src` 변경은 다시 묶어야 들어간다**
+- Finder · Dock에서 띄우면 macOS가 터미널 환경을 주지 않는다 — 시작할 때 로그인 셸(`$SHELL -ilc`)의 환경을 받아 온다(PATH는 덮어쓰고 나머지는 없는 것만). 그래야 `gh` · `node` · `claude`를 찾는다
+- 설정 · 로그 폴더(`decision-radar-desktop`)와 한 번만 뜨기 잠금은 개발 모드와 같다 — **설치본과 `npm run dev`는 동시에 뜨지 않는다**(나중에 띄운 쪽이 먼저 뜬 창을 앞으로 부르고 꺼진다). 정기 실행이 두 번 돌지 않게. 데이터 폴더(`~/.decision-radar`)도 같다
+- `app:install`은 /Applications의 같은 앱(번들 ID `io.github.hyos0415.decision-radar`)만 바꾼다 — 떠 있으면 멈추고 트레이에서 종료하라고 한다
+- **아이콘**: `resources/icon.png` (1024×1024 PNG, 지금은 임시). 바꾼 뒤 다시 묶는다. 개발 모드도 Dock · 창 아이콘으로 이 파일을 쓴다
+
 ## Mac 검증 (10/26 — Windows로 쓰다 Mac으로 옮긴다, 두 경로 다 검증)
 
 CI(`.github/workflows/desktop.yml`) 백엔드 검사는 Windows에서 PR마다 돈다. macOS는 켤 때만 돈다 — GitHub의 Mac 러너는 사용 시간을 10배로 센다(private repo).
