@@ -37,7 +37,7 @@ export function CheckList({
   onReject: (row: CheckRow) => void
 }): React.JSX.Element {
   return (
-    <div>
+    <div className="check-list">
       <p className="text-xs text-muted-foreground">
         {T.intro} · {T.count(check.open, check.total)}
       </p>
