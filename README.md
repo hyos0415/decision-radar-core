@@ -100,10 +100,13 @@ python .claude/skills/jhs-decisions/scripts/test_radar.py  # 안전 규칙층
 python desktop/backend/test_backend.py                     # 앱 백엔드 (스텁 · 임시 폴더)
 python pipeline/tests/test_tryout.py                       # 버전 올려 보기 + 변이 검사
 
-cd desktop && npm ci && npm run dev                        # 데스크톱 앱 (스텁 모드, 예시 데이터)
+cd desktop && npm ci && npm run app:pack                   # 데스크톱 앱을 설치본으로 묶기 (스텁 모드, 예시 데이터)
+open "dist/mac-arm64/Decision Radar.app"                   # macOS Apple Silicon
 ```
 
 스텁 통과는 배관이 맞게 이어졌다는 뜻일 뿐, 모델의 판단을 잰 것은 아닙니다.
+
+설치본은 이 레포의 백엔드를 띄웁니다. 묶을 때 레포 위치를 적어 두므로 레포를 옮기면 다시 묶습니다. 설치본 파일은 릴리스에 올리지 않습니다. 묶은 기기의 경로가 들어가고 서명이 ad-hoc이라 다른 기기에서는 돌지 않기 때문입니다. 화면을 고치면서 볼 때는 `npm run dev`를 씁니다. Windows 설치본(`dist\win-unpacked`)은 확인하지 않았습니다.
 
 ### 실제 모델로 돌릴 때
 

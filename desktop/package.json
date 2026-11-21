@@ -1,6 +1,6 @@
 {
   "name": "decision-radar-desktop",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "description": "Decision Radar desktop shell",
   "main": "./out/main/index.js",
   "author": "",
