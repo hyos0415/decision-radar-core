@@ -15,7 +15,7 @@
 | 의존성 | component |
 |---|---|
 | PyYAML | skill (`radar.py`) · collector · product |
-| openai-agents · openai | product (`spike/agents_sdk` — 최적화 모드, ADR 0008) |
+| openai | pipeline (`pipeline/importance/openai_backend.py` — 관문의 GPT 비교 경로, 운영 관문은 Claude) |
 | mcp (MCP 파이썬 SDK 2.x) | product (`radar/mcp_tools.py` — 구독 CLI 엔진의 읽기 도구 서버, HYO-99) |
 | anthropic | product (`radar/models.py` — API 엔진, 에이전트 루프는 `radar/loop.py`, ADR 0030) · pipeline (`pipeline/importance/claude_backend.py` — 관문 등급 재분류, HYO-122) |
 | fastapi · uvicorn | desktop (`desktop/backend` — 앱 백엔드, localhost) |

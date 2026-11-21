@@ -1,6 +1,6 @@
 """분류 백엔드 인터페이스 — 등급 분류·변화 종류 분류가 「백엔드」 하나를 거쳐 결과를 받는다.
 
-갈아 끼울 수 있게 만든 이유 (2026-10-06 사용자 추가 요구): 같은 정답지로 GPT(Agents SDK)와 TypeSafe Jev를 비교한다.
+갈아 끼울 수 있게 만든 이유 (2026-10-06 사용자 추가 요구): 같은 정답지로 GPT와 TypeSafe Jev를 비교한다.
 Jev는 문장을 생성하지 않는다 — **정해진 선택지 하나 + 확률**을 돌려주고, `state` 하나에 여러 질문을 병렬로 묻는다 (`POST /v1/systemone`,
 speculative fan-out). 판정 근거 텍스트(reason)가 없다. 그래서 결과 형식은 두 모양을 모두 담는다:
 
@@ -9,7 +9,7 @@ speculative fan-out). 판정 근거 텍스트(reason)가 없다. 그래서 결�
   LabelAnswer.reason     근거 텍스트 — 선택 (Jev는 None)
   LabelAnswer.calls      호출 기록 (모델·토큰·비용·시도 횟수 — llm_call 형식)
 
-백엔드를 고르는 곳은 `make_backend(model)` 하나다. 지금: `stub` · `gpt-*`(Agents SDK) · `jev-1.13.0`(urllib 직접 — jev_backend.py) · `claude-*`(Anthropic SDK — claude_backend.py) · `claude-cli/<모델>`(구독 `claude -p` — cli_backend.py, HYO-169).
+백엔드를 고르는 곳은 `make_backend(model)` 하나다. 지금: `stub` · `gpt-*`(openai SDK 직접 — openai_backend.py, 처음엔 Agents SDK) · `jev-1.13.0`(urllib 직접 — jev_backend.py) · `claude-*`(Anthropic SDK — claude_backend.py) · `claude-cli/<모델>`(구독 `claude -p` — cli_backend.py, HYO-169).
 """
 import json
 from abc import ABC, abstractmethod
@@ -180,8 +180,8 @@ def make_backend(model, *, allow_real=False, **kw):
     if model.startswith("gpt-"):
         if not allow_real:
             raise PermissionError(f"{model}: 실제 API 실행은 --real-api 없이는 거부한다")
-        from .agents_backend import AgentsBackend
-        return AgentsBackend(model, **kw)
+        from .openai_backend import OpenAIBackend   # 처음엔 Agents SDK(agents_backend.AgentsBackend) — ADR 0030
+        return OpenAIBackend(model, **kw)
     if model.startswith("jev-"):
         if not allow_real:
             raise PermissionError(f"{model}: 실제 API 실행은 --real-api 없이는 거부한다")    # 키 파일도 읽기 전에 거부

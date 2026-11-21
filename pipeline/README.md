@@ -59,7 +59,7 @@ python pipeline/tests/test_profile_filter.py                      # 오프라인
 
 ## 레인 A 관문 (HYO-67: `pipeline/importance/`)
 
-설계·기준: `docs/design/importance-policy.md` §4·§8. 모델이 등급·변화 종류를 분류하고 **판정은 결정표(코드)** 가 내린다. Python은 메인 `.venv` (openai-agents 0.22.3).
+설계·기준: `docs/design/importance-policy.md` §4·§8. 모델이 등급·변화 종류를 분류하고 **판정은 결정표(코드)** 가 내린다. Python은 메인 `.venv` (GPT 비교 경로는 `openai`, 운영 관문은 구독 `claude -p`).
 
 ```bash
 # 1) 스택의 기술 등급 — 스택이 바뀔 때만. 스크립트 검증(Dockerfile FROM·dev 그룹·manifest)이 모델을 덮는다
@@ -77,8 +77,8 @@ python -m pipeline.importance evaluate --gold eval/importance/gold.json --model 
 python pipeline/tests/test_importance.py      # 오프라인 테스트 + 변이 13개
 ```
 
-- `backends.py`가 백엔드 인터페이스다 (`stub` · `gpt-*` Agents SDK · 나중에 Jev). 정답지 형식은 `evaluate.py` 머리말, 예시는 `eval/importance/gold.example.json`
-- 파일: `policy`(결정표) · `tiers`(등급 저장·검증) · `signals`(repo 신호) · `gate`(레인 A 연결) · `agents_backend` · `prompts` · `evaluate` · `cli`
+- `backends.py`가 백엔드 인터페이스다 (`stub` · `gpt-*` openai SDK 직접 · `jev-*` · `claude-*` · `claude-cli/<모델>`). 정답지 형식은 `evaluate.py` 머리말, 예시는 `eval/importance/gold.example.json`
+- 파일: `policy`(결정표) · `tiers`(등급 저장·검증) · `signals`(repo 신호) · `gate`(레인 A 연결) · `openai_backend`(GPT 비교 경로 — 처음엔 Agents SDK의 `agents_backend`) · `cli_backend`(구독 `claude -p` — 운영) · `keys` · `prompts` · `evaluate` · `cli`
 - 위의 「관문은 코드에 없다」는 `--gate` 없이 돌릴 때의 모습이다 (`gate: null`, `not-implemented`)
 - `card_action.py` (HYO-132) = 남김 카드의 행동 표시. 관문 `kept_by`의 변화 종류로 **코드가** 정한다: 모델 은퇴·EOL → 「강제 이전」 + 본문에서 뽑은 마감일(D-day), 후속 모델 → 「선택 실험」, 그 밖(security·deprecation 등)은 표시 없음
   - 마감일은 보수적으로: 마감 키워드(retire·sunset·EOL·지원 종료 등) 든 줄에서 오늘 이후 날짜가 **하나뿐일 때만**. 없거나 여럿이면 null → 카드는 「마감일 확인 필요」. 「Not sooner than」 줄과 페이지 변경의 `## 빠진 줄`은 건너뛴다. 데스크톱 `GET /inbox`의 `action` 칸으로 나간다

@@ -2,7 +2,7 @@
 
 - 모델: `claude-sonnet-5-5`(기본, effort medium — CLAUDE.md 「외부 모델·서비스」) · `claude-haiku-5-5`(HYO-67 비교군 자리)
 - 프롬프트: GPT 백엔드와 같은 것(prompts.py) — 모델만 바꿔 같은 정답지로 견줄 수 있게
-- 키: `.env`의 `ANTHROPIC_API_KEY` 한 줄만 읽는다. os.environ에 넣지 않는다 (agents_backend.openai_key와 같은 방식)
+- 키: `.env`의 `ANTHROPIC_API_KEY` 한 줄만 읽는다. os.environ에 넣지 않는다 (openai_backend.openai_key와 같은 방식)
 - 데이터 경계: NetGuard로 `api.anthropic.com`만 허용. 밖으로 나가려는 시도는 BoundaryError — 재시도하지 않고 멈춘다
 - 재시도: product/radar/retry.py (429·5xx·연결 오류만, 2·4·8·16초). SDK 재시도는 끈다(max_retries=0) — 시도 횟수를 한 곳에서 센다
 - 거절(stop_reason refusal)은 오류로 기록하고 올린다 — 서버 쪽 fallback(다른 모델이 대신 답함)은 켜지 않는다: 등급 파일의 `model`이 실제로 답한 모델과 달라지면 비교·재현이 깨진다
@@ -13,7 +13,7 @@ import time
 import uuid
 
 from . import policy
-from .agents_backend import find_env_file, load_guard, load_retry
+from .keys import find_env_file, load_guard, load_retry
 from .backends import CHANGE_SET, TIER_SET, Backend, BoundaryError, LabelAnswer, check_labels
 from .prompts import CHANGE_INSTRUCTIONS, TIER_INSTRUCTIONS, change_prompt, tier_prompt
 

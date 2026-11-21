@@ -223,6 +223,8 @@ tier-screen v2(`eval/tier-screen/results-v2.md`)에서 Elasticsearch·Neo4j 서�
 
 레인 A 관문(doc-pipeline §2-3)을 코드로 만든다. **모델이 분류하고 판정은 결정표(§4, 코드)가 내린다** (CLAUDE.md 규율 1). 최적화 모드 첫 자리(ADR 0008) — Agents SDK + GPT, OpenAI 프로젝트는 이 용도로 따로 발급한 키, SDK 트레이싱 켬.
 
+> **변경 (2026-11-21, 사용자 「버리자」 — ADR 0031 · HYO-220, 결정표 · 분류 프롬프트 · 지표 · 정답지 라벨은 그대로)**: GPT 경로의 런타임을 Agents SDK에서 **openai SDK 직접 호출**(`pipeline/importance/openai_backend.py`, Responses API 구조화 출력)로 바꾼다. 도구 없는 단발 분류라 Agents SDK의 하네스 기능을 쓰지 않았다. 요청 body는 스키마 이름과 빈 칸 둘(`include` · `tools`) 말고 같다(로컬 가짜 서버로 대조, 실제 API 호출 0). **SDK 트레이싱은 없어졌다** — 호출 기록(CallLog)은 그대로. 운영 관문은 이미 W48부터 Claude(`claude-cli/claude-haiku-5-5`, HYO-169)라 GPT 경로는 비교 평가용이다
+
 | 단계 | 누가 | 단위 |
 |---|---|---|
 | 기술 등급 L0–L8 | 모델 + 스크립트 검증(§4 「등급을 매기는 주체」) | 기술 하나당 — 스택이 바뀔 때만, 저장하고 사람이 고칠 수 있게 |

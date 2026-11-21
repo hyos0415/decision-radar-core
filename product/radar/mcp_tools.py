@@ -2,10 +2,10 @@
 
   python product/radar/mcp_tools.py --allow snapshot_fetch,snapshot_search [--guard]
 
-- 도구 본체는 LangChain 도구(tools.py)와 같다 — common/ops를 그대로 부르고, 설명도 같은 글자(ops.DOCS · tools.GUARDED_DOCS)
-- **쓰기 도구는 없다** (propose_adr 안 줌). ADR 쓰기는 지금처럼 그래프의 코드(write 노드 · hitl.write_adr)만 → R8·R9가 구조로 지켜진다
+- 도구 본체는 API 엔진의 도구(tools.py — loop.py가 부른다)와 같다 — common/ops를 그대로 부르고, 설명도 같은 글자(ops.DOCS · tools.GUARDED_DOCS)
+- **쓰기 도구는 없다** (propose_adr 안 줌). ADR 쓰기는 흐름의 코드(detect의 write 단계 · hitl.write_adr)만 → R8·R9가 구조로 지켜진다
 - `--guard`(revisit 판정): 본 글(첫 프롬프트 RADAR_SEEN_FILE + 도구 결과)에 나온 URL만 열고, 열기·검색 합쳐 LOOKUP_BUDGET회 (HYO-137) —
-  LangChain 판과 같은 함수(tools.check_lookup). 거절도 열기·검색 수에 든다(LangChain 판에서 거절이 ToolMessage로 세어지는 것과 같게)
+  API 엔진 판과 같은 함수(tools.check_lookup). 거절도 열기·검색 수에 든다(API 엔진 판에서 거절이 도구 결과로 세어지는 것과 같게)
 - 호출 기록: 도구 한 번마다 RADAR_TOOL_LOG(JSONL)에 {"tool", "input", "events"} 한 줄 — events는 ops가 ctx.record로 남긴 것(스킬 transcript 모양).
   부모(engines.ClaudeCliRunner)가 실행 뒤 읽어 자기 ctx.events에 합치고 도구 수를 센다
 - 환경: 부모가 넘긴 RADAR_* (ADR 폴더 · 스냅숏 · dry-run …)로 Ctx.from_env. radar.py 경로는 RADAR_PY (없으면 스킬 radar.py)

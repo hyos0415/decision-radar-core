@@ -47,7 +47,7 @@ class LoopRunner:
 
 
 class EngineError(RuntimeError):
-    """CLI 엔진 실패 — 로그인 안 됨 · 구독 한도 · 시간 초과 · 결과 모양 이상. 노드가 model_error로 센다 (안전 실패)."""
+    """CLI 엔진 실패 — 로그인 안 됨 · 구독 한도 · 시간 초과 · 결과 모양 이상. 흐름 단계가 model_error로 센다 (안전 실패)."""
 
 
 class CliLog:
@@ -150,7 +150,7 @@ class ClaudeCliRunner:
         self._record(name, res, wall, len(tool_lines))
         if res.get("is_error") or res.get("subtype") != "success":
             raise EngineError(f"engine_error: {res.get('subtype')} {str(res.get('result'))[:300]}")
-        if res.get("num_turns", 0) > max_turns + 2:  # 도구 없이 2턴 · 도구 n번이면 n+2턴 (스파이크). LangChain 판의 recursion limit와 같은 몫
+        if res.get("num_turns", 0) > max_turns + 2:  # 도구 없이 2턴 · 도구 n번이면 n+2턴 (스파이크). API 엔진 루프의 턴 상한(loop.limit)과 같은 몫
             raise EngineError(f"engine_error: 턴 {res.get('num_turns')} > {max_turns} ({name})")
         so = res.get("structured_output")
         if so is None:

@@ -29,7 +29,7 @@ Python 백엔드 FastAPI (localhost)  ── product/radar의 hitl·review·resu
 Renderer: React + TypeScript (Vite, electron-vite)  ── FastAPI JSON API만 부른다
 ```
 
-- 백엔드가 Python인 이유: 제품 코어(LangGraph)와 `radar.py`가 Python이다. TypeScript는 Electron 껍데기와 화면만
+- 백엔드가 Python인 이유: 제품 코어(처음엔 LangGraph, 2026-11-21부터 plain Python — ADR 0030)와 `radar.py`가 Python이다. TypeScript는 Electron 껍데기와 화면만
 - 화면은 백엔드 API만 부르므로 브라우저로도 열린다 — 이식성을 남긴다
 - 정기 실행(revisit·detect 매주)은 앱이 떠 있으면 앱이 백엔드에 시킨다. 수집기는 지금처럼 OS 스케줄러(`collector/schedule_windows.ps1`, 나중에 M1 launchd)
 - 키는 지금처럼 레포 `.env` — 백엔드만 읽고 화면·main에는 넘기지 않는다
