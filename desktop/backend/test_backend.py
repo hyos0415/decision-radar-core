@@ -2002,6 +2002,16 @@ def scenario_hyo116(tmp):
     data = os.path.join(tmp, "data116")
     devdata.seed(data)
     check("실험 예시: 서버가 뜰 때만 더한다 · 두 번째는 안 더한다", devdata.ensure_experiment(data) and not devdata.ensure_experiment(data))
+    # 서버가 새로 만들 때(examples=True)는 예시를 씨앗 앞에 — 뒤에 더하면 씨앗 capture가 처음부터 전부 stale이었다 (HYO-248)
+    fresh = os.path.join(tmp, "data116-fresh")
+    devdata.seed(fresh, examples=True)
+    states = [i["state"] for i in RadarService(fresh).inbox() if i["kind"] == "capture"]
+    check("새 개발 데이터: 실험 예시가 있어도 씨앗 capture는 stale이 아니다", states and set(states) == {"awaiting_approval"}
+          and not devdata.ensure_experiment(fresh), states)
+    late = os.path.join(tmp, "data116-late")
+    devdata.seed(late)
+    devdata.ensure_experiment(late)
+    check("  (대조) 씨앗 뒤에 더하면 stale — 위 검사가 그 차이를 본다", "stale" in {i["state"] for i in RadarService(late).inbox()})
     svc = RadarService(data)
     jobs = jobs_mod.Jobs(svc, start=False)
     c = TestClient(server.create_app(svc, jobs=jobs))
@@ -2027,7 +2037,8 @@ def scenario_hyo116(tmp):
     job = r.json()["job"]
     check("접수: 202 · 종류 experiment · 미리보기에 결정 · 레시피", r.status_code == 202 and job["kind"] == "experiment" and job["state"] == "queued"
           and job["preview"] == f"ADR {ex} · 의존성 올려 보기", job)
-    jid, payload = jobs.q.get()
+    check("작업 줄: 실험은 따로 — capture 줄에 들어가지 않는다 (HYO-248)", jobs.q.empty() and jobs.queue_of("experiment").qsize() == 1)
+    jid, payload = jobs.queue_of("experiment").get()
     jobs.run_one(jid, payload)
     j = c.get(f"/jobs/{jid}").json()
     res = j["result"] or {}
@@ -2050,7 +2061,7 @@ def scenario_hyo116(tmp):
     try:
         check("실사용: 내보내기를 켤 수 있다", c.get(f"/decisions/{ex}").json()["experiment"]["export_allowed"] is True)
         r = c.post("/jobs/experiment", json={"adr": ex, "export": True})
-        jid, payload = jobs.q.get()
+        jid, payload = jobs.queue_of("experiment").get()
         jobs.run_one(jid, payload)
         j = c.get(f"/jobs/{jid}").json()
     finally:
@@ -2060,6 +2071,31 @@ def scenario_hyo116(tmp):
     check("실사용: 깨짐도 작업은 끝(done) — 판정은 결과에", j["state"] == "done" and j["result"]["verdict"] == "fail" and not j["result"]["ok"]
           and j["result"]["export"]["skipped_reason"] == "내보내지 않음: fail", j)
     check("상세: 지난 실험 둘, 최근 것 먼저", [x["verdict"] for x in c.get(f"/decisions/{ex}").json()["experiments"]] == ["fail", "pass"])
+    # 일꾼이 돌 때: 실험이 도는 동안 capture가 기다리지 않는다 (HYO-248 — 11/21 실사용에서 capture가 실험 2분 뒤에 줄 섰다)
+    import threading
+    import time
+    gate, entered = threading.Event(), threading.Event()
+    orig_run_exp = svc.run_experiment
+
+    def slow_experiment(adr_id, export=False):
+        entered.set()
+        gate.wait(10)
+        return orig_run_exp(adr_id, export=export)
+    svc.run_experiment = slow_experiment
+    live = jobs_mod.Jobs(svc, start=True)
+    try:
+        xj = live.submit("experiment", {"adr": ex})
+        entered.wait(5)
+        cj = live.submit("capture", {"conversation": "이 조사 결정 기록으로 남겨줘 — pydantic 2.12 검토"})
+        deadline = time.time() + 20
+        while live.get(cj["id"])["state"] in ("queued", "running") and time.time() < deadline:
+            time.sleep(0.05)
+        cap_state, exp_state = live.get(cj["id"])["state"], live.get(xj["id"])["state"]
+    finally:
+        gate.set()
+        live.join()
+        svc.run_experiment = orig_run_exp
+    check("작업 줄: 실험이 도는 동안 capture가 먼저 끝난다", cap_state in ("done", "error") and exp_state == "running", (cap_state, exp_state))
 
 
 def scenario_hyo245(tmp):

@@ -173,13 +173,17 @@ def seed_profile(data_dir, profile):
     return out
 
 
-def seed(data_dir, profile=devprofiles.DEFAULT):
+def seed(data_dir, profile=devprofiles.DEFAULT, examples=False):
+    """examples=True(서버 · 명령줄)면 「실험해 보기」 예시 결정을 capture 씨앗 **앞에** 더한다 — 뒤에 더하면 씨앗 항목이 멈출 때 찍은
+    지문(ADR 목록)과 달라져 처음부터 전부 ⚠ 바뀐 점(stale)으로 뜬다 (HYO-248). 회귀(test_backend)는 기본 False — 결정 건수 5개 그대로."""
     if profile != devprofiles.DEFAULT:
         return seed_profile(data_dir, profile)
     os.makedirs(data_dir, exist_ok=True)
     shutil.copytree(os.path.join(FIX, "adr-fixture"), os.path.join(data_dir, "adr-fixture"))
     for r in ("finance-verifier", "medical-mate"):  # radar-targets.json이 ../<repo>로 가리킨다
         shutil.copytree(os.path.join(FIX, "repos", r), os.path.join(data_dir, r))
+    if examples:
+        ensure_experiment(data_dir)
     ensure_snapshots(data_dir)
     ensure_topics(data_dir)
     ensure_lists(data_dir)
@@ -214,4 +218,4 @@ if __name__ == "__main__":
     if is_seeded(a.data_dir):
         print(f"이미 있다: {a.data_dir} (--reset으로 다시 만든다)")
     else:
-        print(json.dumps(seed(a.data_dir, a.profile), ensure_ascii=False, indent=1))
+        print(json.dumps(seed(a.data_dir, a.profile, examples=True), ensure_ascii=False, indent=1))

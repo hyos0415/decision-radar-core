@@ -21,7 +21,15 @@
   {"<repo>": {"python": "3.12", "components": {"<component>": {
       "manifests": ["product/requirements.txt"],                       # 고정 줄을 찾을 파일
       "install": ["requirements.txt", "product/requirements.txt"],     # uv pip install -r … (repo 루트 기준)
-      "run": [{"script": "desktop/backend/test_backend.py", "args": []}]}}}}
+      "run": [{"script": "desktop/backend/test_backend.py", "args": []}],
+      "npm": {"dir": "desktop", "run": [{"cmd": ["npm", "run", "build"]}]}}}}}   # 선택 — npm 의존성 (HYO-248)
+
+npm 의존성 (HYO-248): 패키지가 `npm.dir`의 package.json(dependencies · devDependencies · optionalDependencies)에 있으면 npm 경로로 돈다.
+  기준 `npm ci` → 검사 → package.json 범위(^ · ~ 앞머리는 그대로)와 package-lock.json의 그 항목(version · resolved · integrity)만 고친다 →
+  다시 `npm ci` → 같은 검사. lockfile을 npm으로 다시 만들지 않는다 — npm 판이 다르면 남의 줄까지 바뀐다(11/21 Electron: libc 칸이 지워졌다).
+  새 버전의 의존성이 바뀌었으면 `npm ci`가 lockfile이 안 맞는다고 멈춘다 → install_failed (그때는 사람이 npm install로 올린다).
+  「이 패키지를 올렸나」는 node 모듈 훅(`module.registerHooks`의 load, node 22.15+)으로 본다 — 검사와 그 자식 node 프로세스가
+  `node_modules/<이름>/` 아래 파일을 불렀는지. 훅이 없는 node면 「아니오」로 남는다 (모름이지 통과가 아니다)
 """
 import argparse
 import datetime as dt
@@ -67,6 +75,31 @@ finally:
     json.dump({"loaded": {n: any(m == n or m.startswith(n + ".") for m in sys.modules) for n in names}}, open(out, "w"))
 sys.exit(code)
 '''
+
+
+# npm 검사를 감싸는 모듈 훅 — NODE_OPTIONS=--import로 검사와 그 자식 node 프로세스에 걸린다. 불러온(load) 파일이
+# node_modules/<이름>/ 아래면 이름을 적는다. resolve가 아니라 load를 본다 — 경로만 찾고 안 부른 것은 세지 않는다
+NPM_PROBE = r'''import { registerHooks } from 'node:module'
+import { appendFileSync } from 'node:fs'
+const out = process.env.TRYOUT_PROBE_OUT
+const names = (process.env.TRYOUT_PROBE_NAMES || '').split(',').filter(Boolean)
+const seen = new Set()
+if (out && typeof registerHooks === 'function') {
+  registerHooks({
+    load(url, context, nextLoad) {
+      for (const n of names) {
+        if (!seen.has(n) && typeof url === 'string' && url.includes(`/node_modules/${n}/`)) {
+          seen.add(n)
+          try { appendFileSync(out, `${n}\t${url}\n`) } catch {}
+        }
+      }
+      return nextLoad(url, context)
+    }
+  })
+}
+'''
+NPM_SECTIONS = ("dependencies", "devDependencies", "optionalDependencies")
+NPM_SPEC = re.compile(r"^(?P<pre>[\^~]?)\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-+]+)?$")
 
 
 def norm(name):
@@ -191,9 +224,174 @@ def run_checks(env, repo, runs, names, out, tag, timeout=1800):
     return rows
 
 
-def judge(base, after, package):
-    """기준 · 올린 뒤 검사 결과 → (verdict, 스크립트별 줄). 기준에서 실패하던 스크립트는 「원래 실패」로 따로 센다 — 올린 탓으로 치지 않는다."""
-    name, rows, broke, exercised = import_name(package), [], False, False
+# ── npm 의존성 (HYO-248) ─────────────────────────────────────────────
+
+def npm_dep(repo, npm, package):
+    """npm 설정의 package.json에서 package → {name, section, spec, manifest, lock, from} | None (이 component의 npm 의존성이 아니다).
+    from = package-lock.json에 적힌 설치 버전 (없으면 None). 이름은 대소문자만 무시한다 — npm은 - · _ · .를 다른 이름으로 본다."""
+    if not npm:
+        return None
+    rel = Path(npm.get("dir") or ".")
+    pj = Path(repo) / rel / "package.json"
+    if not pj.exists():
+        return None
+    data = json.loads(pj.read_text(encoding="utf-8"))
+    want = (package or "").strip().lower()
+    for sec in NPM_SECTIONS:
+        for name, spec in (data.get(sec) or {}).items():
+            if name.lower() != want:
+                continue
+            lock = Path(repo) / rel / "package-lock.json"
+            frm = None
+            if lock.exists():
+                frm = ((json.loads(lock.read_text(encoding="utf-8")).get("packages") or {}).get(f"node_modules/{name}") or {}).get("version")
+            return {"name": name, "section": sec, "spec": spec, "manifest": (rel / "package.json").as_posix(),
+                    "lock": (rel / "package-lock.json").as_posix(), "from": frm}
+    return None
+
+
+def _json_text(obj):
+    return json.dumps(obj, indent=2, ensure_ascii=False) + "\n"      # npm이 쓰는 모양 (JSON.stringify(…, null, 2) + 줄바꿈)
+
+
+def npm_bump(repo, dep, version, dist):
+    """package.json 범위와 package-lock.json의 그 항목만 고친 글 → ({경로: 글}, pin) | (None, 이유). 아직 쓰지 않는다.
+    같은 모양으로 다시 쓸 수 없는 파일(들여쓰기가 다르다 등)은 고치지 않는다 — diff에 남의 줄이 섞이지 않게."""
+    m = NPM_SPEC.match(dep["spec"] or "")
+    if not m:
+        return None, f"package.json의 {dep['name']} 범위 {dep['spec']!r}는 고칠 수 있는 꼴(1.2.3 · ^1.2.3 · ~1.2.3)이 아니다"
+    if not dep["from"]:
+        return None, f"{dep['lock']}에 {dep['name']} 항목이 없다"
+    texts = {p: (Path(repo) / p).read_text(encoding="utf-8") for p in (dep["manifest"], dep["lock"])}
+    for p, text in texts.items():
+        try:
+            same = _json_text(json.loads(text)) == text
+        except ValueError:
+            same = False
+        if not same:
+            return None, f"{p}를 같은 모양(들여쓰기 2 · 끝 줄바꿈)으로 다시 쓸 수 없다 — 손으로 올린다"
+    spec = m.group("pre") + version
+    pj, lock = json.loads(texts[dep["manifest"]]), json.loads(texts[dep["lock"]])
+    if (lock.get("lockfileVersion") or 0) < 2:
+        return None, f"{dep['lock']}의 lockfileVersion {lock.get('lockfileVersion')}은 다루지 않는다 (2 이상)"
+    pj[dep["section"]][dep["name"]] = spec
+    root = (lock.get("packages") or {}).get("") or {}
+    if dep["name"] in (root.get(dep["section"]) or {}):
+        root[dep["section"]][dep["name"]] = spec
+    fields = {"version": version, "resolved": dist["tarball"], "integrity": dist["integrity"]}
+    lock["packages"][f"node_modules/{dep['name']}"].update(fields)
+    legacy = (lock.get("dependencies") or {}).get(dep["name"])          # lockfile 2는 옛 칸도 같이 둔다
+    if isinstance(legacy, dict):
+        legacy.update(fields)
+    pin = {"package": dep["name"], "manifest": dep["manifest"], "from": dep["from"], "to": version, "range": f"{dep['spec']} → {spec}"}
+    return {dep["manifest"]: _json_text(pj), dep["lock"]: _json_text(lock)}, pin
+
+
+class NpmEnv:
+    """npm 사본 환경 — 설치는 `npm ci`(lockfile 그대로). 테스트는 바꿔 끼운다."""
+
+    def view(self, name, version, log):
+        """레지스트리에서 그 버전의 tarball · integrity → dict | None (없는 버전 · 닿지 않음)."""
+        cmd = [npm_bin(), "view", f"{name}@{version}", "dist", "--json"]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=120, env=check_env())
+        except (OSError, subprocess.TimeoutExpired) as e:
+            Path(log).open("a", encoding="utf-8").write(f"\n$ {' '.join(cmd)}\n[실행 실패 {e}]\n")
+            return None
+        Path(log).open("a", encoding="utf-8").write(f"\n$ {' '.join(cmd)}\n{r.stdout}{r.stderr}")
+        try:
+            dist = json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else {}
+        except ValueError:
+            return None
+        return dist if isinstance(dist, dict) and dist.get("tarball") and dist.get("integrity") else None
+
+    def install(self, repo, rel, log):
+        return sh([npm_bin(), "ci", "--no-audit", "--no-fund"], Path(repo) / rel, log, env=check_env())
+
+    def version_of(self, repo, rel, name):
+        try:
+            return json.loads((Path(repo) / rel / "node_modules" / name / "package.json").read_text(encoding="utf-8")).get("version")
+        except (OSError, ValueError):
+            return None
+
+
+def npm_bin():
+    return shutil.which("npm") or "npm"      # Windows는 npm.cmd
+
+
+def run_npm_checks(repo, rel, runs, name, out, tag, timeout=1800):
+    """npm 검사 명령을 차례로 돈다 → run_checks와 같은 모양. 모듈 훅(NPM_PROBE)을 NODE_OPTIONS로 걸어 그 패키지를 불렀는지 본다."""
+    probe = Path(out) / "probe.mjs"
+    probe.write_text(NPM_PROBE, encoding="utf-8")
+    rows = []
+    for i, r in enumerate(runs):
+        seen = Path(out) / f"{tag}-{i}.loaded.txt"
+        if seen.exists():
+            seen.unlink()
+        log = Path(out) / f"{tag}-{i}.log"
+        env = check_env()
+        env.update(NODE_OPTIONS=f"{env.get('NODE_OPTIONS', '')} --import={probe.as_uri()}".strip(), TRYOUT_PROBE_OUT=str(seen), TRYOUT_PROBE_NAMES=name)
+        cmd = [shutil.which(r["cmd"][0]) or r["cmd"][0], *r["cmd"][1:]]
+        res = sh(cmd, Path(repo) / rel, log, timeout, env=env)
+        got = {ln.split("\t", 1)[0] for ln in seen.read_text(encoding="utf-8").splitlines()} if seen.exists() else set()
+        rows.append({"script": " ".join(r["cmd"]), "args": [], "exit": res["exit"], "seconds": res["seconds"], "loaded": {name: name in got}, "log": str(log)})
+    return rows
+
+
+def _tryout_npm(res, adr, repo_path, repo, check, dep, version, out, log, npm_env=None, extra=(), export=False):
+    """npm 경로 (HYO-248) — _tryout이 사본을 만든 뒤 부른다. 판정 · 내보내기 규칙은 Python 경로와 같다."""
+    npm = check["npm"]
+    rel = npm.get("dir") or "."
+    res["ecosystem"] = "npm"
+    if extra:
+        res["no_pin_for"], res["note"] = [p for p, _ in extra], "npm 경로는 함께 올리기(--with)를 아직 하지 않는다"
+        return finish(res, "no_pin", out)
+    if dep["from"] == version:
+        res["pins"] = [{"package": dep["name"], "manifest": dep["manifest"], "from": dep["from"], "to": version}]
+        return finish(res, "already", out)
+    if not npm.get("run"):
+        return finish(res, "no_checks", out)
+    env = npm_env or NpmEnv()
+    dist = env.view(dep["name"], version, log)
+    if not dist:
+        res["install_error"] = f"npm view {dep['name']}@{version} 실패 — 레지스트리에 그 버전이 없거나 닿지 않는다"
+        return finish(res, "install_failed", out)
+    texts, pin = npm_bump(repo, dep, version, dist)
+    if texts is None:
+        res["no_pin_for"], res["note"] = [dep["name"]], pin
+        return finish(res, "no_pin", out)
+    res["pins"] = [pin]
+    r1 = env.install(repo, rel, log)
+    res["steps"].append({"step": "기준 설치 (npm ci)", **r1})
+    if r1["exit"] != 0:
+        return finish(res, "baseline_failed", out)
+    res["installed_before"] = env.version_of(repo, rel, dep["name"])
+    base = run_npm_checks(repo, rel, npm["run"], dep["name"], out, "base")
+    for m, text in texts.items():
+        (Path(repo) / m).write_text(text, encoding="utf-8", newline="")
+    res["diff"] = subprocess.run(["git", "-C", str(repo), "diff", "--no-color"], capture_output=True, text=True).stdout
+    r2 = env.install(repo, rel, log)
+    res["steps"].append({"step": "올린 뒤 설치 (npm ci)", **r2})
+    if r2["exit"] != 0:
+        res["install_error"] = tail(log, 25)
+        res["note"] = "lockfile은 이 패키지 항목만 고쳤다 — 새 버전의 의존성이 바뀌었으면 npm ci가 lockfile이 안 맞는다고 멈춘다 (그때는 사람이 npm install로 올린다)"
+        res["checks"] = [{"script": b["script"], "base_exit": b["exit"], "after_exit": None, "state": "안 돌림", "loaded": False} for b in base]
+        return finish(res, "install_failed", out)
+    res["installed_after"] = env.version_of(repo, rel, dep["name"])
+    if (res["installed_after"] or "") != version:
+        return finish(res, "not_applied", out)
+    after = run_npm_checks(repo, rel, npm["run"], dep["name"], out, "after")
+    res["verdict"], res["checks"] = judge(base, after, dep["name"], key=dep["name"])
+    res["seconds"] = {"base": sum(b["seconds"] for b in base), "after": sum(a["seconds"] for a in after)}
+    if export and may_export(res["verdict"]):
+        res["export"] = export_pr(res, adr, repo_path, repo, texts, log)
+    return finish(res, res["verdict"], out)
+
+
+def judge(base, after, package, key=None):
+    """기준 · 올린 뒤 검사 결과 → (verdict, 스크립트별 줄). 기준에서 실패하던 스크립트는 「원래 실패」로 따로 센다 — 올린 탓으로 치지 않는다.
+    key = loaded에서 볼 이름 (기본: 파이썬 import 이름. npm은 패키지 이름 그대로)."""
+    name, rows, broke, exercised = key or import_name(package), [], False, False
     for b, a in zip(base, after):
         if b["exit"] != 0:
             state = "원래 실패"
@@ -229,7 +427,7 @@ def bump_all(repo, manifests, bumps):
     return texts, pins
 
 
-def _tryout(adr, repo_name, repo_path, component, check, package, version, out, env=None, keep=False, extra=(), export=False):
+def _tryout(adr, repo_name, repo_path, component, check, package, version, out, env=None, keep=False, extra=(), export=False, npm_env=None):
     """한 건을 끝까지 → result dict. out 폴더에 result.json · report.md · 로그를 쓴다. check = 그 component의 검사 설정.
     extra = 함께 올릴 [(패키지, 버전)] — 혼자서는 설치가 안 되는 릴리스(langchain 1.5.0은 langchain-core 1.8.0 이상이 필요하다)를 같이 올려 본다."""
     out = Path(out).resolve()          # 검사는 사본 폴더에서 돈다 — 상대 경로면 probe를 못 찾는다
@@ -242,6 +440,9 @@ def _tryout(adr, repo_name, repo_path, component, check, package, version, out, 
     try:
         repo = work / "repo"
         res["commit"], res["based_on"] = copy_repo(repo_path, repo, log)
+        dep = npm_dep(repo, check.get("npm"), package)
+        if dep:                        # package.json에 있으면 npm 경로 (HYO-248)
+            return _tryout_npm(res, adr, repo_path, repo, check, dep, version, out, log, npm_env=npm_env, extra=extra, export=export)
         manifests = check.get("manifests") or []
         texts, pins = bump_all(repo, manifests, [(package, version), *extra])
         res["pins"] = pins
@@ -289,9 +490,9 @@ def _tryout(adr, repo_name, repo_path, component, check, package, version, out, 
             shutil.rmtree(work, ignore_errors=True)
 
 
-def tryout(adr, repo_name, repo_path, component, check, package, version, out, env=None, keep=False, extra=(), export=False):
+def tryout(adr, repo_name, repo_path, component, check, package, version, out, env=None, keep=False, extra=(), export=False, npm_env=None):
     """`_tryout` + 내보내기 표시 — export를 켰는데 통과가 아니면 「내보내지 않음」을 결과에 적는다."""
-    res = _tryout(adr, repo_name, repo_path, component, check, package, version, out, env=env, keep=keep, extra=extra, export=export)
+    res = _tryout(adr, repo_name, repo_path, component, check, package, version, out, env=env, keep=keep, extra=extra, export=export, npm_env=npm_env)
     if export and "export" not in res:
         res["export"] = {"branch": None, "pr_url": None, "skipped_reason": f"내보내지 않음: {res['verdict']}"}
         finish(res, res["verdict"], out)
@@ -343,13 +544,20 @@ def export_branch(package, version):
     return "radar/tryout/" + re.sub(r"[^A-Za-z0-9._\-]+", "-", f"{norm(package)}-{version}").strip("-.")
 
 
+def adr_ref(adr):
+    """PR 본문에 적을 결정 기록 위치 — ADR repo 안의 경로(`docs/adr/<파일>`)만. 이 기기의 절대 경로를 남에게 보이지 않는다 (HYO-248)."""
+    p = Path(adr.get("path") or "")
+    return f"docs/adr/{p.name}" if p.parent.name == "adr" and p.parent.parent.name == "docs" else p.name
+
+
 def pr_body(res, adr):
-    pins = "\n".join(f"- `{p['manifest']}`: {p['package']} {p['from']} → {p['to']}" for p in res.get("pins") or [])
+    pins = "\n".join(f"- `{p['manifest']}`: {p['package']} {p['from']} → {p['to']}" + (f" (범위 {p['range']})" if p.get("range") else "")
+                     for p in res.get("pins") or [])
     rows = "\n".join(f"- `{c['script']}`: 기준 {'통과' if c['base_exit'] == 0 else '실패'} → 올린 뒤 "
                      f"{'통과' if c['after_exit'] == 0 else '실패'} ({c['state']}, 이 패키지를 올렸나: {'예' if c['loaded'] else '아니오'})"
                      for c in res.get("checks") or [])
     return (f"레이더의 올려 보기(`pipeline/tryout.py`)가 격리된 사본에서 올려 보고 기존 검사를 돌린 결과, 통과해서 올리는 PR입니다.\n\n"
-            f"- 결정 기록: ADR {adr['id']} (`{adr.get('path', '')}`)\n- 대상: {res['repo']} · {res['component']}\n"
+            f"- 결정 기록: ADR {adr['id']} (`{adr_ref(adr)}`)\n- 대상: {res['repo']} · {res['component']}\n"
             f"- 버전: {res['package']} {res.get('installed_before') or '?'} → {res['to']}\n\n"
             f"고정 줄 변경:\n{pins}\n\n돌린 검사:\n{rows}\n\n"
             f"판정: `{res['verdict']}` — {VERDICTS[res['verdict']]}\n\n"
@@ -424,7 +632,9 @@ def report(res):
              f"- 결정 기록 {res['adr']} ({res['technology']}) · 실행 {res['at']}",
              f"- 사본 기준: {res.get('based_on', '—')} `{res.get('commit', '—')}` — 대상 repo에는 아무것도 쓰지 않았다"]
     for p in res.get("pins") or []:
-        lines.append(f"- 고정 줄: `{p['manifest']}` {p['package']} {p['from']} → {p['to']}")
+        lines.append(f"- 고정 줄: `{p['manifest']}` {p['package']} {p['from']} → {p['to']}" + (f" (범위 {p['range']} · lockfile은 이 항목만)" if p.get("range") else ""))
+    if res.get("note"):
+        lines.append(f"- 참고: {res['note']}")
     if res.get("with"):
         lines.append("- 함께 올림: " + " · ".join(f"{w['package']} {w['to']}" for w in res["with"]) + " — 이 결과는 **같이 올렸을 때**의 것이다")
     if res.get("no_pin_for"):
@@ -436,7 +646,8 @@ def report(res):
         for c in res["checks"]:
             after = "—" if c["after_exit"] is None else ("통과" if c["after_exit"] == 0 else f"실패({c['after_exit']})")
             lines.append(f"| `{c['script']}` | {'통과' if c['base_exit'] == 0 else '실패(' + str(c['base_exit']) + ')'} | {after} | {c['state']} | {'예' if c['loaded'] else '아니오'} |")
-        lines += ["", "「이 패키지를 올렸나」는 검사 프로세스 안에서만 본다 — 자식 프로세스에서만 쓰는 검사는 「아니오」로 나온다."]
+        lines += ["", "「이 패키지를 올렸나」는 npm 검사면 검사와 그 자식 node 프로세스가 그 패키지 파일을 불렀는지(모듈 훅)를 본다." if res.get("ecosystem") == "npm"
+                  else "「이 패키지를 올렸나」는 검사 프로세스 안에서만 본다 — 자식 프로세스에서만 쓰는 검사는 「아니오」로 나온다."]
     if res.get("install_error"):
         lines += ["", "설치 오류 (끝 25줄):", "", "```", res["install_error"], "```"]
     lines += ["", "이 결과는 근거다 — 채택 여부는 사람이 정한다. 기존 검사가 덮지 않는 동작은 이 결과로 알 수 없다.", ""]

@@ -10,6 +10,7 @@
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -57,12 +58,61 @@ class FakeEnv:
         return json.loads((self.repo / "installed.json").read_text(encoding="utf-8")).get(tryout.norm(package))
 
 
+# npm 픽스처 (HYO-248) — web/ 아래 package.json · lockfile. 검사는 node 대신 파이썬 스크립트가 모듈 훅 흉내(TRYOUT_PROBE_OUT에 이름 적기)를 낸다
+PKG = {"name": "web", "private": True, "dependencies": {"zz-ui": "^1.0.0"}, "devDependencies": {"zz-ui-extra": "~1.0.0", "zz-odd": ">=1 <3"}}
+LOCK = {"name": "web", "lockfileVersion": 3, "requires": True, "packages": {
+    "": {"name": "web", "dependencies": {"zz-ui": "^1.0.0"}, "devDependencies": {"zz-ui-extra": "~1.0.0", "zz-odd": ">=1 <3"}},
+    "node_modules/zz-odd": {"version": "1.0.0", "resolved": "https://r/zz-odd/-/zz-odd-1.0.0.tgz", "integrity": "sha512-odd", "dev": True},
+    "node_modules/zz-ui": {"version": "1.0.0", "resolved": "https://r/zz-ui/-/zz-ui-1.0.0.tgz", "integrity": "sha512-1.0.0", "license": "MIT"},
+    "node_modules/zz-ui-extra": {"version": "1.0.0", "resolved": "https://r/zz-ui-extra/-/zz-ui-extra-1.0.0.tgz", "integrity": "sha512-x", "dev": True}}}
+NPM_USES = ("import json, os, sys\nout = os.environ.get('TRYOUT_PROBE_OUT')\nif out:\n    open(out, 'a').write('zz-ui\\tfile:///x/node_modules/zz-ui/index.js\\n')\n"
+            "v = json.load(open('node_modules/zz-ui/package.json'))['version']\nsys.exit(1 if v.startswith('2.') else 0)\n")
+
+
+def _npm_files(wc):
+    (wc / "web").mkdir()
+    for name, body in (("web/package.json", tryout._json_text(PKG)), ("web/package-lock.json", tryout._json_text(LOCK)),
+                       ("web/uses.py", NPM_USES), ("web/plain.py", PLAIN)):
+        (wc / name).write_text(body, encoding="utf-8")
+
+
+class FakeNpmEnv:
+    """npm ci = lockfile의 설치 버전을 node_modules/<이름>/package.json에 적는 것. fail_on 버전은 설치 실패 · missing 버전은 레지스트리에 없다."""
+
+    def __init__(self, fail_on=(), missing=()):
+        self.fail_on, self.missing = set(fail_on), set(missing)
+
+    def view(self, name, version, log):
+        return None if version in self.missing else {"tarball": f"https://r/{name}/-/{name}-{version}.tgz", "integrity": f"sha512-{version}"}
+
+    def install(self, repo, rel, log):
+        lock = json.loads((Path(repo) / rel / "package-lock.json").read_text(encoding="utf-8"))
+        got = {k.split("node_modules/", 1)[1]: v["version"] for k, v in lock["packages"].items() if k.startswith("node_modules/")}
+        bad = [v for v in got.values() if v in self.fail_on]
+        for name, v in ({} if bad else got).items():
+            (Path(repo) / rel / "node_modules" / name).mkdir(parents=True, exist_ok=True)
+            (Path(repo) / rel / "node_modules" / name / "package.json").write_text(json.dumps({"name": name, "version": v}), encoding="utf-8")
+        Path(log).open("a", encoding="utf-8").write("npm ERR! lock file out of sync\n" if bad else "ok\n")
+        return {"exit": 1 if bad else 0, "cmd": ["fake npm ci"], "seconds": 0, "log": str(log)}
+
+    def version_of(self, repo, rel, name):
+        return tryout.NpmEnv().version_of(repo, rel, name)          # 설치 버전 읽기는 진짜와 같다
+
+
+def _run_npm(d, runs, version="1.5.0", env=None, name="out", export=False, package="zz-ui", adr=None):
+    wc = _target(d) if not (Path(d) / "target").exists() else Path(d) / "target"
+    check = {"manifests": ["requirements.txt"], "install": ["requirements.txt"], "run": [{"script": "app/plain.py"}],
+             "npm": {"dir": "web", "run": [{"cmd": [sys.executable, s]} for s in runs]}}
+    return wc, tryout.tryout(adr or ADR, "t", str(wc), "web", check, package, version, Path(d) / name, env=FakeEnv(), npm_env=env or FakeNpmEnv(), export=export)
+
+
 def _target(d):
     """임시 대상 repo — origin/main이 있는 작업 사본 (올려 보기는 origin/main에 맞춘다)."""
     up, wc = Path(d) / "up.git", Path(d) / "target"
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(up)], check=True)
     subprocess.run(["git", "clone", "-q", str(up), str(wc)], check=True, capture_output=True)
     (wc / "app").mkdir()
+    _npm_files(wc)
     for name, body in (("requirements.txt", REQS), ("app/uses.py", USES), ("app/plain.py", PLAIN), ("app/broken.py", BROKEN), ("app/envcheck.py", ENVCHECK)):
         (wc / name).write_text(body, encoding="utf-8")
     git = ["git", "-C", str(wc), "-c", "user.name=t", "-c", "user.email=t@example.com"]
@@ -293,6 +343,98 @@ def test_export_refuses_default_branch():
         assert _heads(d) == ["main"] and _up_git(d, "rev-parse", "main") == main_before
 
 
+def test_npm_bump_touches_only_that_package():
+    with tempfile.TemporaryDirectory() as d:
+        wc = Path(d)
+        _npm_files(wc)
+        dep = tryout.npm_dep(wc, {"dir": "web"}, "ZZ-UI")                                             # 대소문자만 무시
+        assert dep == {"name": "zz-ui", "section": "dependencies", "spec": "^1.0.0", "manifest": "web/package.json", "lock": "web/package-lock.json", "from": "1.0.0"}, dep
+        assert tryout.npm_dep(wc, {"dir": "web"}, "zz_ui") is None and tryout.npm_dep(wc, {"dir": "web"}, "zz-web") is None   # npm은 _ · -를 다른 이름으로 본다
+        assert tryout.npm_dep(wc, None, "zz-ui") is None                                              # npm 설정이 없으면 npm 경로가 아니다
+        texts, pin = tryout.npm_bump(wc, dep, "1.5.0", {"tarball": "https://r/zz-ui/-/zz-ui-1.5.0.tgz", "integrity": "sha512-new"})
+        assert pin == {"package": "zz-ui", "manifest": "web/package.json", "from": "1.0.0", "to": "1.5.0", "range": "^1.0.0 → ^1.5.0"}, pin
+        pkg, lock = json.loads(texts["web/package.json"]), json.loads(texts["web/package-lock.json"])
+        assert pkg == {**PKG, "dependencies": {"zz-ui": "^1.5.0"}}, pkg                                # 다른 의존성 · 앞머리(^)는 그대로
+        assert lock["packages"]["node_modules/zz-ui"] == {"version": "1.5.0", "resolved": "https://r/zz-ui/-/zz-ui-1.5.0.tgz", "integrity": "sha512-new", "license": "MIT"}
+        assert lock["packages"][""]["dependencies"] == {"zz-ui": "^1.5.0"} and lock["packages"]["node_modules/zz-ui-extra"] == LOCK["packages"]["node_modules/zz-ui-extra"]
+        old = (wc / "web/package-lock.json").read_text(encoding="utf-8").splitlines()
+        changed = [a for a, b in zip(old, texts["web/package-lock.json"].splitlines()) if a != b]
+        assert len(changed) == 4 and len(old) == len(texts["web/package-lock.json"].splitlines()), changed   # 범위 · version · resolved · integrity 네 줄만
+        odd = tryout.npm_dep(wc, {"dir": "web"}, "zz-odd")
+        assert tryout.npm_bump(wc, odd, "2.0.0", {"tarball": "t", "integrity": "i"})[0] is None              # 범위(>=1 <3)는 고칠 꼴이 아니다 — 지어내지 않는다
+        (wc / "web/package.json").write_text(json.dumps(PKG, indent=4) + "\n", encoding="utf-8")
+        texts, why = tryout.npm_bump(wc, dep, "1.5.0", {"tarball": "t", "integrity": "i"})
+        assert texts is None and "같은 모양" in why, why                                              # 들여쓰기가 다르면 통째로 다시 쓰지 않는다
+
+
+def test_npm_tryout_judges_like_python():
+    with tempfile.TemporaryDirectory() as d:
+        _, r = _run_npm(d, ["uses.py"])
+        assert r["ecosystem"] == "npm" and r["verdict"] == "pass" and r["checks"][0]["loaded"], r
+        assert (r["installed_before"], r["installed_after"]) == ("1.0.0", "1.5.0") and r["pins"][0]["range"] == "^1.0.0 → ^1.5.0", r
+        assert '-    "zz-ui": "^1.0.0"' in r["diff"] and '+      "version": "1.5.0",' in r["diff"], r["diff"]
+        assert "범위 ^1.0.0 → ^1.5.0" in (Path(d) / "out" / "report.md").read_text(encoding="utf-8")
+        _, r = _run_npm(d, ["plain.py"], name="o2")
+        assert r["verdict"] == "pass_not_exercised" and not r["checks"][0]["loaded"], r              # 그 패키지를 안 부른 검사로는 모른다
+        _, r = _run_npm(d, ["uses.py"], version="2.0.0", name="o3")
+        assert r["verdict"] == "fail" and r["checks"][0]["state"] == "깨짐", r
+
+
+def test_npm_cannot_check_cases():
+    with tempfile.TemporaryDirectory() as d:
+        _, r = _run_npm(d, ["uses.py"], env=FakeNpmEnv(missing={"1.5.0"}))
+        assert r["verdict"] == "install_failed" and "npm view" in r["install_error"] and not r.get("pins"), r
+        _, r = _run_npm(d, ["uses.py"], env=FakeNpmEnv(fail_on={"1.5.0"}), name="o2")
+        assert r["verdict"] == "install_failed" and "lockfile" in r["note"] and r["checks"][0]["state"] == "안 돌림", r
+        _, r = _run_npm(d, ["uses.py"], version="1.0.0", name="o3")
+        assert r["verdict"] == "already", r
+        _, r = _run_npm(d, ["uses.py"], package="zz-odd", version="2.0.0", name="o4")
+        assert r["verdict"] == "no_pin" and "고칠 수 있는 꼴" in r["note"], r
+        _, r = _run_npm(d, ["uses.py"], package="zz-web", name="o5")
+        assert r.get("ecosystem") is None and r["verdict"] == "pass_not_exercised", r                 # package.json에 없으면 Python 경로 그대로
+
+
+def test_npm_export_commits_manifest_and_lock_only():
+    with tempfile.TemporaryDirectory() as d:
+        _target(d)
+        adr = {**ADR, "path": str(Path(d) / "adr" / "docs" / "adr" / "0017-zz-ui.md")}
+        (_, r), calls = _with_fake_gh(d, lambda: _run_npm(d, ["uses.py"], export=True, adr=adr))
+        br = "radar/tryout/zz-ui-1.5.0"
+        assert r["verdict"] == "pass" and r["export"]["branch"] == br and r["export"]["pr_url"], r
+        assert _up_git(d, "diff", "--name-only", "main", br).split() == ["web/package-lock.json", "web/package.json"]   # node_modules · 프로브 부산물은 안 넣는다
+        create = [c for c in calls if c.startswith("pr create")]
+        assert len(create) == 1 and "`docs/adr/0017-zz-ui.md`" in create[0] and str(d) not in create[0], create      # 이 기기의 절대 경로를 PR에 적지 않는다
+        assert "범위 ^1.0.0 → ^1.5.0" in create[0], create
+
+
+def _node_hooks():
+    node = shutil.which("node")
+    if not node:
+        return None
+    r = subprocess.run([node, "-e", "process.exit(typeof require('node:module').registerHooks === 'function' ? 0 : 1)"], capture_output=True)
+    return node if r.returncode == 0 else None
+
+
+def test_npm_probe_counts_loads_not_resolves():
+    """진짜 node로 모듈 훅을 본다 — 불러온(require) 검사만 「올렸다」, 경로만 찾은(import.meta.resolve) 검사는 아니다. node 22.15 미만이면 건너뛴다.
+    require.resolve는 훅을 아예 안 지나서 둘을 못 가른다 — 경로 찾기는 import.meta.resolve로 본다."""
+    node = _node_hooks()
+    if not node:
+        print("    (건너뜀: registerHooks가 있는 node가 없다)")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        mod = Path(d) / "node_modules" / "zz-ui"
+        mod.mkdir(parents=True)
+        (mod / "package.json").write_text('{"name": "zz-ui", "version": "1.0.0", "main": "index.js"}', encoding="utf-8")
+        (mod / "index.js").write_text("module.exports = 1\n", encoding="utf-8")
+        out = Path(d) / "out"
+        out.mkdir()
+        rows = tryout.run_npm_checks(d, ".", [{"cmd": [node, "-e", "require('zz-ui')"]}, {"cmd": [node, "--input-type=module", "-e", "import.meta.resolve('zz-ui')"]},
+                                              {"cmd": [node, "-e", "require('child_process').execFileSync(process.execPath, ['-e', \"require('zz-ui')\"])"]}],
+                                     "zz-ui", out, "t")
+    assert [r["exit"] for r in rows] == [0, 0, 0] and [r["loaded"]["zz-ui"] for r in rows] == [True, False, True], rows   # 자식 node 프로세스도 본다
+
+
 def test_judge_table():
     row = lambda e, loaded=False: {"script": "s", "exit": e, "loaded": {"zz_web": loaded}}   # noqa: E731
     j = lambda b, a: tryout.judge(b, a, "zz-web")[0]   # noqa: E731
@@ -320,12 +462,21 @@ MUTATIONS = [
     ("원래 실패가 있어도 통과", "judge", lambda base, after, package: (lambda v: ("pass" if v[0] == "pass_partial" else v[0], v[1]))(
         tryout._judge0(base, after, package)), test_fail_only_when_baseline_passed),
     ("부른 쪽 설정이 검사로 샌다", "check_env", lambda base=None: {**(os.environ if base is None else base)}, test_check_env_drops_app_settings),
+    ("npm: 그 패키지를 불렀는지 안 본다", "run_npm_checks", lambda repo, rel, runs, name, out, tag, timeout=1800: [
+        {**r, "loaded": {name: True}} for r in tryout._run_npm_checks0(repo, rel, runs, name, out, tag, timeout)], test_npm_tryout_judges_like_python),
+    ("npm: 범위 꼴을 안 보고 고친다", "NPM_SPEC", __import__("re").compile(r"^(?P<pre>)"), test_npm_bump_touches_only_that_package),
+    ("npm: PR 본문에 이 기기의 절대 경로", "adr_ref", lambda adr: adr.get("path") or "", test_npm_export_commits_manifest_and_lock_only),
 ]
+if _node_hooks():   # 진짜 node가 있을 때만 — 훅이 경로 찾기(resolve)까지 세면 잡혀야 한다
+    MUTATIONS.append(("npm: 경로만 찾아도 불렀다고 센다", "NPM_PROBE",
+                      tryout.NPM_PROBE.replace("load(url, context, nextLoad) {", "resolve(url, context, nextLoad) {").replace(
+                          "return nextLoad(url, context)", "const r = nextLoad(url, context)\n      for (const n of names) if (r.url.includes(`/node_modules/${n}/`)) appendFileSync(out, `${n}\\t${r.url}\\n`)\n      return r"),
+                      test_npm_probe_counts_loads_not_resolves))
 
 
 def run_mutations():
     caught = 0
-    tryout._judge0 = tryout.judge
+    tryout._judge0, tryout._run_npm_checks0 = tryout.judge, tryout.run_npm_checks
     for name, attr, repl, test in MUTATIONS:
         orig = getattr(tryout, attr)
         setattr(tryout, attr, repl)
