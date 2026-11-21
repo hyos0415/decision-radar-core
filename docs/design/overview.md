@@ -176,6 +176,8 @@ Anthropic·Gemini·OpenAI 크레딧을 역할별로 쓴다. 제안서 §14(PARTI
 
 > **변경 (2026-09-30 밤, 사용자)**: 런타임도 모드별로 나눈다 — 비교 모드는 **LangGraph + Claude**, 최적화 모드는 **Agents SDK + GPT 계열**(ADR 0007 Luna, 첫 자리 detect 중요도 분류). 최적화 모드의 데이터 경계는 허용 목록 `api.anthropic.com` + `api.openai.com`, SDK 트레이싱은 켠다(OpenAI 플랫폼에 저장). 비교 모드의 P5(Anthropic 밖 0건)는 그대로 (ADR `adr/0006` 변경)
 
+> **변경 (2026-11-21, 사용자 — ADR 0031 · HYO-220)**: 최적화 모드도 프레임워크를 뺀다 — GPT 경로는 **openai SDK 직접 호출**(`pipeline/importance/openai_backend.py`)이고 SDK 트레이싱은 없어졌다. 비교 모드는 같은 날 plain Python + Anthropic SDK가 됐다(위 G5 변경 · ADR 0030). 운영 관문은 W48부터 Claude라 GPT 경로는 다른 회사 모델과 견주는 평가(HYO-240)용으로 남는다
+
 | 역할 | 모델 (최적화 모드) | 이유 |
 |---|---|---|
 | 판정 코어 | Claude Sonnet | 안전 케이스 pass^k를 통과한 모델만 배정 |

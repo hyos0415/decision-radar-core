@@ -1,4 +1,4 @@
-"""레인 A 중요도 분류기 오프라인 테스트 (HYO-67) — 실제 API·네트워크 없이. 메인 .venv로 돌린다 (openai-agents 필요).
+"""레인 A 중요도 분류기 오프라인 테스트 (HYO-67) — 실제 API·네트워크 없이. 메인 .venv로 돌린다 (openai SDK는 가짜 클라이언트로 바꿔 끼운다).
 
   python pipeline/tests/test_importance.py
 

@@ -150,6 +150,7 @@ checkpoint DB를 통째로 잃으면: 별도 파일이 있는 항목은 파일�
 - edit으로 바꿀 수 없는 것: `status`(R8 — 초안은 늘 `proposed`, status는 ADR 파일에서 사람이 바꾼다) · 번호(쓸 때 정한다, 결정 4). 화면에 칸이 없다
 - `history`에 원래 초안의 해시와 고친 초안의 해시를 둘 다 남긴다 — 「모델 초안을 사람이 얼마나 고쳤나」가 실사용 관찰 지표가 된다 (초안 품질)
 - 구현: LangGraph `HumanInTheLoopMiddleware`의 `allowed_decisions`에 `edit`을 더한다. 스파이크에서 뺀 이유는 Agents SDK 짝 비교였다(`product/spike/langgraph_spike/README.md`) — 제품은 비교 모드 LangGraph만이라 그 제약이 없다
+  - **변경 (2026-11-21 — ADR 0030 · HYO-220)**: LangGraph 미들웨어 대신 capture 재개가 사람의 답(approve · edit · reject)을 직접 쓴 루프(`product/radar/loop.py`의 `run_tools(decisions=…)`)에 넘긴다. edit은 고친 입력으로 도구를 실행하고, reject는 도구를 실행하지 않고 거절 글을 결과로 돌려준다
 - 스킬과의 관계: 스킬 capture도 사용자가 대화로 고칠 점을 말하면 반영한다(텍스트 채널). 제품은 구조화된 edit 채널이다 — 「스킬과의 비대칭」 표에 한 줄 (구현 때)
 
 ### 5-2. 내보내기 — 승인 = main에 바로 커밋 (결정 8)
