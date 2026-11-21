@@ -48,6 +48,22 @@ def test_link_key_normalization():
         assert k(skip) is None, skip
 
 
+def test_unparseable_link_has_no_key_and_does_not_break_grouping():
+    """W47 Reddit 글 본문의 난독화 링크 `https://before-gpu-engineering[dot`에서 urlparse가 ValueError(Invalid IPv6 URL)를 던져
+    build_topics → 탈락 추적(trace.jsonl) 전체가 없어졌다 (#305). 그 링크만 키 없음 — 같은 글의 다른 링크로는 그대로 묶인다."""
+    try:
+        assert topics.link_key("https://before-gpu-engineering[dot") is None
+        assert topics.link_key("http://[::1") is None
+        res = topics.build_topics([
+            item("reddit:1", "reddit", "Study group", "https://www.reddit.com/r/x/1", ["https://before-gpu-engineering[dot", "https://cactuscompute.com/blog/whistle"],
+                 signals={"rank:r/LocalLLaMA:top-week": 3}),
+            item("hn:1", "hn", "Whistle: Speech to Text", "https://cactuscompute.com/blog/whistle", signals={"points": 500}),
+        ])
+    except ValueError as e:        # 변이 검사는 AssertionError만 「잡힘」으로 센다
+        raise AssertionError(f"깨진 링크 하나가 묶기 전체를 멈췄다: {e}") from e
+    assert by_title(res)["Whistle: Speech to Text"]["n_items"] == 2
+
+
 # ---------------- 묶기 ----------------
 
 def test_same_link_groups_across_sources():
@@ -203,6 +219,15 @@ def _popularity_ignoring_size(items):
 
 
 _ORIG_POPULARITY = topics.popularity
+_ORIG_LINK_KEY = topics.link_key
+
+
+def _unguarded_link_key(url):
+    """깨진 링크를 거르지 않던 때 — urlparse가 먼저 던진다 (#305)."""
+    from urllib.parse import urlparse
+    if url:
+        urlparse(url.strip())
+    return _ORIG_LINK_KEY(url)
 
 
 def mutations():
@@ -212,6 +237,7 @@ def mutations():
         ("링크 정규화 없음", [(topics, "link_key", _raw_key)], test_link_key_normalization),
         ("자리 나눔 없이 출처 수 먼저", [(topics, "rank_topics", _sources_first)], test_slot_split),
         ("백분위가 pool 크기 무시", [(topics, "popularity", _popularity_ignoring_size)], test_popularity_percentile_by_hand),
+        ("깨진 링크에서 던짐 (W47 trace.jsonl 없어짐)", [(topics, "link_key", _unguarded_link_key)], test_unparseable_link_has_no_key_and_does_not_break_grouping),
     ]
 
 
