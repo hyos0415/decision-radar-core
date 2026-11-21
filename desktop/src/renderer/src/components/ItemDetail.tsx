@@ -217,7 +217,7 @@ export function ItemDetail({
           <div className="detail-meta">
             <span className="tag mono">{detail.kind}</span>
             {stateLabel && <Status status={STATE_ICON[detail.state]} label={stateLabel} />}
-            <span className="mono">{detail.technology}</span>
+            {detail.technology && <span className="mono">{detail.technology}</span>}
             {detail.affected.length > 0 && (
               <span className="mono">
                 {detail.affected.map((a) => `${a.repo}/${a.component}`).join(', ')}
