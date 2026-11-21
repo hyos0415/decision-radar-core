@@ -216,6 +216,111 @@ def test_detect_feed_adds_slot_picks_and_list():
         why = json.loads((out / "gate.json").read_text(encoding="utf-8"))
         assert why["https://openai.com/index/introducing-gpt-6-1-terra/"]["slot"] == "gate-classifier"
 
+# --- HYO-244: 언어는 HF 태그로 코드가 확인 ---
+LFM_TAGS = ["transformers", "safetensors", "en", "ar", "zh", "fr", "de", "it", "ja", "ko", "base_model:LiquidAI/LFM3-1.7B-Base",
+            "base_model:finetune:LiquidAI/LFM3-1.7B-Base", "license:other"]
+SLOTS_LANG = {"version": 2, "slots": [
+    {"id": "medical-ondevice", "name": "온디바이스", "repo": "medical-mate-ai", "role": "폰", "current": ["Qwen3.5-2B"], "must": ["한국어"],
+     "now_via": ["로컬"], "kinds": ["LLM"], "lang": "ko"},
+    {"id": "gate-classifier", "name": "관문 분류", "repo": "decision-radar", "role": "분류", "current": ["x"], "must": ["구조화"],
+     "now_via": ["API"], "kinds": ["LLM"]},
+]}
+
+
+def _hf(name, tags):
+    return _it(f"hf-model:{name}", "huggingface", name, f"https://huggingface.co/{name}", channels=["trending"],
+               signals={"rank:trending": 2}, meta={"tags": tags})
+
+
+HF_ITEMS = [_hf("LiquidAI/LFM3-1.7B", LFM_TAGS), _hf("KRAFTON/Raon-1-nano", ["transformers", "safetensors"]),
+            _hf("org/EnOnly-0.6B", ["en", "license:mit"]), _hf("org/Euro-27B", ["en", "fr", "de"]), _hf("org/Multi-E2B", ["multilingual", "en"])]
+
+
+def _lang_so(missing_by_id, fit=1):
+    return {"judgments": [{"id": f"hf-model:{n}", "release": True, "model": n, "matches": [
+        {"slot": "medical-ondevice", "fit": fit, "reason": "언어 정보가 없어 한국어 확인 필요", **({"missing": mi} if mi is not None else {})},
+        {"slot": "gate-classifier", "fit": 1, "reason": "다른 자리", "missing": ["language"]}]}
+        for n, mi in missing_by_id.items()]}
+
+
+def _run_lang(missing_by_id):
+    cands = slots.collect(HF_ITEMS)
+    judged, _ = slots.validate(_lang_so(missing_by_id), cands, SLOTS_LANG)
+    return judged, slots.apply_lang(cands, judged, SLOTS_LANG)
+
+
+def test_derive_fields_and_lang_status():
+    c = {x["id"]: x for x in slots.collect(HF_ITEMS)}
+    lfm = c["hf-model:LiquidAI/LFM3-1.7B"]
+    assert "ko" in lfm["langs"] and lfm["base_model"] == "LiquidAI/LFM3-1.7B-Base" and lfm["size"] == "1.7B", lfm   # base_model:finetune:은 건너뛴다
+    assert slots.lang_status(lfm)[0] == "pass"
+    assert c["hf-model:KRAFTON/Raon-1-nano"]["langs"] == [] and slots.lang_status(c["hf-model:KRAFTON/Raon-1-nano"])[0] == "unknown"
+    assert c["hf-model:KRAFTON/Raon-1-nano"]["size"] == ""                                                           # 크기가 분명하지 않으면 뺀다
+    assert slots.lang_status(c["hf-model:org/EnOnly-0.6B"])[0] == "english_only" and c["hf-model:org/EnOnly-0.6B"]["size"] == "0.6B"
+    assert slots.lang_status(c["hf-model:org/Euro-27B"])[0] == "pass" and c["hf-model:org/Euro-27B"]["size"] == "27B"   # ko 없이 3개 언어
+    assert slots.lang_status(c["hf-model:org/Multi-E2B"])[0] == "pass" and c["hf-model:org/Multi-E2B"]["size"] == "E2B"
+    assert slots.derive_fields({"title": "Qwen3-30B-A3B", "id": "x"})["size"] == "30B"
+
+
+def test_judge_input_has_langs_base_size():
+    cands = slots.collect(HF_ITEMS)
+    line = next(ln for ln in slots.prompt(cands, SLOTS_LANG).splitlines() if "LFM3-1.7B" in ln and ln.startswith("{"))
+    d = json.loads(line)
+    assert "ko" in d["langs"] and d["base_model"] == "LiquidAI/LFM3-1.7B-Base" and d["size"] == "1.7B", d
+    raon = json.loads(next(ln for ln in slots.prompt(cands, SLOTS_LANG).splitlines() if "Raon" in ln and ln.startswith("{")))
+    assert "langs" not in raon and "size" not in raon                                                                 # 없는 값은 안 붙인다
+    assert "missing" in slots.SYSTEM_V2 and "langs" in slots.SYSTEM_V2
+
+
+def test_lang_promotes_only_when_language_alone_missing():
+    judged, adj = _run_lang({"LiquidAI/LFM3-1.7B": ["language"]})
+    m = next(m for m in judged["hf-model:LiquidAI/LFM3-1.7B"]["matches"] if m["slot"] == "medical-ondevice")
+    assert m["fit"] == 2 and m["reason"].endswith(" · 언어: HF 태그로 확인(ko) — 코드가 2로 올림"), m
+    assert adj == [{"id": "hf-model:LiquidAI/LFM3-1.7B", "slot": "medical-ondevice", "from": 1, "to": 2, "why": "HF 태그로 확인(ko)"}], adj
+    for mi in (["runtime"], ["language", "runtime"], [], None):
+        judged, adj = _run_lang({"LiquidAI/LFM3-1.7B": mi})
+        m = next(m for m in judged["hf-model:LiquidAI/LFM3-1.7B"]["matches"] if m["slot"] == "medical-ondevice")
+        assert m["fit"] == 1 and adj == [], (mi, m, adj)
+    judged, adj = _run_lang({"LiquidAI/LFM3-1.7B": ["language"]})                    # fit 1이 아니면(3) 건드리지 않는다
+    cands = slots.collect(HF_ITEMS)
+    j3, _ = slots.validate(_lang_so({"LiquidAI/LFM3-1.7B": ["language"]}, fit=3), cands, SLOTS_LANG)
+    assert slots.apply_lang(cands, j3, SLOTS_LANG) == []
+
+
+def test_lang_english_only_goes_zero_unknown_unchanged_no_lang_slot_untouched():
+    judged, adj = _run_lang({"org/EnOnly-0.6B": ["language"], "KRAFTON/Raon-1-nano": ["language"], "org/Euro-27B": ["language"]})
+    en = judged["hf-model:org/EnOnly-0.6B"]["matches"]
+    assert [m["slot"] for m in en] == ["gate-classifier"], en                           # 0점은 matches에서 빠진다 (lang 없는 자리는 그대로 1)
+    assert [(a["id"], a["to"]) for a in adj if a["slot"] == "medical-ondevice"] == [("hf-model:org/EnOnly-0.6B", 0), ("hf-model:org/Euro-27B", 2)], adj
+    assert next(a for a in adj if a["to"] == 0)["why"] == "영어 전용 태그"
+    raon = {m["slot"]: m for m in judged["hf-model:KRAFTON/Raon-1-nano"]["matches"]}
+    assert raon["medical-ondevice"]["fit"] == 1 and raon["medical-ondevice"]["reason"] == "언어 정보가 없어 한국어 확인 필요"   # unknown은 그대로
+    assert all(m["fit"] == 1 and m["reason"] == "다른 자리" for j in judged.values() for m in j["matches"] if m["slot"] == "gate-classifier")
+    assert all(a["slot"] != "gate-classifier" for a in adj)
+
+
+def test_old_raw_without_missing_validates_and_lang_adjusted_recorded():
+    cands = slots.collect(ITEMS)
+    got, dropped = slots.validate(judged_stub_terra(), cands, SLOTS)                  # 옛 답에는 missing이 없다
+    assert dropped["bad_fit"] == 1 and all(m["missing"] == [] for j in got.values() for m in j["matches"])
+    with tempfile.TemporaryDirectory() as d:
+        for body, ok in (("slots:\n- {id: a}\n", True), ("slots:\n- {id: a, lang: ko}\n", True), ("slots:\n- {id: a, lang: KO}\n", False),
+                         ("slots:\n- {id: a, lang: kor}\n", False)):
+            f = Path(d) / "s.yaml"
+            f.write_text(body, encoding="utf-8")
+            try:
+                slots.load_slots(f)
+                got_ok = True
+            except slots.SlotError:
+                got_ok = False
+            assert got_ok == ok, body
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "raw").mkdir()
+        slots.write_json(Path(d) / "raw" / "slots-raw.json", {"structured_output": _lang_so({"LiquidAI/LFM3-1.7B": ["language"]})})
+        res = slots.run(HF_ITEMS, SLOTS_LANG, engine="stub", out=Path(d) / "raw", reuse=True)
+    assert [(a["id"], a["to"]) for a in res["lang_adjusted"]] == [("hf-model:LiquidAI/LFM3-1.7B", 2)], res["lang_adjusted"]
+    assert "hf-model:LiquidAI/LFM3-1.7B" in res["to_detect"]
+
 
 TESTS = [(n, f) for n, f in globals().items() if n.startswith("test_")]
 
@@ -229,6 +334,34 @@ def mutations():
     def firsts_only(sl):          # 자리마다 1위만 detect로 (11/4 오전 규칙)
         return {xs[0]["id"]: (s, xs[0]) for s, xs in ((sl or {}).get("per_slot") or {}).items() if xs}
 
+    orig_apply, orig_derive = slots.apply_lang, slots.derive_fields
+    orig_status, orig_prompt = slots.lang_status, slots.prompt
+
+    def promote_any(cands, judged, sl):       # missing 조건을 안 본다
+        for j in judged.values():
+            for m in j["matches"]:
+                if m["slot"] == "medical-ondevice" and m["fit"] == 1:
+                    m["fit"] = 2
+        return orig_apply(cands, judged, sl)
+
+    def no_lang_prompt(cands, sl):            # 판정 입력에서 langs 등을 뺀다
+        return orig_prompt([{k: v for k, v in c.items() if k not in ("langs", "base_model", "size")} for c in cands], sl)
+
+    def english_as_pass(c):
+        st = orig_status(c)
+        return ("pass", "en") if st[0] == "english_only" else st
+
+    def unknown_as_pass(c):
+        st = orig_status(c)
+        return ("pass", "?") if st[0] == "unknown" else st
+
+    orig_load = slots.load_slots
+
+    def lenient_load(path):                   # lang 검사 없이
+        import yaml
+        d = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        return {"version": d.get("version"), "slots": d["slots"]}
+
     return [
         ("문턱 없음 (fit 1도 목록에)", lambda: setattr(slots, "FIT_MIN", 0), lambda: setattr(slots, "FIT_MIN", 2)),
         ("모델 답을 검사 없이 믿음", lambda: setattr(slots, "validate", trust), lambda: setattr(slots, "validate", orig_validate)),
@@ -240,6 +373,14 @@ def mutations():
         ("넓은 후보 끔 (HF 작업별 순위 · LocalLLaMA 출시 낱말 없는 글)", lambda: setattr(slots, "WIDE_CANDIDATES", False),
          lambda: setattr(slots, "WIDE_CANDIDATES", True)),
         ("같은 모델을 묶지 않음", lambda: setattr(slots, "fold_same_model", lambda xs: xs), lambda: setattr(slots, "fold_same_model", orig_fold)),
+        ("판정 입력에 langs · base_model · size를 안 붙임", lambda: setattr(slots, "prompt", no_lang_prompt), lambda: setattr(slots, "prompt", orig_prompt)),
+        ("자리 lang 값 검사 없음", lambda: setattr(slots, "load_slots", lenient_load), lambda: setattr(slots, "load_slots", orig_load)),
+        ("언어 보정 없음", lambda: setattr(slots, "apply_lang", lambda c, j, sl: []), lambda: setattr(slots, "apply_lang", orig_apply)),
+        ("missing 조건 없이 1점을 2로 올림", lambda: setattr(slots, "apply_lang", promote_any), lambda: setattr(slots, "apply_lang", orig_apply)),
+        ("영어 전용도 통과로 봄", lambda: setattr(slots, "lang_status", english_as_pass), lambda: setattr(slots, "lang_status", orig_status)),
+        ("태그 없는(unknown)도 통과로 봄", lambda: setattr(slots, "lang_status", unknown_as_pass), lambda: setattr(slots, "lang_status", orig_status)),
+        ("태그에서 언어 · 기반 · 크기를 안 뽑음", lambda: setattr(slots, "derive_fields", lambda it: {"langs": [], "base_model": "", "size": ""}),
+         lambda: setattr(slots, "derive_fields", orig_derive)),
     ]
 
 
