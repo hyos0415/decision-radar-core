@@ -52,7 +52,7 @@ from radar import hitl  # noqa: E402  — radar/__init__이 spike/common을 경�
 from radar.adr_copy import copy_adr  # noqa: E402
 from radar.export import ExportRefused, GhPr  # noqa: E402
 from radar import script as stub_scripts  # noqa: E402
-from radar.capture import capture_agent, capture_turn1, capture_turn2, thread_config  # noqa: E402
+from radar.capture import capture_turn1, capture_turn2, pending_items  # noqa: E402
 from radar.detect import detect  # noqa: E402
 from radar.revisit import revisit  # noqa: E402
 from radar.stub_model import StubChat  # noqa: E402
@@ -65,7 +65,6 @@ from pipeline.importance.card_action import card_action  # noqa: E402
 from common.core import SKILL_RADAR, Ctx, RadarError, radar  # noqa: E402
 from common.env import MODEL as REAL_MODEL, load_dotenv  # noqa: E402
 from common.schemas import AdrDraft, RevisitCondition  # noqa: E402
-from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: E402
 import yaml  # noqa: E402
 
 STATE_FILE = "capture-checkpoint.sqlite"
@@ -122,14 +121,6 @@ def _days(since):
     if t.tzinfo is None:
         t = t.astimezone()
     return max(0, (dt.datetime.now().astimezone() - t).days)
-
-
-def _pending_draft(interrupts):
-    for it in interrupts:
-        for a in (it.value or {}).get("action_requests", []):
-            if a["name"] == "propose_adr":
-                return a["args"].get("draft")
-    return None
 
 
 _TITLE = re.compile(r"^#\s+(.+)$", re.M)
@@ -490,20 +481,17 @@ class RadarService:
     # ── Inbox ────────────────────────────────────────────────────
 
     def _captures(self, ctx):
-        """대기 중인 capture thread → (id, 초안, 대기 시작, 멈출 때 지문, 범위). checkpoint만 읽는다."""
+        """대기 중인 capture thread → (id, 초안, 대기 시작, 멈출 때 지문, 범위). 멈춘 대화만 읽는다 — 모델을 부르지 않는다."""
         if not os.path.exists(self.state_path):
             return []
         store, meta, out = hitl.StateStore(self.state_path), self._meta().get("items", {}), []
-        with SqliteSaver.from_conn_string(self.state_path) as cp:
-            agent = capture_agent(StubChat(script=self.capture_script(self.default_stub), flow="capture"), cp)  # 상태 읽기만 — 모델을 부르지 않는다
-            for tid in store.threads():
-                snap = agent.get_state(thread_config(tid))
-                draft = _pending_draft(snap.interrupts)
-                if draft is None:
-                    continue
-                fp, scope = store.get(tid)
-                since = (meta.get(tid) or {}).get("since") or snap.created_at
-                out.append({"id": tid, "draft": draft, "since": since, "fp": fp, "scope": scope or hitl.scope_of(draft)})
+        waiting = set(store.threads())
+        for p in pending_items(self.state_path):
+            if p["id"] not in waiting:
+                continue
+            fp, scope = store.get(p["id"])
+            since = (meta.get(p["id"]) or {}).get("since") or p["since"]
+            out.append({"id": p["id"], "draft": p["draft"], "since": since, "fp": fp, "scope": scope or hitl.scope_of(p["draft"])})
         return out
 
     def _changes(self, ctx, fp, scope):

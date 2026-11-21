@@ -24,7 +24,6 @@ import tempfile
 sys.path[0] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # product/
 
 import yaml  # noqa: E402
-from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: E402
 
 from radar import capture, hitl  # noqa: E402
 from radar.stub_model import StubChat  # noqa: E402
@@ -429,14 +428,13 @@ def turn2(w, script, decision, **kw):
 
 
 def pending(w, script, item_id):
-    with SqliteSaver.from_conn_string(w.state) as cp:
-        agent = capture.capture_agent(StubChat(script=script, flow="capture"), cp)
-        return len(agent.get_state(capture.thread_config(item_id)).interrupts)
+    """멈춘 대화에 남은 대기 승인 수 (처음엔 LangGraph 체크포인트의 interrupts — ADR 0030 뒤 hitl.ThreadStore)."""
+    t = hitl.ThreadStore(w.state).get(item_id)
+    return len([c for c in (t or {}).get("pending") or [] if c["name"] in capture.GATED])
 
 
 def thread_exists(w, item_id):
-    with SqliteSaver.from_conn_string(w.state) as cp:
-        return cp.get_tuple(capture.thread_config(item_id)) is not None
+    return hitl.ThreadStore(w.state).get(item_id) is not None
 
 
 def graph_tests():

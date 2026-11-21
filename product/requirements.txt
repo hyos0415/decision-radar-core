@@ -6,13 +6,9 @@ openai-agents==0.22.3
 mcp==2.2.0  # 구독 CLI 엔진의 읽기 도구 서버 (radar/mcp_tools.py, HYO-99) — openai-agents도 끈다
 openai==3.22.1
 
-# 런타임 2 — LangGraph (+ LangChain v1 create_agent, 공식 Claude 통합)
-langgraph==1.2.12
-langgraph-checkpoint==4.2.0
-langgraph-checkpoint-sqlite==3.1.1
-langchain==1.4.3
-langchain-core==1.6.6
-langchain-anthropic==1.7.5
+# 런타임 2 — 직접 쓴 흐름(asyncio) + 에이전트 루프(radar/loop.py) + Anthropic SDK (ADR 0030, HYO-220)
+# 처음(0009)엔 LangGraph + LangChain이었다 — langgraph · langgraph-checkpoint · langgraph-checkpoint-sqlite · langchain ·
+# langchain-core · langchain-anthropic를 뺐다(2026-11-21). spike/langgraph_spike는 그때의 기록이라 이 패키지 없이는 돌지 않는다
 anthropic==1.9.0
 
 # litellm — 기각 (2026-11-04, 사용자): Agents SDK의 Claude 경로(LiteLLM 어댑터)는 런타임 스파이크용이었다 — ADR 0006 기각 · 0008 SDK는 OpenAI 모델로.

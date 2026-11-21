@@ -6,7 +6,8 @@
 원인 가설: langchain-anthropic의 비동기 httpx 클라이언트는 프로세스 전체 공유(lru_cache)인데 eval은 실행마다 asyncio.run으로 새 루프를 만든다.
 이 테스트는 같은 프로세스에서 asyncio.run을 여러 번 돌리며 keep-alive 서버를 부르고, 재시도(retry.py)를 끈 채(MAX_ATTEMPTS=1)
 첫 시도 실패가 0인지 본다. 재시도를 켜 두면 실패가 가려지기 때문이다.
-규율 3: models.py의 `_async_client` 재정의를 빼면(= 수정 전) 이 테스트가 실제로 실패해야 한다 — `--mutant`로 그 상태를 만들어 확인한다.
+ADR 0030 뒤: models.AnthropicModel이 Anthropic SDK를 직접 부르고 비동기 클라이언트를 이벤트 루프마다 새로 만든다(_aclient).
+`--mutant`는 클라이언트 하나를 프로세스 전체가 같이 쓰게 되돌린 상태다 (예전 결함의 모양).
 """
 
 import asyncio
@@ -19,9 +20,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path[0] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # product/
 sys.stdout.reconfigure(encoding="utf-8")
 
-from langchain_core.messages import HumanMessage  # noqa: E402
-
 from radar import models, retry  # noqa: E402
+from radar.loop import Request  # noqa: E402
+from common.schemas import Verdict  # noqa: E402
+
+REQUEST = Request(agent="t", system="s", messages=[{"role": "user", "content": "hi"}], tools=[], schema=Verdict)
 
 BODY = json.dumps({"id": "msg_x", "type": "message", "role": "assistant", "model": "m", "stop_reason": "end_turn", "stop_sequence": None,
                    "content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 1, "output_tokens": 1}}).encode()
@@ -49,7 +52,7 @@ def one_run(url, fan=1):
     m = models.make_anthropic(api_key="test-key", base_url=url)
 
     async def go():
-        rs = await asyncio.gather(*[m.ainvoke([HumanMessage("hi")]) for _ in range(fan)], return_exceptions=True)
+        rs = await asyncio.gather(*[m.acall(REQUEST) for _ in range(fan)], return_exceptions=True)
         return [r for r in rs if isinstance(r, Exception)]
 
     return asyncio.run(go())
@@ -57,15 +60,14 @@ def one_run(url, fan=1):
 
 def main():
     mutant = "--mutant" in sys.argv
-    if mutant:  # 수정 전 상태: 재정의를 지워 langchain-anthropic 기본(프로세스 공유 클라이언트)으로 되돌린다
-        base_cls = models.make_anthropic.__globals__["ChatAnthropic"]
-        orig = models.make_anthropic
+    if mutant:  # 수정 전 상태: 비동기 클라이언트 하나를 프로세스 전체가 같이 쓴다 (루프를 건너 keep-alive 연결이 재사용된다)
+        shared = {}
 
-        def mk(shapes=None, api_key=None, base_url=None):
-            m = orig(shapes, api_key=api_key, base_url=base_url)
-            type(m)._async_client = base_cls._async_client
-            return m
-        models.make_anthropic = mk
+        def one_client(self):
+            if "c" not in shared:
+                shared["c"] = models.anthropic.AsyncAnthropic(**self._kw)
+            return shared["c"]
+        models.AnthropicModel._aclient = one_client
 
     srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()

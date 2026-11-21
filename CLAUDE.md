@@ -17,8 +17,7 @@
 | PyYAML | skill (`radar.py`) · collector · product |
 | openai-agents · openai | product (`spike/agents_sdk` — 최적화 모드, ADR 0008) |
 | mcp (MCP 파이썬 SDK 2.x) | product (`radar/mcp_tools.py` — 구독 CLI 엔진의 읽기 도구 서버, HYO-99) |
-| langgraph · langgraph-checkpoint · langgraph-checkpoint-sqlite · langchain · langchain-core · langchain-anthropic | product (`spike/langgraph_spike` — 비교 모드, ADR 0009) |
-| anthropic | product · pipeline (`pipeline/importance/claude_backend.py` — 관문 등급 재분류, HYO-122) |
+| anthropic | product (`radar/models.py` — API 엔진, 에이전트 루프는 `radar/loop.py`, ADR 0030) · pipeline (`pipeline/importance/claude_backend.py` — 관문 등급 재분류, HYO-122) |
 | fastapi · uvicorn | desktop (`desktop/backend` — 앱 백엔드, localhost) |
 | ranx · tokenizers (+ ranx가 끄는 numpy·scipy·pandas·numba) | arena (`arena/` — 하네스 지표 · 청크 상한 계량) |
 | networkx | arena (`arena/graph.py` — S7 그래프 graph@v1 · PPR, HYO-149) |
@@ -36,7 +35,6 @@
 | Claude Code routines (스킬 실사용, HYO-21) | skill |
 | OpenAI `gpt-6-sol` — `codex exec` (judge, HYO-20) | eval |
 | OpenAI `gpt-6-luna` (tier-screen, ADR 0007) | eval |
-| LangSmith (개발 실행 트레이싱만, ADR 0009) | product |
 
 ### 평가셋
 

@@ -27,6 +27,7 @@
 
 > **변경 (2026-09-30)**: 런타임은 OpenAI Agents SDK → LangGraph → plain Python + Anthropic SDK 순서로 시도한다(같은 스파이크 통과 기준 — ADR `adr/0006`). 이 문서의 이하 「LangGraph」 표기는 **M7 런타임**을 뜻한다 — 원래 기록을 지우지 않으려고 본문은 고치지 않았다. 재판정 기록 목표 5의 변경과 같다.
 > **변경 (2026-09-30, 두 번째)**: 순차 시도 대신 **Agents SDK와 LangGraph를 둘 다 만들어 같은 모델·같은 스파이크 기준으로 비교**한다. 둘 다 못 넘으면 plain Python + Anthropic SDK (`runtime-spike.md` 변경 참조).
+> **변경 (2026-11-21, 사용자 — ADR 0030 · HYO-220)**: M7 런타임을 **plain Python + Anthropic SDK**로 바꾼다 — LangChain · LangGraph를 걷어냈다. 위 원칙(「써보고 싶어서」가 아니라 「무너진 곳을 이만큼 고쳤다」)을 거꾸로 적용한 것이다: 실사용 엔진이 구독 CLI가 된 뒤 LangGraph는 단계를 순서대로 부르는 일만 했고, 규칙 집행 · 재개 검사 · 쓰기 순서는 처음부터 우리 코드(`detect_ops` · `hitl`)가 했다. 사용자 말: 「공고에 있어서 써 봤다 · 적절한 툴콜로 필요할 때 필요한 도구를 부르는 방법으로 충분히 해결되었다」. 흐름은 asyncio, 에이전트 루프는 `product/radar/loop.py`, capture의 멈춘 대화는 `hitl.ThreadStore`(같은 SQLite 파일). 이 문서의 이하 「LangGraph」 표기는 계속 **M7 런타임**을 뜻한다 — 본문은 고치지 않았다.
 
 ### 통합한 아이디어
 
