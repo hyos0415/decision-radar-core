@@ -969,6 +969,13 @@ export interface components {
       last_checked: string | null
       /** Markdown */
       markdown: string
+      /** @description 실험해 보기 (HYO-116) — 이 결정에 맞는 레시피 */
+      experiment?: components['schemas']['ExperimentPlan'] | null
+      /**
+       * Experiments
+       * @description 이 결정의 지난 실험, 최근 것 먼저
+       */
+      experiments?: components['schemas']['ExperimentResult'][]
     }
     /** DecisionList */
     DecisionList: {
@@ -1091,6 +1098,96 @@ export interface components {
        * @enum {string}
        */
       source_type: 'official_doc' | 'release_note' | 'repo' | 'paper' | 'issue_pr' | 'community'
+    }
+    /** ExperimentExport */
+    ExperimentExport: {
+      /** Branch */
+      branch?: string | null
+      /** Pr Url */
+      pr_url?: string | null
+      /** Skipped Reason */
+      skipped_reason?: string | null
+    }
+    /**
+     * ExperimentPlan
+     * @description 이 결정에 맞는 실험 레시피 (HYO-116, `pipeline.experiment.plan`) — 돌리지 않고 무엇을 돌릴지만. ready가 False면 reason.
+     */
+    ExperimentPlan: {
+      /** Adr */
+      adr: string
+      /**
+       * Recipe
+       * @description dependency(의존성 올려 보기) · 없으면 null — 맞는 레시피가 아직 없다
+       */
+      recipe: string | null
+      /** Label */
+      label?: string | null
+      /**
+       * Cost
+       * @description local만 바로 돈다 — subscription · api는 확인이 필요하다
+       */
+      cost?: ('local' | 'subscription' | 'api') | null
+      /** Cost Text */
+      cost_text?: string | null
+      /** Ready */
+      ready: boolean
+      /**
+       * Reason
+       * @description 못 돌리는 이유 (레시피 없음 · 버전 못 읽음 · 검사 설정 없음 · 돌릴 곳 없음)
+       */
+      reason?: string | null
+      /**
+       * Detail
+       * @description 무엇을 어디서 — 「fastapi → 0.162.6 (decision-radar · desktop) — …」
+       */
+      detail?: string | null
+      /**
+       * Export Rule
+       * @description 내보내기(브랜치 push · draft PR) 조건
+       */
+      export_rule?: string | null
+      /**
+       * Export Allowed
+       * @description 이 모드에서 내보내기를 켤 수 있나 — 실사용 모드만
+       * @default false
+       */
+      export_allowed: boolean
+    }
+    /**
+     * ExperimentResult
+     * @description 실험 한 번의 결과 — 결정은 사람이다(ADR · status를 바꾸지 않는다).
+     */
+    ExperimentResult: {
+      /** Adr */
+      adr: string
+      /** Recipe */
+      recipe: string | null
+      /** Label */
+      label: string | null
+      /** At */
+      at: string
+      /** Seconds */
+      seconds?: number | null
+      /**
+       * Verdict
+       * @description 레시피의 판정 (올려 보기: pass · fail · pass_not_exercised · install_failed …) · unavailable · needs_confirm
+       */
+      verdict: string
+      /** Verdict Text */
+      verdict_text: string
+      /** Ok */
+      ok: boolean
+      /** Summary */
+      summary: string
+      /** Report Md */
+      report_md?: string | null
+      export?: components['schemas']['ExperimentExport'] | null
+      /**
+       * Stub
+       * @description 스텁 · 데모 — 실제로 돌리지 않았다
+       * @default false
+       */
+      stub: boolean
     }
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -1316,7 +1413,7 @@ export interface components {
        * Kind
        * @enum {string}
        */
-      kind: 'capture' | 'detect' | 'revisit'
+      kind: 'capture' | 'detect' | 'revisit' | 'experiment'
       /**
        * State
        * @enum {string}
@@ -1335,9 +1432,13 @@ export interface components {
       message: string | null
       /**
        * Result
-       * @description 끝났을 때: capture → CaptureResult, detect·revisit → RunResult
+       * @description 끝났을 때: capture → CaptureResult, detect·revisit → RunResult, experiment → ExperimentResult
        */
-      result: components['schemas']['CaptureResult'] | components['schemas']['RunResult'] | null
+      result:
+        | components['schemas']['CaptureResult']
+        | components['schemas']['RunResult']
+        | components['schemas']['ExperimentResult']
+        | null
       /** Error */
       error: string | null
       /**
@@ -1385,6 +1486,16 @@ export interface components {
       repo?: string | null
       /** @description capture만 — CaptureRequest.topic과 같다 */
       topic?: components['schemas']['TopicRef'] | null
+      /**
+       * Adr
+       * @description experiment만 — 실험할 결정 번호 (HYO-116)
+       */
+      adr?: string | null
+      /**
+       * Export
+       * @description experiment만 — 레시피 조건(예: 통과)이면 브랜치 push + draft PR. 실사용 모드만
+       */
+      export?: boolean | null
     }
     /**
      * LoginResult

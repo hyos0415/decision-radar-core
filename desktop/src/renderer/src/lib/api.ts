@@ -42,6 +42,8 @@ export type DecisionRevisit = S['DecisionRevisit']
 export type RevisitSummary = S['RevisitSummary']
 export type Decision = S['Decision']
 export type DecisionDetail = S['DecisionDetail']
+export type ExperimentPlan = S['ExperimentPlan']
+export type ExperimentResult = S['ExperimentResult']
 
 export type RunResult = S['RunResult']
 export type Flow = RunResult['flow']
@@ -163,6 +165,14 @@ export const api = {
       client.POST('/jobs/{kind}', {
         params: { path: { kind } },
         body: conversation === undefined ? {} : { conversation }
+      })
+    ).then((r) => r.job),
+  /** 실험해 보기 (HYO-116) — 결정 하나를 레시피로. 돌릴 수 없으면 409(이유). exportPr = 레시피 조건이면 draft PR (실사용 모드만) */
+  submitExperiment: (adr: string, exportPr: boolean) =>
+    unwrap(
+      client.POST('/jobs/{kind}', {
+        params: { path: { kind: 'experiment' } },
+        body: { adr, export: exportPr }
       })
     ).then((r) => r.job),
   /** 그 주의 상위 화제 — week를 안 주면 가장 새 주차. 화제 파일이 없으면 week가 null.

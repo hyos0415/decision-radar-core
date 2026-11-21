@@ -103,6 +103,55 @@ def ensure_check(data_dir):
     return True
 
 
+EXPERIMENT_EXAMPLE = """---
+status: proposed
+date: 2026-11-21
+technology: pydantic
+use: 의존성 릴리스 2.12.3 대응 (security)
+affected:
+  - {{repo: medical-mate, component: chat-api}}
+evidence:
+  - {{url: github.example/pydantic/pydantic/releases/tag/v2.12.3, source_type: release_note}}
+revisit_when: []
+---
+# [예시] pydantic 2.12.3 보안 릴리스 대응
+
+> 개발 예시 — 「실험해 보기」(HYO-116) 화면을 스텁에서 보려고 서버가 뜰 때 더한다. 스텁 실험은 대상 repo 사본 · 설치 · 검사를 하지 않는다.
+
+## Context and Problem Statement
+[예시] chat-api가 쓰는 pydantic의 보안 릴리스.
+
+## Decision Outcome
+제안 — 올려 보고 기존 검사로 확인한다. 채택 여부는 사람이 정한다.
+
+## Research Note
+- 재검토 조건 없음: 대응 작업
+"""
+EXPERIMENT_CHECKS = {"_comment": "개발 예시 (HYO-116) — 스텁은 사본 · 설치 · 검사를 하지 않는다. 레시피 고르기(plan)만 진짜로 돈다",
+                     "medical-mate": {"python": "3.12", "components": {"chat-api": {"manifests": ["requirements.txt"],
+                                                                                    "run": [{"script": "tests/test_chat.py"}]}}}}
+
+
+def ensure_experiment(data_dir):
+    """「실험해 보기」 예시 (HYO-116) — default 프로필이고 의존성 릴리스 대응 결정이 없으면 예시 결정 하나(다음 번호)와 검사 설정
+    (adr-fixture/radar-checks.json)을 더한다. 만들었으면 True. 시드에는 넣지 않는다 — 회귀의 결정 건수(5개)를 흔들지 않게 서버가 뜰 때만."""
+    if devprofiles.read_marker(data_dir) != devprofiles.DEFAULT:
+        return False
+    root = os.path.join(data_dir, "adr-fixture")
+    adr_dir = os.path.join(root, "docs", "adr")
+    names = sorted(n for n in os.listdir(adr_dir) if n.endswith(".md")) if os.path.isdir(adr_dir) else []
+    if not names or any("의존성 릴리스" in open(os.path.join(adr_dir, n), encoding="utf-8").read() for n in names):
+        return False
+    nxt = max(int(n[:4]) for n in names if n[:4].isdigit()) + 1
+    with open(os.path.join(adr_dir, f"{nxt:04d}-pydantic-example.md"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(EXPERIMENT_EXAMPLE.format())
+    checks = os.path.join(root, "radar-checks.json")
+    if not os.path.exists(checks):
+        with open(checks, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(EXPERIMENT_CHECKS, f, ensure_ascii=False, indent=1)
+    return True
+
+
 def seed_profile(data_dir, profile):
     """프로필 폴더 → 데이터 폴더. ADR 사본(adr-fixture) · 대상 repo 사본 · 스냅숏 · 스텁 capture 대기 항목."""
     meta = devprofiles.load_json(profile, "profile.json")

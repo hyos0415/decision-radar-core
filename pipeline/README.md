@@ -164,6 +164,25 @@ python pipeline/tests/test_tryout.py           # 오프라인 — 가짜 대상 
   ```
 - 한계: `이름==버전` 고정 줄만 고친다(범위 고정 · package.json은 아직) · 「그 패키지를 올렸나」는 검사 프로세스 안의 `sys.modules`만 본다(자식 프로세스에서만 쓰면 「아니오」) · 기존 검사가 덮지 않는 동작은 알 수 없다
 
+## 승인 뒤 — 실험 실행기 (HYO-116: `experiment.py`)
+
+승인한 결정 하나 → **레시피**를 골라 격리된 사본에서 돌린다. 데스크톱 앱 결정 상세의 「실험해 보기」가 이것을 부른다(작업 `experiment`). 레시피는 손으로 해 본 실험을 옮긴 것이다.
+
+| 레시피 | 고르는 조건 | 하는 일 | 비용 |
+|---|---|---|---|
+| `dependency` 의존성 올려 보기 | use가 「의존성 릴리스 <버전> 대응」 | 위 올려 보기(`tryout.py`) — 기준 검사 → 고정 버전 올림 → 같은 검사. 내보내기는 `pass`일 때만 draft PR | local |
+| (다음) embedding · gate · medical-llm | 자리 후보 | HYO-228 Arena 정답지 · HYO-169 정답 118건 · HYO-229 추출 평가 | local · subscription · api |
+
+```bash
+python -m pipeline.experiment plan --adr ../adr/docs/adr/0017-fastapi.md          # 무엇을 돌릴지만 (돌리지 않는다)
+python -m pipeline.experiment run  --adr ../adr/docs/adr/0017-fastapi.md [--export] # 결과 폴더에 experiment.json + 레시피 결과
+```
+
+- **비용 문**: 레시피마다 `cost`(local · subscription · api). local만 바로 돈다 — subscription · api는 `--confirm`이 있어야 돈다(앱의 확인 단계는 다음 조각이라 앱에서는 local만 접수). 유료 API 크레딧을 자동으로 쓰지 않는다
+- 돌릴 수 없으면 지어내지 않고 이유를 적는다 — 레시피 없음 · 버전을 결정 기록에서 못 읽음 · 검사 설정(`radar-checks.json`) 없음 · affected 가운데 대상 목록과 검사 설정에 둘 다 있는 곳이 없음
+- 결정은 사람 — ADR · status를 바꾸지 않는다. 결과는 근거다. 결과를 ADR에 적는 일(PR)은 다음 조각(HYO-241 남은 것)
+- `stub()` — 스텁 · 데모 모드용. 레시피 고르기는 진짜, 사본 · 설치 · 검사 · 내보내기는 흉내다
+
 ## 레인 C 화제 (HYO-127: `topics.py`)
 
 분야를 가리지 않고 그 주에 인기 있던 소식을 토픽으로 묶어 상위 k (doc-pipeline §2-3 변경 2026-10-19). A·B와 점수를 합치지 않는다. 네트워크·모델 호출 없음.

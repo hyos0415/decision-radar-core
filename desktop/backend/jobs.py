@@ -1,6 +1,6 @@
 """작업 + 폴링 (HYO-85, 사용자 결정 10/8) — 오래 걸리는 일(capture 1턴 · detect · revisit)을 접수만 하고 바로 돌려준다.
 
-  POST /jobs/{capture|detect|revisit}  → 202 {"job": {...}}   (capture는 {"conversation": "..."})
+  POST /jobs/{capture|detect|revisit|experiment}  → 202 {"job": {...}}   (capture는 {"conversation": "..."}, experiment는 {"adr": "0017", "export": false})
   GET  /jobs                            → {"items": [...]}     최신 먼저 — 화면의 「상태 창」
   GET  /jobs/{id}                       → {...}
 
@@ -20,7 +20,7 @@ import uuid
 
 from service import ServiceError, now_iso
 
-KINDS = ("capture", "detect", "revisit")
+KINDS = ("capture", "detect", "revisit", "experiment")  # experiment = 승인한 결정을 레시피로 실험 (HYO-116 — 사본 · 설치 · 검사라 분 단위)
 JOBS_FILE = "jobs.json"
 KEEP = 100
 
@@ -62,6 +62,10 @@ class Jobs:
             payload = {"conversation": body["conversation"], "repo": self.svc.check_repo(body.get("repo")), "topic": body.get("topic")}
             first = next((x.strip() for x in body["conversation"].splitlines() if x.strip()), "")
             preview = first[:80] + ("…" if len(first) > 80 else "")
+        elif kind == "experiment":  # 돌릴 수 없는 결정(레시피 없음 · 설정 없음) · 스텁에서 내보내기는 접수할 때 409 — 작업이 되지 않는다
+            plan = self.svc.check_experiment(body.get("adr"), bool(body.get("export")))
+            payload = {"adr": plan["adr"], "export": bool(body.get("export"))}
+            preview = f"ADR {plan['adr']} · {plan['label']}"
         else:
             self.svc.check_flow(kind)
             payload, preview = {}, None
@@ -118,6 +122,9 @@ class Jobs:
             if kind == "capture":
                 res = self.svc.submit_capture(payload["conversation"], repo=payload.get("repo"), topic=payload.get("topic"))
                 done = {"result": res, "message": res.get("message"), "item": res.get("item")}
+            elif kind == "experiment":
+                res = self.svc.run_experiment(payload["adr"], export=payload["export"])
+                done = {"result": res, "message": res["summary"], "item": None}
             else:
                 res = self.svc.run(kind, trigger="job")
                 if not res.get("ok"):
