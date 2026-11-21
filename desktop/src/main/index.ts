@@ -1,5 +1,6 @@
+import './launch' // 가장 먼저 — 설치본의 환경 · 레포 위치, 설정 · 로그 폴더 고정 (HYO-251)
 import { app, BrowserWindow, ipcMain, nativeTheme, shell } from 'electron'
-import { writeFileSync } from 'fs'
+import { existsSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { getStatus, onStatus, startBackend, stopBackend } from './backend'
@@ -74,8 +75,17 @@ function titleBarOverlay(): Electron.TitleBarOverlayOptions {
   return { color: c.background, symbolColor: c.symbol, height: 47 }
 }
 
+// 개발 모드 아이콘 — 설치본은 묶을 때 resources/icon.png를 앱에 넣는다 (HYO-251)
+function devIcon(): string | null {
+  if (app.isPackaged) return null
+  const p = join(app.getAppPath(), 'resources', 'icon.png')
+  return existsSync(p) ? p : null
+}
+
 function createWindow(): void {
+  const icon = process.platform === 'darwin' ? null : devIcon()
   win = new BrowserWindow({
+    ...(icon ? { icon } : {}),
     width: 1200,
     height: 780,
     minWidth: 900,
@@ -151,6 +161,8 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     if (process.platform === 'win32') app.setAppUserModelId('decision-radar')
+    const dockIcon = process.platform === 'darwin' ? devIcon() : null
+    if (dockIcon) app.dock?.setIcon(dockIcon)
     loadTheme()
 
     ipcMain.handle('backend:get', () => getStatus())

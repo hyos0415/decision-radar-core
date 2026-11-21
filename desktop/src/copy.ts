@@ -359,6 +359,9 @@ export const COPY = {
       `Python을 찾지 못했어요. RADAR_PYTHON을 지정하거나 ${path}를 만들어 주세요 (메인 worktree도 확인했어요)`,
     exitedEarly: '앱 실행 중 문제가 생겼어요. 다시 실행해 주세요',
     timeout: '앱을 준비하는 데 시간이 너무 오래 걸려요. 다시 실행해 주세요',
-    exited: '앱 연결이 끊겼어요. 다시 실행해 주세요'
+    exited: '앱 연결이 끊겼어요. 다시 실행해 주세요',
+    noLaunch: '설치본에 레포 위치가 없어요. 레포에서 npm run app:pack으로 다시 묶어 주세요',
+    repoMissing: (path: string) =>
+      `레포를 찾지 못했어요: ${path} — 레포를 옮겼다면 npm run app:pack으로 다시 묶어 주세요`
   }
 }
