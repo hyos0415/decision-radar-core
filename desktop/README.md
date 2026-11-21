@@ -134,11 +134,13 @@ RADAR_APP_MODE=real npm run dev     # [RADAR_REAL_ADR=../adr] [RADAR_SNAPSHOT_RE
 
 CI(`.github/workflows/desktop.yml`) 백엔드 검사는 Windows에서 PR마다 돈다. macOS는 켤 때만 돈다 — GitHub의 Mac 러너는 사용 시간을 10배로 센다(private repo).
 
-- **한 번 돌려 보기**: PR에 `mac` 라벨을 붙이거나 Actions 탭에서 desktop → Run workflow. 끝나면 라벨을 뗀다 (붙어 있으면 push마다 돈다)
+> **변경 (2026-11-21, 사용자 — HYO-242, 11월 무료 시간을 거의 다 씀)**: 백엔드 검사는 PR마다 **우분투**(1배)에서 돈다. Windows(2배)도 켤 때만 — PR에 `windows` 라벨 · Actions 탭 수동 실행. main push에서는 돌지 않고, draft PR은 건너뛰며(「Ready for review」로 바꿀 때 돈다), 같은 PR에 새 push가 오면 앞선 실행을 멈춘다. 주 기기가 M1이 되어 Windows는 교육장 기기에서 쓸 때 확인한다
+
+- **한 번 돌려 보기**: PR에 `mac`(또는 `windows`) 라벨을 붙이거나 Actions 탭에서 desktop → Run workflow(수동 실행은 Windows · Mac 둘 다 돈다). 끝나면 라벨을 뗀다 (붙어 있으면 push마다 돈다)
 - **M1을 러너로 등록** (차감 없음 — 그 기기가 켜져 있을 때만 돈다):
   1. GitHub → Settings → Actions → Runners → New self-hosted runner → macOS · ARM64. 나오는 명령으로 받고 `./config.sh` (라벨은 기본값 `self-hosted, macOS, ARM64` 그대로)
   2. 로그인할 때 뜨게: `./svc.sh install && ./svc.sh start`
-  3. Settings → Secrets and variables → Actions → Variables에 `MAC_RUNNER` = `on` — 이제 PR·main push마다 M1에서 돈다. 러너가 꺼져 있으면 그 검사는 대기 상태로 남는다(24시간 뒤 실패) → 오래 비울 땐 `off`
+  3. Settings → Secrets and variables → Actions → Variables에 `MAC_RUNNER` = `on` — 이제 PR마다 M1에서 돈다(main push 검사는 2026-11-21에 껐다). 러너가 꺼져 있으면 그 검사는 대기 상태로 남는다(24시간 뒤 실패) → 오래 비울 땐 `off`
   - 쓰기 권한이 있는 팀원의 PR 코드도 이 Mac에서 실행된다는 점을 알고 켠다
 
 **CI가 못 보는 것 — 기기 앞에서 손으로** (Mac으로 옮길 때 · Mac 쪽 코드를 바꿨을 때):
