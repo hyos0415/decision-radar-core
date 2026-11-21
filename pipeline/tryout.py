@@ -13,7 +13,7 @@
 
 원칙 (HYO-116에서 가져온다):
 - **결정은 사람** — ADR을 고치지 않는다. 결과는 근거일 뿐이다
-- **대상에 쓰지 않는다** — 사본에서만 돈다. 브랜치 push · PR은 이 스크립트가 하지 않는다
+- **대상에 쓰지 않는다** — 사본에서만 돈다. 브랜치 push · PR은 `--export`를 줬고 판정이 `pass`일 때만 한다 (draft)
 - **통과는 증거가 아니다** (규율 3) — 검사 스크립트가 그 패키지를 실제로 올렸는지(실행 뒤 `sys.modules`)를 같이 본다.
   하나도 안 올렸으면 「통과」가 아니라 「이 검사로는 모른다」(pass_not_exercised)다. 자식 프로세스에서만 올리는 스크립트는 못 본다 — 그렇게 적는다
 
@@ -214,7 +214,7 @@ def bump_all(repo, manifests, bumps):
     return texts, pins
 
 
-def tryout(adr, repo_name, repo_path, component, check, package, version, out, env=None, keep=False, extra=()):
+def _tryout(adr, repo_name, repo_path, component, check, package, version, out, env=None, keep=False, extra=(), export=False):
     """한 건을 끝까지 → result dict. out 폴더에 result.json · report.md · 로그를 쓴다. check = 그 component의 검사 설정.
     extra = 함께 올릴 [(패키지, 버전)] — 혼자서는 설치가 안 되는 릴리스(langchain 1.5.0은 langchain-core 1.8.0 이상이 필요하다)를 같이 올려 본다."""
     out = Path(out).resolve()          # 검사는 사본 폴더에서 돈다 — 상대 경로면 probe를 못 찾는다
@@ -264,12 +264,128 @@ def tryout(adr, repo_name, repo_path, component, check, package, version, out, e
         after = run_checks(env, repo, check["run"], names, out, "after")
         res["verdict"], res["checks"] = judge(base, after, package)
         res["seconds"] = {"base": sum(b["seconds"] for b in base), "after": sum(a["seconds"] for a in after)}
+        if export and may_export(res["verdict"]):
+            res["export"] = export_pr(res, adr, repo_path, repo, texts, log)
         return finish(res, res["verdict"], out)
     finally:
         if keep:
             res["work"] = str(work)
         else:
             shutil.rmtree(work, ignore_errors=True)
+
+
+def tryout(adr, repo_name, repo_path, component, check, package, version, out, env=None, keep=False, extra=(), export=False):
+    """`_tryout` + 내보내기 표시 — export를 켰는데 통과가 아니면 「내보내지 않음」을 결과에 적는다."""
+    res = _tryout(adr, repo_name, repo_path, component, check, package, version, out, env=env, keep=keep, extra=extra, export=export)
+    if export and "export" not in res:
+        res["export"] = {"branch": None, "pr_url": None, "skipped_reason": f"내보내지 않음: {res['verdict']}"}
+        finish(res, res["verdict"], out)
+    return res
+
+
+GH_CREATE_FLAGS = ["--draft"]       # PR은 항상 draft — merge는 레포 주인의 결정
+
+
+def may_export(verdict):
+    """정확히 pass일 때만 — pass_not_exercised(이 검사로는 모름)도 내보내지 않는다."""
+    return verdict == "pass"
+
+
+def is_default_branch(branch, base):
+    return branch == base or branch.startswith("refs/") or base in ("", "HEAD")
+
+
+def files_to_add(texts):
+    """커밋에 넣는 파일 = 고정 줄을 고친 manifest뿐 (검사가 만든 파일 · 환경은 넣지 않는다)."""
+    return sorted(texts)
+
+
+def open_prs(repo, branch):
+    r = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "url"], cwd=repo, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    try:
+        return json.loads(r.stdout or "[]") if r.returncode == 0 else []
+    except ValueError:
+        return []
+
+
+def remote_has_branch(repo, branch):
+    code, heads, _ = _git(["-C", str(repo), "ls-remote", "--heads", "origin", branch])
+    return code == 0 and bool(heads)
+
+
+def _git(args, cwd=None):
+    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
+
+
+def default_branch(src):
+    """대상의 원격 기본 브랜치 이름 (origin/HEAD가 가리키는 것, 없으면 main)."""
+    code, out, _ = _git(["-C", str(src), "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+    return out.split("/", 1)[1] if code == 0 and "/" in out else "main"
+
+
+def export_branch(package, version):
+    return "radar/tryout/" + re.sub(r"[^A-Za-z0-9._\-]+", "-", f"{norm(package)}-{version}").strip("-.")
+
+
+def pr_body(res, adr):
+    pins = "\n".join(f"- `{p['manifest']}`: {p['package']} {p['from']} → {p['to']}" for p in res.get("pins") or [])
+    rows = "\n".join(f"- `{c['script']}`: 기준 {'통과' if c['base_exit'] == 0 else '실패'} → 올린 뒤 "
+                     f"{'통과' if c['after_exit'] == 0 else '실패'} ({c['state']}, 이 패키지를 올렸나: {'예' if c['loaded'] else '아니오'})"
+                     for c in res.get("checks") or [])
+    return (f"레이더의 올려 보기(`pipeline/tryout.py`)가 격리된 사본에서 올려 보고 기존 검사를 돌린 결과, 통과해서 올리는 PR입니다.\n\n"
+            f"- 결정 기록: ADR {adr['id']} (`{adr.get('path', '')}`)\n- 대상: {res['repo']} · {res['component']}\n"
+            f"- 버전: {res['package']} {res.get('installed_before') or '?'} → {res['to']}\n\n"
+            f"고정 줄 변경:\n{pins}\n\n돌린 검사:\n{rows}\n\n"
+            f"판정: `{res['verdict']}` — {VERDICTS[res['verdict']]}\n\n"
+            "기존 검사가 덮지 않는 동작은 이 결과로 알 수 없습니다. 이 PR은 draft이며, merge 여부는 레포 주인이 정합니다.\n")
+
+
+def export_pr(res, adr, src, repo, texts, log):
+    """통과한 올려 보기를 대상의 브랜치 push + draft PR로 낸다 → {branch, pr_url, skipped_reason}.
+    사본(repo)은 대상 작업 폴더를 clone한 git 체크아웃이고 origin/<기본>에 맞춰져 있어 새 clone이 필요 없다 —
+    다만 사본의 origin은 대상 작업 폴더이므로 대상의 진짜 origin URL로 바꿔서 push한다. 기본 브랜치에는 절대 push하지 않는다."""
+    base = default_branch(src)
+    branch = export_branch(res["package"], res["to"])
+    if is_default_branch(branch, base):
+        raise SystemExit(f"내보내기 거부: 브랜치 {branch!r}가 기본 브랜치 {base!r}와 같다")
+    code, url, _ = _git(["-C", str(src), "remote", "get-url", "origin"])
+    if code != 0 or not url:
+        raise SystemExit(f"내보내기 거부: 대상 repo에 origin이 없다 ({src})")
+    if not Path(url).is_absolute() and (Path(src) / url).exists():
+        url = str((Path(src) / url).resolve())
+    out = {"branch": branch, "pr_url": None, "skipped_reason": None}
+    _git(["-C", str(repo), "remote", "set-url", "origin", url])
+    # 멱등 — 열린 PR이나 같은 이름 브랜치가 이미 있으면 다시 push하지 않는다
+    prs = open_prs(repo, branch)
+    if prs:
+        out.update(pr_url=prs[0].get("url"), skipped_reason="이미 열린 PR이 있다 — 다시 내보내지 않음")
+        return out
+    if remote_has_branch(repo, branch):
+        out["skipped_reason"] = "같은 이름의 브랜치가 이미 있다 — 다시 push하지 않음 (PR은 직접 확인)"
+        return out
+    changed = files_to_add(texts)
+    ident = []
+    if not _git(["-C", str(repo), "config", "user.name"])[1]:
+        ident = ["-c", "user.name=decision-radar", "-c", "user.email=decision-radar@users.noreply.github.com"]
+    steps = [["checkout", "-q", "-b", branch], ["add", "--", *changed], [*ident, "commit", "-q", "-m", f"{res['package']} {res['to']} 올려 보기 통과 (ADR {adr['id']})"]]
+    for st in steps:
+        c, _, e = _git(["-C", str(repo), *st])
+        if c != 0:
+            out["skipped_reason"] = f"내보내기 실패: git {st[0]} — {e[:200]}"
+            return out
+    c, _, e = _git(["-C", str(repo), "push", "-q", "origin", f"{branch}:refs/heads/{branch}"])
+    if c != 0:
+        out["skipped_reason"] = f"내보내기 실패: push — {e[:200]}"
+        return out
+    title = f"{res['package']} {(res.get('pins') or [{}])[0].get('from', '?')} → {res['to']} 올려 보기 통과 (ADR {adr['id']})"
+    r = subprocess.run(["gh", "pr", "create", *GH_CREATE_FLAGS, "--base", base, "--head", branch, "--title", title, "--body", pr_body(res, adr)],
+                       cwd=repo, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    if r.returncode != 0:
+        out["skipped_reason"] = f"브랜치는 push했지만 PR 생성 실패: {(r.stderr or '')[:200]}"
+        return out
+    out["pr_url"] = (r.stdout or "").strip().splitlines()[-1] if (r.stdout or "").strip() else None
+    return out
 
 
 def tail(path, n):
@@ -333,6 +449,7 @@ def main(argv=None):
     ap.add_argument("--with", dest="extra", action="append", default=[], metavar="패키지==버전",
                     help="함께 올릴 패키지 (여러 번) — 혼자서는 설치가 안 될 때. 결과에 같이 올렸다고 적힌다")
     ap.add_argument("--out", help="결과 폴더 (기본: pipeline/out/tryout/<기록>-<패키지>-<버전>-<repo>-<component>)")
+    ap.add_argument("--export", action="store_true", help="통과(pass)하면 대상 repo에 radar/tryout/<패키지>-<버전> 브랜치를 push하고 draft PR을 연다 (기본: 안 낸다)")
     ap.add_argument("--keep", action="store_true", help="사본 · 환경을 지우지 않는다 (경로를 결과에 적는다)")
     a = ap.parse_args(argv)
     adr = read_adr(a.adr)
@@ -358,11 +475,16 @@ def main(argv=None):
         extra.append((name.strip(), ver.strip()))
     tag = "".join(f"+{norm(p)}-{v}" for p, v in extra)
     out = a.out or Path("pipeline/out/tryout") / f"{adr['id']}-{norm(package)}-{version}{tag}-{repo}-{comp}"
-    res = tryout(adr, repo, targets[repo], comp, check, package, version, out, keep=a.keep, extra=extra)
+    res = tryout(adr, repo, targets[repo], comp, check, package, version, out, keep=a.keep, extra=extra, export=a.export)
     print(f"{res['package']} → {res['to']} ({repo} · {comp}): {res['verdict_text']}")
     for c in res.get("checks") or []:
         print(f"  {c['state']:6s} {c['script']}" + ("" if c["loaded"] else "  (이 패키지를 올리지 않았다)"))
+    ex = res.get("export")
+    if ex:
+        print(f"내보내기: {ex['skipped_reason'] or '완료'}" + (f" · {ex['branch']}" if ex["branch"] else "") + (f" · {ex['pr_url']}" if ex["pr_url"] else ""))
     print(f"-> {out}")
+    if ex and ex["branch"] and not ex["pr_url"] and (ex["skipped_reason"] or "").startswith(("내보내기 실패", "브랜치는 push")):
+        return 2
     return 0 if res["verdict"] in ("pass", "already") else 1
 
 

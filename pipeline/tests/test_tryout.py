@@ -73,10 +73,10 @@ def _target(d):
 ADR = {"id": "0017", "technology": "zz-web", "use": "의존성 릴리스 2.0.0 대응 (breaking)", "title": "", "affected": [{"repo": "t", "component": "web"}]}
 
 
-def _run(d, runs, package="zz-web", version="2.0.0", env=None, name="out", extra=(), out=None):
+def _run(d, runs, package="zz-web", version="2.0.0", env=None, name="out", extra=(), out=None, export=False):
     wc = _target(d) if not (Path(d) / "target").exists() else Path(d) / "target"
     check = {"manifests": ["requirements.txt"], "install": ["requirements.txt"], "run": [{"script": s} for s in runs]}
-    return wc, tryout.tryout(ADR, "t", str(wc), "web", check, package, version, out or Path(d) / name, env=env or FakeEnv(), extra=extra)
+    return wc, tryout.tryout(ADR, "t", str(wc), "web", check, package, version, out or Path(d) / name, env=env or FakeEnv(), extra=extra, export=export)
 
 
 def test_bump_pin_touches_only_that_line():
@@ -169,6 +169,107 @@ def test_relative_out_and_bumping_together():
         assert r["verdict"] == "no_pin" and r["no_pin_for"] == ["nope"] and not r["steps"], r
 
 
+FAKE_GH = """#!/bin/sh
+echo "$*" | tr '\\n' ' ' >> "$FAKE_GH_LOG"; echo >> "$FAKE_GH_LOG"
+if [ "$1 $2" = "pr list" ]; then
+  if [ -n "$FAKE_GH_LIST" ]; then echo "$FAKE_GH_LIST"; else echo "[]"; fi
+elif [ "$1 $2" = "pr create" ]; then
+  echo "https://github.com/o/t/pull/7"
+fi
+"""
+
+
+def _with_fake_gh(d, fn, existing_pr=None):
+    """가짜 gh를 PATH 맨 앞에 두고 fn을 돈다 → (fn 결과, gh 호출 줄들)."""
+    import os
+    b = Path(d) / "bin"
+    b.mkdir(exist_ok=True)
+    (b / "gh").write_text(FAKE_GH, encoding="utf-8")
+    (b / "gh").chmod(0o755)
+    log = Path(d) / "gh.log"
+    log.write_text("", encoding="utf-8")
+    old = {k: os.environ.get(k) for k in ("PATH", "FAKE_GH_LOG", "FAKE_GH_LIST")}
+    os.environ.update(PATH=f"{b}{os.pathsep}{old['PATH']}", FAKE_GH_LOG=str(log), FAKE_GH_LIST=existing_pr or "")
+    try:
+        return fn(), log.read_text(encoding="utf-8").splitlines()
+    finally:
+        calls = log.read_text(encoding="utf-8").splitlines()
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        _with_fake_gh.last = calls
+
+
+def _heads(d):
+    return subprocess.run(["git", "-C", str(Path(d) / "up.git"), "for-each-ref", "--format=%(refname:short)", "refs/heads"], capture_output=True, text=True).stdout.split()
+
+
+def _up_git(d, *a):
+    return subprocess.run(["git", "-C", str(Path(d) / "up.git"), *a], capture_output=True, text=True).stdout.strip()
+
+
+def test_export_pushes_branch_and_opens_draft_pr():
+    with tempfile.TemporaryDirectory() as d:
+        wc = _target(d)
+        (_, r), calls = _with_fake_gh(d, lambda: _run(d, ["app/uses.py"], version="1.5.0", export=True))
+        br = "radar/tryout/zz-web-1.5.0"
+        assert r["verdict"] == "pass" and r["export"] == {"branch": br, "pr_url": "https://github.com/o/t/pull/7", "skipped_reason": None}, r
+        assert sorted(_heads(d)) == ["main", br], _heads(d)
+        assert _up_git(d, "rev-list", "--count", f"main..{br}") == "1"                                  # 기본 브랜치 위에 커밋 하나
+        assert _up_git(d, "diff", "--name-only", "main", br) == "requirements.txt"                      # 고정 줄 파일만 (installed.json 같은 검사 부산물은 안 넣는다)
+        assert "zz-web==1.5.0" in _up_git(d, "show", f"{br}:requirements.txt")
+        assert _up_git(d, "rev-parse", "main") == subprocess.run(["git", "-C", str(wc), "rev-parse", "origin/main"], capture_output=True, text=True).stdout.strip()
+        create = [c for c in calls if c.startswith("pr create")]
+        assert len(create) == 1 and "--draft" in create[0] and "--base main" in create[0], calls
+        assert "zz-web 1.0.0 → 1.5.0 올려 보기 통과 (ADR 0017)" in create[0] and "레포 주인이 정합니다" in create[0], create
+        assert not [c for c in calls if "merge" in c.split()[:2]]
+        assert json.loads((Path(d) / "out" / "result.json").read_text(encoding="utf-8"))["export"]["pr_url"]      # result.json에도 적는다
+
+
+def test_export_skips_non_pass_and_default_off():
+    with tempfile.TemporaryDirectory() as d:
+        _target(d)
+        (_, r), c1 = _with_fake_gh(d, lambda: _run(d, ["app/plain.py"], version="1.5.0", export=True))        # 올린 검사가 없다 → pass_not_exercised
+        assert r["verdict"] == "pass_not_exercised" and r["export"] == {"branch": None, "pr_url": None, "skipped_reason": "내보내지 않음: pass_not_exercised"}, r
+        (_, r), c2 = _with_fake_gh(d, lambda: _run(d, ["app/uses.py", "app/broken.py"], name="o2", export=True))   # fail
+        assert r["verdict"] == "fail" and r["export"]["skipped_reason"] == "내보내지 않음: fail", r
+        (_, r), c3 = _with_fake_gh(d, lambda: _run(d, ["app/uses.py"], version="1.5.0", name="o3"))           # --export 없음
+        assert r["verdict"] == "pass" and "export" not in r, r
+        assert _heads(d) == ["main"] and c1 + c2 + c3 == [], (_heads(d), c1, c2, c3)
+
+
+def test_export_is_idempotent():
+    with tempfile.TemporaryDirectory() as d:
+        _target(d)
+        br = "radar/tryout/zz-web-1.5.0"
+        _with_fake_gh(d, lambda: _run(d, ["app/uses.py"], version="1.5.0", export=True))
+        before = _up_git(d, "rev-parse", br)
+        (_, r), calls = _with_fake_gh(d, lambda: _run(d, ["app/uses.py"], version="1.5.0", name="o2", export=True))    # 브랜치만 있다
+        assert r["export"]["pr_url"] is None and "이미 있다" in r["export"]["skipped_reason"], r
+        assert not [c for c in calls if c.startswith("pr create")] and _up_git(d, "rev-parse", br) == before, calls
+        (_, r), calls = _with_fake_gh(d, lambda: _run(d, ["app/uses.py"], version="1.5.0", name="o3", export=True), existing_pr='[{"url": "https://github.com/o/t/pull/3"}]')
+        assert r["export"]["pr_url"] == "https://github.com/o/t/pull/3" and not [c for c in calls if c.startswith("pr create")], (r, calls)
+
+
+def test_export_refuses_default_branch():
+    with tempfile.TemporaryDirectory() as d:
+        _target(d)
+        orig, main_before = tryout.export_branch, None
+        tryout.export_branch = lambda package, version: "main"
+        try:
+            main_before = _up_git(d, "rev-parse", "main")
+            try:
+                _with_fake_gh(d, lambda: _run(d, ["app/uses.py"], version="1.5.0", export=True))
+                raise AssertionError("기본 브랜치로 내보내려는데 거부하지 않았다")
+            except SystemExit as e:
+                assert "기본 브랜치" in str(e), e
+        finally:
+            tryout.export_branch = orig
+        assert _heads(d) == ["main"] and _up_git(d, "rev-parse", "main") == main_before
+
+
 def test_judge_table():
     row = lambda e, loaded=False: {"script": "s", "exit": e, "loaded": {"zz_web": loaded}}   # noqa: E731
     j = lambda b, a: tryout.judge(b, a, "zz-web")[0]   # noqa: E731
@@ -184,6 +285,12 @@ MUTATIONS = [
     ("고정 줄을 못 찾아도 넘어간다", "bump_pin", lambda text, package, version: (text, "0"), test_cannot_check_cases),
     ("함께 올릴 패키지의 고정 줄이 없어도 일부만 올린다", "norm", lambda name: "x", test_relative_out_and_bumping_together),
     ("이름이 비슷한 패키지도 고친다", "norm", lambda name: (name or "").strip().lower()[:6], test_bump_pin_touches_only_that_line),
+    ("통과가 아니어도 내보낸다", "may_export", lambda verdict: True, test_export_skips_non_pass_and_default_off),
+    ("PR을 draft로 안 연다", "GH_CREATE_FLAGS", [], test_export_pushes_branch_and_opens_draft_pr),
+    ("manifest 밖 파일도 커밋한다", "files_to_add", lambda texts: ["."], test_export_pushes_branch_and_opens_draft_pr),
+    ("열린 PR이 있어도 다시 낸다", "open_prs", lambda repo, branch: [], test_export_is_idempotent),
+    ("같은 브랜치가 있어도 다시 push한다", "remote_has_branch", lambda repo, branch: False, test_export_is_idempotent),
+    ("기본 브랜치에도 내보낸다", "is_default_branch", lambda branch, base: False, test_export_refuses_default_branch),
     ("날짜도 버전으로 읽는다", "_VER", __import__("re").compile(r"(\d[\d.\-]+\d)"), test_release_version_from_adr),
 ]
 
