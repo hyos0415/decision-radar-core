@@ -88,7 +88,15 @@ export function setBaseUrl(url: string): void {
 async function unwrap<T>(
   p: Promise<{ data?: T; error?: unknown; response: Response }>
 ): Promise<T> {
-  const { data, error, response } = await p
+  let res: Awaited<typeof p>
+  try {
+    res = await p
+  } catch (e) {
+    // fetch throws a TypeError (「Failed to fetch」) when the backend cannot be reached
+    if (e instanceof TypeError) throw new Error(COPY.app.connectFailed)
+    throw e
+  }
+  const { data, error, response } = res
   if (error !== undefined || data === undefined) {
     const d = (error as { detail?: unknown } | undefined)?.detail
     const msg =
