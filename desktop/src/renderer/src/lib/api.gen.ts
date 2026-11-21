@@ -607,6 +607,7 @@ export interface components {
         | 'error'
         | 'drafted'
         | 'no_draft'
+        | 'queued'
       /** Message */
       message?: string | null
       /** Adr */
@@ -1299,6 +1300,11 @@ export interface components {
        */
       adr?: string | null
       /**
+       * Answer Error
+       * @description 접수한 답을 ADR repo에 반영하지 못한 이유 (HYO-217) — 같은 답을 다시 하면 재시도한다 (중복 없음). 없으면 null
+       */
+      answer_error?: string | null
+      /**
        * Message
        * @description pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장 / check: 후보 · 자리 수 한 줄
        */
@@ -1401,6 +1407,11 @@ export interface components {
        */
       adr?: string | null
       /**
+       * Answer Error
+       * @description 접수한 답을 ADR repo에 반영하지 못한 이유 (HYO-217) — 같은 답을 다시 하면 재시도한다 (중복 없음). 없으면 null
+       */
+      answer_error?: string | null
+      /**
        * Message
        * @description pending: 작업 한 줄(오류·linked 이유) / revisit: 충족된 조건 문장 / check: 후보 · 자리 수 한 줄
        */
@@ -1419,7 +1430,7 @@ export interface components {
        * Kind
        * @enum {string}
        */
-      kind: 'capture' | 'detect' | 'revisit' | 'experiment'
+      kind: 'capture' | 'detect' | 'revisit' | 'experiment' | 'export'
       /**
        * State
        * @enum {string}
@@ -1629,6 +1640,7 @@ export interface components {
             | 'error'
             | 'drafted'
             | 'no_draft'
+            | 'queued'
           )
         | null
       /** Answered At */

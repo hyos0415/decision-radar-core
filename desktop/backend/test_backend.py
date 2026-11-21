@@ -55,6 +55,7 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8")
     tmp = tempfile.mkdtemp(prefix="radar-desktop-test-")
     os.environ["RADAR_EXPORT"] = "git"  # 일부러 켠다 — 백엔드가 물려받지 않아야 한다
+    os.environ["RADAR_APP_ANSWER_ASYNC"] = "0"  # 예전 시나리오는 답이 바로 반영되는 동기 경로로 본다 — 접수 경로는 scenario_hyo217 (HYO-217)
     try:
         data = os.path.join(tmp, "data")
         seeded = devdata.seed(data)
@@ -196,8 +197,10 @@ def main():
         scenario_hyo245(tmp)
         scenario_hyo245_real(tmp)
         scenario_hyo116(tmp)
+        scenario_hyo217(tmp)
     finally:
         os.environ.pop("RADAR_EXPORT", None)
+        os.environ.pop("RADAR_APP_ANSWER_ASYNC", None)
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\n{'OK' if not FAILS else 'FAILED'} — 실패 {len(FAILS)}")
     return 1 if FAILS else 0
@@ -2436,6 +2439,138 @@ def scenario_hyo158_blocked(tmp):
         third, fourth = svc.sync_prs(), svc.sync_prs()
         check("HYO-225: 풀리면 「다시 됨」 한 줄 · 그 뒤로는 조용하다 (아직 열린 PR)",
               third == [f"{ids[3]}: PR 반영 다시 됨 (PR #3 아직 열림)"] and fourth == [] and gh.prs[3]["state"] == "OPEN", (third, fourth))
+
+
+def scenario_hyo217(tmp):
+    """HYO-217 — 실사용 모드의 답은 접수만 하고 바로 돌려준다. git·PR 반영은 export 작업(main 줄)이 뒤에서 한다.
+    답이 먼저 적힌다(write-ahead) · 반영이 느려도 답은 안 기다린다 · Inbox에서 숨는다 · 반영 못 하면 이유와 함께 다시 보이고 같은 답으로 재시도 ·
+    재시도해도 커밋·ADR이 둘이 되지 않는다 · 백엔드 재시작 · 스텁은 push 없이 같은 길로도 동작하고 기본은 동기."""
+    print("\n— HYO-217: 답 접수 + 뒤에서 반영 —")
+    import jobs as jobs_mod
+    import threading
+    import time
+    from radar import script as stub_scripts
+    from radar.stub_model import StubChat
+
+    def step(jobs):
+        jid, payload = jobs.q.get()
+        jobs.run_one(jid, payload)
+        jobs.q.task_done()
+
+    with _Env(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", RADAR_APP_ANSWER_ASYNC=None):
+        root = os.path.join(tmp, "real217")
+        os.makedirs(root)
+        adr_remote, adr, base, snaps = _real_repos(root)
+        svc = RadarService(os.path.join(root, "app-data"), app_mode="real", real_adr=adr, snapshot_repo=snaps, engine="api",
+                           chat_factory=lambda flow: StubChat(script=stub_scripts.detect_script(), flow=flow))
+        check("실사용의 기본은 답 접수(비동기)", svc.async_answers is True)
+        jobs = jobs_mod.Jobs(svc, start=False)
+        c = TestClient(server.create_app(svc, jobs=jobs))
+        check("실사용 detect → 초안", c.post("/runs/detect", json={}).json()["ok"])
+        rows = [i for i in c.get("/inbox").json()["items"] if i["kind"] == "detect"]
+        check("detect 항목 2개 이상", len(rows) >= 2, rows)
+        a, b = rows[0]["id"], rows[1]["id"]
+
+        # 1. 느린 반영 — 답은 안 기다린다
+        slow = threading.Event()
+        real_now = svc._answer_now
+
+        def slow_now(*args, **kw):
+            time.sleep(1.5)
+            slow.set()
+            return real_now(*args, **kw)
+
+        svc._answer_now = slow_now
+        t0 = time.time()
+        r = c.post(f"/inbox/{a}/approve", json={})
+        took = time.time() - t0
+        check("승인 → 바로 queued (느린 반영을 기다리지 않는다)", r.status_code == 200 and r.json()["outcome"] == "queued" and took < 1.0, (r.text, took))
+        check("접수한 답이 먼저 적혔다 (answers.json) · 원격은 그대로", svc._answers()[a]["decision"] == "approve" and svc._answers()[a]["state"] == "queued"
+              and _git(adr_remote, "rev-parse", "main") == base)
+        check("Inbox에서 숨고 (다음 항목으로) 상세는 404", a not in {i["id"] for i in c.get("/inbox").json()["items"]} and c.get(f"/inbox/{a}").status_code == 404)
+        check("반영 중에 같은 항목에 또 답하면 409", c.post(f"/inbox/{a}/reject").status_code == 409)
+        j = jobs.list()[0]
+        check("export 작업이 접수됨 (queued · item)", j["kind"] == "export" and j["state"] == "queued" and j["item"] == a, j)
+        check("export는 main 줄", jobs.queue_of("export") is jobs.queues["main"])
+        check("HTTP로 답 없이 export를 접수할 수 없다 (409)", c.post("/jobs/export", json={}).status_code == 409)
+        step(jobs)
+        svc._answer_now = real_now
+        j = c.get(f"/jobs/{j['id']}").json()
+        check("작업이 끝난다 (done · 한 줄)", slow.is_set() and j["state"] == "done" and j["item"] == a and j["message"], j)
+        files = _git(adr_remote, "diff-tree", "--no-commit-id", "--name-status", "-r", "main")
+        check("반영 → main에 커밋 1개 (새 ADR + 항목 파일)", _git(adr_remote, "rev-list", "--count", f"{base}..main") == "1" and "docs/adr/" in files
+              and all(line.startswith("A") for line in files.splitlines()), files)
+        check("반영되면 답 기록이 지워진다", a not in svc._answers() and any(e["event"] == "approve" and e["item"] == a for e in events(svc)))
+        head = _git(adr_remote, "rev-parse", "main")
+
+        # 2. 반영 실패 — 원격이 사라졌다. 이유와 함께 다시 보이고, 같은 답을 다시 하면 재시도
+        gone = adr_remote + ".away"
+        os.rename(adr_remote, gone)
+        r = c.post(f"/inbox/{b}/approve", json={})
+        check("원격이 막혀 있어도 승인은 바로 queued", r.json()["outcome"] == "queued", r.text)
+        step(jobs)
+        j = jobs.list()[0]
+        row = next((i for i in c.get("/inbox").json()["items"] if i["id"] == b), None)
+        check("반영 실패 → 작업 error + 항목이 이유와 함께 Inbox에 다시 나온다", j["state"] == "error" and j["message"] and row and row["answer_error"]
+              and svc._answers()[b]["state"] == "error", (j, row))
+        det = c.get(f"/inbox/{b}").json()
+        check("상세에도 answer_error (같은 답을 다시 할 수 있다)", det["answer_error"] and "approve" in det["actions"], det)
+        n_adr = len(adrs(svc))
+        os.rename(gone, adr_remote)
+        r = c.post(f"/inbox/{b}/approve", json={})
+        check("재시도(같은 답) → queued", r.json()["outcome"] == "queued", r.text)
+        step(jobs)
+        j = jobs.list()[0]
+        check("재시도 성공 → main에 커밋 1개만 · ADR 파일이 둘이 되지 않는다",
+              j["state"] == "done" and _git(adr_remote, "rev-list", "--count", f"{head}..main") == "1" and len(adrs(svc)) == n_adr, (j, adrs(svc)))
+        check("재시도 뒤 답 기록 없음 · Inbox에서 빠짐", b not in svc._answers() and b not in {i["id"] for i in c.get("/inbox").json()["items"]})
+
+        # 3. 같은 일을 또 돌려도(두 번 실행) 아무것도 안 만든다 — ADR 파일이 이긴다
+        svc._put_answer(b, {"decision": "approve", "stale_answer": None, "draft": None, "state": "queued", "at": service.now_iso(), "error": None})
+        head2 = _git(adr_remote, "rev-parse", "main")
+        res = svc.run_export(b)
+        check("이미 반영된 항목의 export는 새 커밋 없이 닫는다", res["outcome"] == "recovered" and _git(adr_remote, "rev-parse", "main") == head2 and b not in svc._answers(), res)
+        check("답이 없는 export는 아무 일 없이 끝난다", svc.run_export("nope")["outcome"] == "recovered")
+
+        # 4. 백엔드 재시작 — 반영 중이던 답은 error로 다시 보인다
+        svc._put_answer("ghost", {"decision": "approve", "stale_answer": None, "draft": None, "state": "queued", "at": service.now_iso(), "error": None})
+        jobs_mod.Jobs(svc, start=False)
+        check("재시작: queued 답은 error(재시작 안내)로", svc._answers()["ghost"]["state"] == "error" and "다시 시작" in svc._answers()["ghost"]["error"], svc._answers())
+        svc._put_answer("ghost", None)
+
+    # 5. 스텁 — 기본은 동기(예전 그대로), 접수 경로로 돌려도 git·push 없이 로컬 승인 기록만
+    data = os.path.join(tmp, "data217")
+    devdata.seed(data)
+    with _Env(RADAR_APP_ANSWER_ASYNC=None):
+        sync = RadarService(data)
+    check("스텁의 기본은 동기", sync.async_answers is False)
+    sc = TestClient(server.create_app(sync))
+    first = sc.get("/inbox").json()["items"][0]["id"]
+    r = sc.post(f"/inbox/{first}/approve", json={}).json()
+    check("스텁 동기: 바로 written (예전과 같다)", r["outcome"] == "written", r)
+    qdata = os.path.join(tmp, "data217q")
+    devdata.seed(qdata)
+    stub = RadarService(qdata, async_answers=True)
+    sj = jobs_mod.Jobs(stub, start=False)
+    qc = TestClient(server.create_app(stub, jobs=sj))
+    ids = [i["id"] for i in qc.get("/inbox").json()["items"]]
+    pushed = []
+    import radar.export as export_mod
+    old_pub = export_mod.GitExporter.publish
+    export_mod.GitExporter.publish = lambda *a, **k: pushed.append(1)
+    try:
+        r = qc.post(f"/inbox/{ids[0]}/approve", json={}).json()
+        step(sj)
+        rj = qc.post(f"/inbox/{ids[1]}/reject", json={}).json()
+        step(sj)
+    finally:
+        export_mod.GitExporter.publish = old_pub
+    jl = sj.list()
+    check("스텁 접수 경로: queued → 작업 done", r["outcome"] == "queued" and rj["outcome"] == "queued" and [x["state"] for x in jl[:2]] == ["done", "done"], jl[:2])
+    check("스텁은 어느 길로도 push하지 않는다 (git 내보내기 없음)", not pushed and type(hitl.exporter_for(stub.ctx())).__name__ == "LocalExporter")
+    check("스텁 접수 경로도 ADR을 썼다", len(adrs(stub)) == len(adrs(sync)), (adrs(stub), adrs(sync)))
+    qe = qc.post(f"/inbox/{ids[2]}/edit", json={"draft": {"technology": "x"}}).json()
+    check("접수 경로도 틀린 edit 초안은 접수 전에 돌려준다 (edit_errors · 답 기록 없음)", qe["outcome"] == "edit_errors" and ids[2] not in stub._answers(), qe)
 
 
 if __name__ == "__main__":

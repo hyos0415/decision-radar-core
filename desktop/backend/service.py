@@ -91,6 +91,7 @@ LIST_FILE = "list.json"
 SOURCE_HEALTH_FILE = "source-health.json"  # 출처 건강 검사 (HYO-172)
 LIST_KEYS = ("always", "tech", "slots", "alarm", "not_ours")
 TOPICS_MORE_MAX = 120  # 화제 탭 「더 보기」 상한 (HYO-154) — 부모 제안 규칙을 오프라인에서 잰 범위 (gold-w42·w43 상위 120)
+ANSWERS_FILE = "answers.json"  # 접수했지만 아직 ADR repo에 반영 못 한 답 (HYO-217) — 앱 데이터에만
 ALERTS_FILE = "alerts.json"  # revisit 충족 알림 — Inbox 항목 (화면 설계 ③). 앱 데이터에만, ADR repo에는 안 쓴다
 CHECK_FILE = "check.json"  # 자리 질의 「확인 필요」 (pipeline.detect_feed, HYO-245) — 목록 주차 폴더(list.json 옆)
 CHECK_STATE_FILE = "check-rows.json"  # 「확인 필요」 줄마다 답한 상태 {주차: {줄 id: {state, at, …}}} — 앱 데이터에만 (거부 기억은 ADR repo)
@@ -140,7 +141,7 @@ class RadarService:
 
     def __init__(self, data_dir, *, adr_dir=None, targets=None, model=None, radar_py=SKILL_RADAR, profile=None,
                  demo=None, demo_adr=None, demo_snapshot=None, chat_factory=None, app_mode=None, real_adr=None, snapshot_repo=None,
-                 engine=None):
+                 engine=None, async_answers=None):
         self.data_dir = os.path.abspath(data_dir)
         # 개발 데이터 프로필 — 폴더를 만든 프로필이 이긴다. 다른 프로필을 달라고 하면 섞이지 않게 거부한다 (devprofiles.py)
         made = devprofiles.read_marker(self.data_dir)
@@ -157,6 +158,8 @@ class RadarService:
         self.events_path = os.path.join(self.data_dir, EVENTS_FILE)
         self.runs_path = os.path.join(self.data_dir, RUNS_FILE)
         self.alerts_path = os.path.join(self.data_dir, ALERTS_FILE)
+        self.answers_path = os.path.join(self.data_dir, ANSWERS_FILE)
+        self._answers_lock = threading.Lock()  # 쓰기 잠금(self.lock)과 따로 — git 일이 길어도 새 답 접수는 안 기다린다
         self.check_path = os.path.join(self.data_dir, CHECK_STATE_FILE)
         # 레인 C 화제 (HYO-127) — `python -m pipeline.topics run --out <폴더>`가 쓴 `<주차>.json`을 읽기만 한다. 저장한 화제는 따로 (복사본)
         self.topics_dir = os.path.abspath(os.environ.get("RADAR_TOPICS_DIR") or os.path.join(self.data_dir, "topics"))
@@ -210,6 +213,10 @@ class RadarService:
                              engine or os.environ.get("RADAR_APP_ENGINE") or "claude-cli")
         os.makedirs(self.tmp, exist_ok=True)
         self.lock = threading.RLock()
+        # 답 접수(HYO-217): 실사용은 답을 적어 두고 바로 돌려준 뒤 git·PR 일을 export 작업이 한다. 스텁·데모는 내보내기가 로컬이라 그대로 동기
+        if async_answers is None:
+            async_answers = {"1": True, "0": False}.get(os.environ.get("RADAR_APP_ANSWER_ASYNC"), self.mode == "real")
+        self.async_answers = async_answers
 
     def _setup_demo(self, adr_src, snapshot):
         """데모 모드 — ADR 사본(처음 한 번 복사, 있으면 이어 쓴다)과 detect 입력 폴더. 원본 ADR repo는 읽기만 한다."""
@@ -590,7 +597,7 @@ class RadarService:
         rows += [self._pending_row(j) for j in (self.jobs.pending() if self.jobs else [])]
         rows += [self._alert_row(a) for a in self._alerts() if not a.get("acked")]
         rows += self._check_items(ctx)
-        return sorted(rows, key=lambda r: str(r["since"]))
+        return sorted(self._overlay_answers(rows), key=lambda r: str(r["since"]))
 
     # ── 접수된 capture (화면 설계 ①) · revisit 충족 알림 (화면 설계 ③) — 답은 「확인함」뿐 ──────
 
@@ -670,6 +677,13 @@ class RadarService:
             return res
 
     def detail(self, item_id):
+        rec = self._answers().get(item_id)
+        if rec and rec["state"] == "queued":  # 답을 접수했고 반영 중이다 — Inbox에서도 숨겨져 있다 (HYO-217)
+            raise ServiceError(404, f"{item_id}: 답을 반영하고 있어요")
+        d = self._detail(item_id)
+        return {**d, "answer_error": rec.get("error")} if rec and rec["state"] == "error" else d
+
+    def _detail(self, item_id):
         ctx = self.ctx()  # 읽기 — 쓰기 잠금을 기다리지 않는다
         if item_id.startswith(CHECK_PREFIX):
             week = item_id[len(CHECK_PREFIX):]
@@ -706,11 +720,118 @@ class RadarService:
 
     # ── 답 ───────────────────────────────────────────────────────
 
+    # 답 접수 (HYO-217) — 실사용 모드의 답은 git·PR 일(6~12초)이 붙는다. 그래서 답은 `<data>/answers.json`에 먼저 적고(write-ahead) 바로 돌려준 뒤,
+    # 같은 일을 main 줄의 export 작업이 한다 (`run_export` → 예전 동기 경로 `_answer_now` 그대로). 코어가 이미 멱등이다 — 다시 돌려도 ADR이 둘이 되지 않고
+    # (`write_adr` 회복 · `export_item` already_exported), 항목이 이미 대기열에 없으면(ADR 파일이 이겼다) 반영된 것으로 닫는다.
+    # 답 상태: queued(접수 ~ 반영 중 — Inbox에서 숨김) · error(반영 못 함 — Inbox에 다시 보이고 answer_error에 이유. 같은 답을 다시 하면 재시도).
+    # 한 항목에 여러 답을 한 PR로 묶지 않는다 — 항목마다 작업 하나.
+
+    def _answers(self):
+        try:
+            return json.load(open(self.answers_path, encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def _put_answer(self, item_id, rec):
+        """rec=None이면 지운다."""
+        with self._answers_lock:
+            a = self._answers()
+            if rec is None:
+                a.pop(item_id, None)
+            else:
+                a[item_id] = rec
+            tmp = self.answers_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(a, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, self.answers_path)
+
+    def _overlay_answers(self, rows):
+        """Inbox 줄에 접수한 답을 덮는다 — 반영 중이면 숨기고(화면은 다음 항목으로), 반영 못 했으면 이유를 보인다."""
+        a = self._answers()
+        out = []
+        for r in rows:
+            rec = a.get(r["id"])
+            if rec and rec["state"] == "queued":
+                continue
+            if rec and rec["state"] == "error":
+                r = {**r, "answer_error": rec.get("error")}
+            out.append(r)
+        return out
+
+    def close_stale_answers(self):
+        """백엔드가 다시 뜰 때 — 반영 중이던 답은 일꾼이 사라졌다. error로 돌려 Inbox에 다시 보인다 (같은 답을 다시 하면 재시도, 코어가 멱등)."""
+        for item_id, rec in self._answers().items():
+            if rec["state"] == "queued":
+                self._put_answer(item_id, {**rec, "state": "error", "error": "백엔드가 다시 시작돼 ADR repo에 반영하지 못했어요 — 같은 답을 다시 하면 이어서 반영해요"})
+
+    def check_export(self, item_id):
+        """export 작업 접수 검사 — 접수한 답(queued)이 있어야 한다. 답 없이 내보내기만 시킬 길은 없다."""
+        rec = self._answers().get(item_id)
+        if not rec or rec["state"] != "queued":
+            raise ServiceError(409, f"{item_id}: 반영할 답이 없다")
+
     def answer(self, item_id, decision, *, stale_answer=None, draft=None):
         if decision not in ("approve", "edit", "reject"):
             raise ServiceError(400, f"모르는 답 {decision!r}")
         if decision == "edit" and not isinstance(draft, dict):
             raise ServiceError(400, "edit에는 draft가 필요하다")
+        if self.async_answers and self.jobs is not None:
+            return self._answer_queued(item_id, decision, stale_answer, draft)
+        return self._answer_now(item_id, decision, stale_answer=stale_answer, draft=draft)
+
+    def _answer_queued(self, item_id, decision, stale_answer, draft):
+        ctx = self.ctx()  # 읽기 — 앞 답의 git 일이 쓰기 잠금을 쥐고 있어도 기다리지 않는다
+        if item_id in {c["id"] for c in self._captures(ctx)}:
+            pr = None
+        else:
+            q = next((q for q in hitl.review_queue(ctx) if q["item"] == item_id), None)
+            if q is None:  # 대기 항목이 아니다 — 거절 이유(404·409)는 동기 경로가 낸다. 쓰는 일은 없다
+                return self._answer_now(item_id, decision, stale_answer=stale_answer, draft=draft)
+            pr = _review_pr(q.get("export"))
+        if pr and decision == "edit":
+            raise ServiceError(409, f"PR #{pr['number']} 브랜치에서 고친 뒤 merge해 주세요 — 앱에서 고치면 PR과 갈라진다 ({pr['url']})")
+        if (self._answers().get(item_id) or {}).get("state") == "queued":
+            raise ServiceError(409, f"{item_id}: 앞의 답을 반영하고 있어요")
+        if decision == "edit":  # 로컬 검사라 빠르다 — 틀린 초안은 접수하지 않고 바로 돌려준다 (동기 경로와 같은 모양)
+            _, errs = hitl.check_edit(ctx, draft)
+            if errs:
+                return {"outcome": "edit_errors", "message": "고친 초안이 검사를 통과하지 못했어요 — 아무것도 쓰지 않았어요", "errors": errs}
+        self._put_answer(item_id, {"decision": decision, "stale_answer": stale_answer, "draft": draft, "state": "queued", "at": now_iso(), "error": None})
+        try:
+            job = self.jobs.submit("export", {"item": item_id})
+        except Exception:
+            self._put_answer(item_id, None)
+            raise
+        self.log("answer_queued", item_id, decision=decision, job=job["id"])
+        verb = {"approve": "승인", "edit": "고쳐서 승인", "reject": "거부"}[decision]
+        return {"outcome": "queued", "message": f"{verb}했어요 — ADR repo에는 뒤에서 반영해요. 못 하면 이 항목이 Inbox에 다시 나와요"}
+
+    def run_export(self, item_id):
+        """export 작업의 몸 — 접수한 답을 예전 동기 경로로 반영한다 (멱등). 반영 못 하면 error로 두고 예외를 던진다 (작업이 error로 보인다)."""
+        rec = self._answers().get(item_id)
+        if not rec:
+            return {"outcome": "recovered", "message": f"{item_id}: 반영할 답이 없어요 (이미 처리됐어요)"}
+        try:
+            res = self._answer_now(item_id, rec["decision"], stale_answer=rec.get("stale_answer"), draft=rec.get("draft"))
+        except ServiceError as e:
+            if e.status == 404:  # 이미 대기열에 없다 — ADR 파일(별도 파일)이 이겼다. 같은 일을 또 하지 않는다
+                self._put_answer(item_id, None)
+                return {"outcome": "recovered", "message": f"{item_id}: 이미 반영돼 있어요"}
+            self._put_answer(item_id, {**rec, "state": "error", "error": e.message})
+            raise
+        except Exception as e:  # noqa: BLE001
+            self._put_answer(item_id, {**rec, "state": "error", "error": f"{type(e).__name__}: {str(e)[:300]}"})
+            raise
+        if res["outcome"] in ("blocked", "error", "edit_errors"):
+            msg = res.get("message") or res["outcome"]
+            if res.get("errors"):
+                msg += " — " + "; ".join(str(x) for x in res["errors"][:3])
+            self._put_answer(item_id, {**rec, "state": "error", "error": msg})
+            raise ServiceError(409, msg)
+        self._put_answer(item_id, None)  # written · rejected · discarded · rejudge · recovered · stale(항목이 stale로 다시 보인다) · edit_errors
+        return res
+
+    def _answer_now(self, item_id, decision, *, stale_answer=None, draft=None):
         with self.lock:
             ctx = self.ctx()
             ids = {c["id"] for c in self._captures(ctx)}

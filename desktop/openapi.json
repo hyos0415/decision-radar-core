@@ -2850,7 +2850,8 @@
               "acked",
               "error",
               "drafted",
-              "no_draft"
+              "no_draft",
+              "queued"
             ],
             "title": "Outcome"
           },
@@ -4622,6 +4623,18 @@
             "title": "Adr",
             "description": "revisit: 조건이 충족된 ADR 번호 (「ADR 열기」 → /decisions/{adr})"
           },
+          "answer_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Error",
+            "description": "접수한 답을 ADR repo에 반영하지 못한 이유 (HYO-217) — 같은 답을 다시 하면 재시도한다 (중복 없음). 없으면 null"
+          },
           "message": {
             "anyOf": [
               {
@@ -4845,6 +4858,18 @@
             "title": "Adr",
             "description": "revisit: 조건이 충족된 ADR 번호 (「ADR 열기」 → /decisions/{adr})"
           },
+          "answer_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Error",
+            "description": "접수한 답을 ADR repo에 반영하지 못한 이유 (HYO-217) — 같은 답을 다시 하면 재시도한다 (중복 없음). 없으면 null"
+          },
           "message": {
             "anyOf": [
               {
@@ -4902,7 +4927,8 @@
               "capture",
               "detect",
               "revisit",
-              "experiment"
+              "experiment",
+              "export"
             ],
             "title": "Kind"
           },
@@ -5354,7 +5380,8 @@
                   "acked",
                   "error",
                   "drafted",
-                  "no_draft"
+                  "no_draft",
+                  "queued"
                 ]
               },
               {
