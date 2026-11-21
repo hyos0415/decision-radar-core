@@ -42,8 +42,13 @@ NOW = "2026-09-28T09:07:00+09:00"
 FM = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?(.*)\Z", re.S)
 
 
+def case_files():
+    """53케이스(eval/cases, 비공개 정답지) + 합성 케이스(eval/synthetic, SYN-* — 공개 사본에서 도는 것, HYO-235)."""
+    return sorted(glob.glob(os.path.join(EVAL, "cases", "batch-*.jsonl"))) + sorted(glob.glob(os.path.join(EVAL, "synthetic", "*.jsonl")))
+
+
 def load_case(cid):
-    for f in glob.glob(os.path.join(EVAL, "cases", "batch-*.jsonl")):
+    for f in case_files():
         for line in open(f, encoding="utf-8"):
             if line.strip() and json.loads(line)["id"] == cid:
                 return json.loads(line)
