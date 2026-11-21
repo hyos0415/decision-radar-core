@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { ChildProcess, execFileSync, spawn, spawnSync } from 'child_process'
-import { existsSync } from 'fs'
+import { createWriteStream, existsSync, mkdirSync, type WriteStream } from 'fs'
 import { createServer } from 'net'
 import { dirname, join, resolve } from 'path'
 import type { BackendStatus } from '../shared'
@@ -36,10 +36,39 @@ function setState(next: BackendStatus): void {
   listeners.forEach((cb) => cb(snap))
 }
 
+// 백엔드 출력을 날짜별 파일에도 남긴다 — 줄마다 시각을 붙여서 (HYO-225). 전에는 띄울 때 터미널 출력을 돌려 둔 파일뿐이라
+// 띄우는 방법에 따라 로그가 없었고, 시각이 없어 언제 막혔는지 알 수 없었다. 위치: app.getPath('logs')/backend-<real|dev>-YYYY-MM-DD.log
+// (실사용과 스텁 · 데모가 한 파일에 섞이지 않게 모드를 이름에)
+let logFile: { day: string; stream: WriteStream } | null = null
+const LOG_MODE = process.env.RADAR_APP_MODE === 'real' ? 'real' : 'dev'
+
+function fileLog(line: string): void {
+  try {
+    const stamp = new Date().toLocaleString('sv-SE') // 로컬 시각 「2026-11-21 21:05:03」
+    const day = stamp.slice(0, 10)
+    if (!logFile || logFile.day !== day) {
+      logFile?.stream.end()
+      const dir = app.getPath('logs')
+      mkdirSync(dir, { recursive: true })
+      const path = join(dir, `backend-${LOG_MODE}-${day}.log`)
+      const stream = createWriteStream(path, { flags: 'a' })
+      stream.on('error', () => {
+        logFile = null // 다음 줄에서 다시 연다 — 로그 파일 실패로 앱이 멈추지 않는다
+      })
+      logFile = { day, stream }
+      console.log(`[backend] 로그 파일: ${path}`)
+    }
+    logFile.stream.write(`${stamp} ${line}\n`)
+  } catch {
+    // 로그 파일을 못 써도 앱은 돈다 — 화면 로그(logs)와 터미널 출력은 그대로
+  }
+}
+
 function pushLog(chunk: string): void {
   for (const line of chunk.split(/\r?\n/)) {
     if (!line.trim()) continue
     console.log(`[backend] ${line}`)
+    fileLog(line)
     logs.push(line)
     if (logs.length > MAX_LOG_LINES) logs.shift()
   }

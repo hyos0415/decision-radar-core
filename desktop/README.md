@@ -125,6 +125,7 @@ RADAR_APP_MODE=real npm run dev     # [RADAR_REAL_ADR=../adr] [RADAR_SNAPSHOT_RE
 
 - 시작 검사: ADR repo가 git 작업 사본의 맨 위 · main · origin 있음 · `docs/adr`·`radar-targets.json` 있음 · 데이터 폴더와 안 겹침 · (claude-cli 엔진이면) CLI 바이너리. 틀리면 시작을 거부한다. 데모·`RADAR_APP_MODEL`과 같이 주면 거부
 - 데이터 폴더 = `RADAR_APP_DATA` 또는 `~/.decision-radar` (행동 로그 = 실사용 지표라 레포 밖에 둔다)
+- **앱 로그** (HYO-225): 백엔드 출력은 줄마다 시각을 붙여 `app.getPath('logs')/backend-<real|dev>-YYYY-MM-DD.log`에도 쌓인다 — macOS `~/Library/Logs/decision-radar-desktop/`, Windows `%APPDATA%\decision-radar-desktop\logs\`. 띄울 때 터미널 출력을 돌려 두지 않아도 남는다. 검토 PR 반영이 막히면 gh 오류 문구까지 한 번만 찍고(같은 막힘은 5분마다 다시 안 찍는다), 풀리면 「다시 됨」 한 줄
 - 엔진: detect·revisit = 구독 CLI(`claude -p`, 기본) 또는 api. capture는 API — `.env`에 `ANTHROPIC_API_KEY`가 없으면 capture가 409
 - 실행 전에 radar-snapshots를 **pull만** 하고 가장 새 `detect/<주차>/`(pipeline.detect_feed 출력)를 detect 입력으로 쓴다 — 만드는 쪽은 수집 PC의 주간 작업. ADR repo는 원격을 따라잡는다(ff)
 - 그래프 실행은 dry-run — detect 초안은 작업 사본에만 쓰고 Inbox 검토 대기. **승인 = 커밋 1개를 main에 push**, 거부 = 초안을 지우고 닫힌 항목 기록만 커밋

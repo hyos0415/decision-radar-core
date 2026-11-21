@@ -183,6 +183,7 @@ class RadarService:
         self.demo_info = self.real_info = None
         self.shadow = False  # 실사용 + claude-cli면 켜진다 (_setup_real)
         self.review_pr = False  # 실사용이면 켜진다 (_setup_real, HYO-158)
+        self._blocked_said = {}  # 항목 → 마지막으로 알린 막힘 이유 — 같은 막힘은 정기 확인마다 다시 찍지 않는다 (HYO-225)
         self._gh_client = None
         self.revisit_dir = None  # 실사용 revisit이 볼 revisit/<주>/ (_prepare_real, HYO-159)
         self.shadow_factory = None  # 테스트가 그림자 모델 자리에 대역을 꽂는다
@@ -1527,7 +1528,15 @@ class RadarService:
             for q in hitl.review_queue(ctx):
                 if _review_pr(q["export"]):
                     r = self._settle_pr(ctx, q["item"])
-                    out += [r["line"]] if r.get("line") else []
+                    line = r.get("line")
+                    # 같은 항목이 같은 이유로 막혀 있으면 한 번만 알린다 (HYO-225 — 11/16~19 5분마다 15줄씩 쌓여 이유가 묻혔다). 풀리면 풀렸다고 한 줄
+                    if r["state"] == "blocked":
+                        if self._blocked_said.get(q["item"]) == r.get("reason"):
+                            continue
+                        self._blocked_said[q["item"]] = r.get("reason")
+                    elif self._blocked_said.pop(q["item"], None) is not None and not line:
+                        line = f"{q['item']}: PR 반영 다시 됨 (PR #{r.get('pr')} 아직 열림)"
+                    out += [line] if line else []
         return out
 
     def _settle_pr(self, ctx, item_id):
@@ -1540,8 +1549,8 @@ class RadarService:
         elif r["state"] == "closed":
             self.log("reject", item_id, at=at, outcome="rejected", adr=r.get("adr"), via="pr", pr=r["pr"])
             r["line"] = f"PR #{r['pr']} close → ADR {r.get('adr')} 기각"
-        elif r["state"] == "blocked":
-            r["line"] = f"{item_id}: PR 반영 막힘 ({r.get('reason')})"
+        elif r["state"] == "blocked":  # gh가 왜 실패했는지까지 (HYO-225 — 이유 없이 「pr_view_failed」만 남아 원인을 못 봤다)
+            r["line"] = f"{item_id}: PR 반영 막힘 ({r.get('reason')})" + (f" — {str(r['detail'])[:240]}" if r.get("detail") else "")
         return r
 
     def _pr_answer(self, item_id, pr, decision):
@@ -1845,7 +1854,7 @@ class RadarService:
         head = f"소식 {n_feed}건 → " if n_feed is not None else ""
         summary = [x for x in [self._funnel_line()] if x]  # 수집 스냅숏에서 만든 입력이면(pipeline.detect_feed) 깔때기 건수 한 줄 (HYO-84)
         summary += [f"{head}후보 {len(cands)}건 · 이미 있는 결정이라 건너뜀 {len(skipped)}건 · 제외 {len(excluded)}건"]
-        summary += detect_ops.r16_lines(rep.get("triage"))  # 코드가 매핑대로 고친 affected · 폴더가 없는 대상 repo (HYO-246) — 숨기지 않는다
+        summary += detect_ops.affected_lines(rep.get("triage"))  # 코드가 고친 affected(자리 설정 · R16 매핑) · 폴더가 없는 대상 repo (HYO-219 · HYO-246) — 숨기지 않는다
         if drafts:
             bad = sum(1 for d in drafts if d["validate_errors"])
             summary.append(f"초안 {len(drafts)}건 작성 (proposed)" + (f" — validate 실패 {bad}건" if bad else ""))
