@@ -25,13 +25,17 @@ TRIAGE_INSTRUCTIONS = """너는 이번 주 소식 목록에서 **내 스택에 �
   - 0곳이어서 버리면 excluded에 `unused_claim: true`와 `checked`(repo_grep에 넣은 패턴 그대로)를 적는다. 찾아보지 않고 「미사용」이라 적지 않는다 — 코드가 기록과 대조한다
   - 쓰는 곳이 나왔으면 버리지 않는다. 후보로 올린다
   - repo_grep은 우리 코드만 본다. 의존성 안에서 쓰는지는 모른다 — 그 때문에 판단이 안 서면 후보로 올린다
-  - **`security: true`인 소식은 「우리 코드가 안 쓴다」는 이유로 버리지 않는다.** 찾아보고, 0곳이어도 후보로 올린다 — 후보의 `checked`에 찾아본 패턴을 적으면 결과는 코드가 초안에 적고 사람이 정한다. 스택에 없는 기술이거나 무엇에 해당하는지 알 수 없는 글이면 버릴 수 있다
+  - **`security: true`인 소식은 버리지 않는다 — 전부 후보로 올린다.** 앞 단계(관문)가 대상 repo 전체의 manifest로 우리 스택의 기술이라고 판정한 보안 소식이다(여기 보이는 manifest는 루트의 것뿐이다). 「우리 코드가 안 쓴다 · 스택에 없다 · 일상 릴리스다 · 내용이 적다」는 버릴 이유가 아니다 — 사람이 보고 기각한다
+  - 찾아본 것이 있으면 후보의 `checked`에 패턴을 적는다 — 0곳이어도 올린다. 결과는 코드가 초안에 적는다
+  - 같은 기술의 보안 소식 여러 건은 한 후보로 묶거나(source_urls에 전부), 이미 올린 후보와 같은 내용이면 `why: duplicate`로 그 후보에 붙인다
   - 후보로 올리는 다른 소식도 찾아본 패턴이 있으면 `checked`에 적는다
 - **`candidate_for`가 붙은 소식은 버리지 않는다.** 앞 단계(자리 질의)가 이미 그 역할의 후보로 고른 것이다 — 각 줄에 repo · 역할(role) · 고른 이유(reason)가 있다. 어디에 쓸지를 다시 판단하지 않는다
   - `affected`는 `candidate_for`의 repo와, 그 역할의 일이 속한 component(CLAUDE.md의 component 이름)로 적는다. 자리가 여럿이면 전부 적는다. 거기 없는 repo를 덧붙이지 않는다
   - 「코드에 아직 그 기능이 없다」 · 「요약이 비었다」는 버릴 이유가 아니다 — 새 후보는 원래 코드에 없다
 
-출력: candidates(남긴 것)와 excluded(버린 것 — url과 이유). 소식 하나는 둘 중 한 곳에 있다."""
+출력: candidates(남긴 것)와 excluded(버린 것 — url과 이유). **<feed>의 소식은 하나도 빠짐없이 둘 중 한 곳에 있다** — 빠뜨린 소식은 코드가 찾아 다시 묻는다.
+- excluded의 `why`에 버린 이유의 종류를 적는다: not_ours(우리 스택 · 코드에 없거나 쓰지 않는다) · routine(breaking · security 등이 없는 일상 릴리스) · duplicate · unclear(무엇에 해당하는지 알 수 없는 글) · other
+- **후보로 올린 다른 소식과 같은 내용이라 따로 올리지 않는 소식**은 `why: duplicate`와 `duplicate_of`(그 후보의 소식 url)를 적는다 — 코드가 그 후보의 근거에 붙인다. 후보의 source_urls에 처음부터 함께 넣어도 된다"""
 
 DRAFT_INSTRUCTIONS = """너는 후보 하나를 기술 결정 기록(ADR) **초안**으로 쓴다. 결정을 내리지 않는다 — status는 코드가 proposed로 정한다.
 technology·affected·related는 칸이 없다 — 코드가 후보와 기존 ADR 검사 결과로 채운다. 네가 쓰는 것은 아래다.
@@ -55,12 +59,13 @@ def triage_prompt(now, stack, feed):
             f"<feed>{json.dumps(feed, ensure_ascii=False)}</feed>")
 
 
-RESCUE_INSTRUCTIONS = """너는 방금 거르기에서 버린 소식 가운데 **버릴 수 없는 것**을 후보로 다시 쓴다. <excluded>의 kept_because가 이유다.
-- security: 보안 소식을 「우리 코드가 그것을 안 쓴다」는 이유로 버렸다. 보안 소식은 그 이유로 빼지 않는다 — 찾아본 결과를 적어 올리고 사람이 정한다
+RESCUE_INSTRUCTIONS = """너는 방금 거르기에서 버린 소식 가운데 **버릴 수 없는 것**을 후보로 다시 쓰고, 거르기가 **답을 빠뜨린 것**에 답한다. <excluded>의 kept_because가 이유다.
+- security: 앞 단계(관문)가 남긴 보안 소식을 버렸다. 보안 소식은 빼지 않는다 — 관문이 대상 repo 전체의 manifest로 우리 스택의 기술이라고 판정했다. 버릴 때 적은 이유(안 쓴다 · 일상 릴리스 · 내용이 적다)는 후보로 올린 뒤 사람이 본다. 찾아본 결과를 적어 올린다
 - slot: 앞 단계(자리 질의)가 이미 그 역할의 후보로 고른 소식이다(<news>의 candidate_for). 어디에 쓸지를 다시 판단해 빼지 않는다
+- missing: 거르기가 후보에도 버린 것에도 적지 않은 소식이다. 거르기와 같은 기준으로 판단한다 — 스택에 영향을 주면 candidate로, 아니면 **excluded에 url · 이유 · why와 함께** 적는다. missing인 소식만 excluded에 적을 수 있다
 
 - 입력: 대상 repo의 스택, 되돌린 소식(<news>), 버릴 때 적은 이유와 찾아본 패턴(<excluded>)
-- 소식마다 candidate 하나로 쓴다. 같은 기술의 권고 여러 건은 한 후보로 묶고 source_urls에 전부 넣는다
+- security · slot인 소식은 소식마다 candidate 하나로 쓴다. 같은 기술의 권고 여러 건은 한 후보로 묶고 source_urls에 전부 넣는다. <news>의 소식은 하나도 빠짐없이 답한다
 - technology는 기술 이름만. affected는 CLAUDE.md의 「의존성 → component」 매핑과 같게, 매핑에 없으면 그 기술을 실제로 쓰는 repo·component를 적는다.
   candidate_for가 있으면 그 repo와 그 역할의 일이 속한 component로 적는다
 - checked에는 버릴 때 찾아본 패턴을 그대로 옮긴다. 더 확인할 것이 있으면 repo_grep으로 찾고 그 패턴도 넣는다

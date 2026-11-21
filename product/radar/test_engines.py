@@ -198,7 +198,7 @@ async def main():
                {"url": "https://x/sec", "reason": "스택에 없는 기술의 권고"},
                {"url": "https://x/brk", "reason": "미사용", "unused_claim": True, "checked": ["zz_absent"]}]
         back = detect_ops.unused_security(exs, sec)
-        check("되돌릴 것: 보안 소식을 안 쓴다는 이유로 버린 것만 (표시 · 말 둘 다)", back == exs[:2], back)
+        check("되돌릴 것: 버린 보안 소식은 이유와 무관하게 전부 — 보안이 아닌 소식은 그대로 (HYO-206)", back == exs[:3], back)
         # 3d 자리 질의가 고른 후보는 거르기가 다시 빼지 못한다 — 대상 repo가 적힌 자리만 넘긴다
         gate = json.loads((snapd / "gate.json").read_text(encoding="utf-8"))
         gate["https://x/model"] = {"kept_by": [], "slots": [{"slot": "judge", "name": "채점", "repo": "mine", "role": "루브릭 채점", "fit": 2, "reason": "비교해 볼 만"},
@@ -210,8 +210,8 @@ async def main():
         check("자리 후보: 대상 repo의 자리만 (뺀 repo의 자리는 넘기지 않는다)", list(sl) == ["https://x/model"] and [h["slot"] for h in sl["https://x/model"]] == ["judge"], sl)
         exs2 = exs + [{"url": "https://x/model", "reason": "코드에 아직 채점 모델 사용처 없음"}, {"url": "https://x/other", "reason": "스택 밖"}]
         pairs = detect_ops.to_rescue(exs2, sec, set(sl))
-        check("되돌릴 것: 보안(안 쓴다) 2 + 자리 후보 1, 이유가 붙는다", [(e["url"], w) for e, w in pairs] ==
-              [("https://x/sec", "security"), ("https://x/sec", "security"), ("https://x/model", "slot")], pairs)
+        check("되돌릴 것: 보안 3 + 자리 후보 1, 이유가 붙는다", [(e["url"], w) for e, w in pairs] ==
+              [("https://x/sec", "security"), ("https://x/sec", "security"), ("https://x/sec", "security"), ("https://x/model", "slot")], pairs)
         sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # 레포 루트 — pipeline 패키지
         from pipeline import detect_feed
         sj ={"per_slot": {"judge": [{"id": "a", "fit": 3, "reason": "r1", "rank": 1}], "gate": [{"id": "a", "fit": 2, "reason": "r2", "rank": 2}, {"id": "b", "fit": 2, "reason": "r3", "rank": 1}]},
@@ -220,6 +220,58 @@ async def main():
         check("입력 만들기: 항목이 든 자리를 전부 넘긴다 (repo · 역할 · 이유)", [(h["slot"], h["repo"], h["fit"], h["role"]) for h in hits] ==
               [("judge", "mine", 3, "루브릭 채점"), ("gate", "mine", 2, None)], hits)
         check("입력 만들기: 예전 slots.json(repo 없음)도 돈다", detect_feed.slot_hits({"per_slot": {"j": [{"id": "a", "fit": 2, "reason": "r"}]}}, "a")[0]["repo"] is None)
+        # 3e 거르기의 답을 코드가 맞춘다 (HYO-206 — W46 세 번에서 갈린 것): 관문과 어긋나는 「스택에 없다」 · 답을 빠뜨린 소식 · 같은 내용 붙이기 · 이름
+        nots = [{"url": "https://x/sec", "reason": "어느 manifest에도 없는 의존성이다", "why": "not_ours"},
+                {"url": "https://x/sec", "reason": "보안 내용이 없는 patch", "why": "routine"},
+                {"url": "https://x/brk", "reason": "어느 manifest에도 없는 의존성이다", "why": "not_ours"}]
+        check("되돌릴 것: 보안 소식은 「우리 것이 아니다」든 「일상 릴리스」든 되돌린다 — 보안 아닌 소식은 같은 이유여도 그대로",
+              detect_ops.unused_security(nots, sec) == nots[:2], detect_ops.unused_security(nots, sec))
+        feed3 = [{"url": u} for u in ("https://x/sec", "https://x/brk", "https://x/model", "https://x/gone")]
+        c3 = [{"technology": "Python", "source_urls": ["https://x/sec"]}]
+        miss = detect_ops.unanswered(feed3, c3, [{"url": "https://x/brk", "reason": "r"}])
+        check("답 없는 소식: 후보에도 버린 것에도 없는 url", miss == ["https://x/model", "https://x/gone"], miss)
+        pairs = detect_ops.to_rescue([], sec | {"https://x/gone2"}, set(sl), ["https://x/model", "https://x/gone", "https://x/sec"])
+        check("답 없는 소식: 다시 묻는다 — 자리 후보 · 보안이면 그 이유로", [(e["url"], w) for e, w in pairs] ==
+              [("https://x/model", "slot"), ("https://x/gone", "missing"), ("https://x/sec", "security")], pairs)
+        c4 = [{"technology": "Langfuse", "source_urls": ["https://x/a"]}, {"technology": "Python", "source_urls": ["https://x/sec"]}]
+        e4 = [{"url": "https://x/b", "reason": "a와 같은 내용", "why": "duplicate", "duplicate_of": "https://x/a"},
+              {"url": "https://x/c", "reason": "같은 내용", "why": "duplicate", "duplicate_of": "https://x/none"},
+              {"url": "https://x/d", "reason": "일상 릴리스", "why": "routine", "duplicate_of": "https://x/a"},
+              {"url": "https://x/sec", "reason": "후보에도 있는 url"}]
+        left, folded = detect_ops.fold_duplicates(c4, e4)
+        check("같은 내용: 가리킨 후보의 근거에 붙이고 버린 것에서 뺀다", c4[0]["source_urls"] == ["https://x/a", "https://x/b"]
+              and folded == [{"url": "https://x/b", "into": "https://x/a", "reason": "a와 같은 내용"}], (c4, folded))
+        check("같은 내용: 후보를 가리키지 않거나 duplicate가 아니면 그대로 · 후보에도 있는 url의 버린 줄은 뺀다",
+              [e["url"] for e in left] == ["https://x/c", "https://x/d"], left)
+        gate["https://x/two"] = {"kept_by": [{"technology": "langfuse", "tier": "L5", "change": "security"}, {"technology": "langfuse", "tier": "L3", "change": "security"}]}
+        gate["https://x/mix"] = {"kept_by": [{"technology": "langchain", "tier": "L4", "change": "breaking"}, {"technology": "python", "tier": "L0", "change": "eol"}]}
+        (snapd / "gate.json").write_text(json.dumps(gate), encoding="utf-8")
+        tech = detect_ops.gate_tech(ctx)
+        check("관문 이름: 관문이 한 기술로 남긴 소식만 (같은 기술의 두 등급은 하나 · 기술이 둘이면 뺀다)",
+              tech == {"https://x/sec": "python", "https://x/brk": "fastapi", "https://x/two": "langfuse"}, tech)
+        # 자리 후보의 이름은 자리 질의가 붙인 모델 이름 — 대상 repo의 자리만 · 관문 이름보다 먼저 · 자리마다 다르면 고르지 않는다
+        slot = lambda repo, model: {"slot": "s", "name": "n", "repo": repo, "role": "r", "fit": 2, "reason": "x", "model": model}   # noqa: E731
+        gate["https://x/new"] = {"kept_by": [{"technology": "claude-sonnet-5-5", "tier": "L2", "change": "breaking"}], "slots": [slot("mine", "Claude Fable 5.2"), slot("mine", "Claude Fable 5.2")]}
+        gate["https://x/gone-slot"] = {"kept_by": [{"technology": "openai", "tier": "L5", "change": "deprecation"}], "slots": [slot("gone", "GPT-6.1 Terra")]}
+        gate["https://x/split"] = {"kept_by": [], "slots": [slot("mine", "Kimi K3.1"), slot("mine", "Kimi K3.1 Pro")]}
+        (snapd / "gate.json").write_text(json.dumps(gate), encoding="utf-8")
+        tech = detect_ops.gate_tech(ctx)
+        check("자리 후보 이름: 자리 질의의 모델 이름이 관문 이름보다 먼저 · 뺀 repo의 자리는 안 본다 · 이름이 갈리면 고르지 않는다",
+              (tech.get("https://x/new"), tech.get("https://x/gone-slot"), tech.get("https://x/split"), tech.get("https://x/model")) ==
+              ("Claude Fable 5.2", "openai", None, None), tech)
+        hit = detect_feed.slot_hits({"per_slot": {"j": [{"id": "a", "fit": 2, "reason": "r", "model": "Kimi K3.1 Pro"}]}}, "a")[0]
+        check("입력 만들기: 자리 질의의 모델 이름을 넘긴다", hit["model"] == "Kimi K3.1 Pro", hit)
+        c5 = [{"technology": "Python", "source_urls": ["https://x/sec"]}, {"technology": "FastAPI", "source_urls": ["https://x/sec", "https://x/brk"]},
+              {"technology": "Kimi", "source_urls": ["https://x/model"]}, {"technology": "Py", "source_urls": ["https://x/sec", "https://x/model"]},
+              {"technology": "python", "source_urls": ["https://x/sec"]}]
+        ren = detect_ops.fix_names(c5, tech)
+        check("이름 고정: 근거가 전부 관문 소식이고 기술이 하나일 때만 관문 이름으로", [c["technology"] for c in c5] == ["python", "FastAPI", "Kimi", "Py", "python"]
+              and ren == [{"source_urls": ["https://x/sec"], "model": "Python", "gate": "python"}], (c5, ren))
+        rep = detect_ops.detect_report(ctx, "2026-11-21T00:00:00+09:00", skipped=[], dropped=[], written=[], failed=[], excluded=[],
+                                       notes={"folded": folded, "missing": miss, "unanswered": [], "renamed": ren})
+        check("보고서: 코드가 맞춘 것을 따로 적는다 · 맞춘 것이 없으면 칸이 없다", rep["triage"]["missing"] == miss and "triage" not in
+              detect_ops.detect_report(ctx, "2026-11-21T00:00:00+09:00", skipped=[], dropped=[], written=[], failed=[], excluded=[],
+                                       notes={"folded": [], "missing": [], "unanswered": [], "renamed": []}), rep)
         ops.repo_grep(ctx, "zz_absent")
         lines = detect_ops.usage_lines(ctx, ["zz_absent", "zz_widget", "zz_never_ran"])
         check("초안에 적는 줄: 개수는 기록에서 읽는다", "mine 0곳" in lines[0] and "mine 2곳" in lines[1] and "돌린 기록 없음" in lines[2], lines)

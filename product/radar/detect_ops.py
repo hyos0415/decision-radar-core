@@ -5,7 +5,6 @@
 
 import json
 import os
-import re
 
 from common import ops
 from common.core import radar
@@ -145,21 +144,79 @@ def slot_reasons(c):
             if (hits := [h for h in v.get("slots") or [] if h.get("repo") in c.targets])}
 
 
-# 「우리 코드가 안 쓴다」는 뜻의 말 — unused_claim을 안 붙이고 버린 보안 소식을 잡는 뒷문 (W47: 「HTTP/2 서버를 열지 않는다」가 표시 없이 빠졌다)
-_UNUSED_WORDS = re.compile(r"미사용|안 쓴|안 씀|쓰지 않|쓰는 곳(이)? 없|사용(하지| 안| 코드 없| 흔적 없|처 없)|열지 않|호출(하지| 안)|not used|unused|no usage", re.I)
-
-
 def unused_security(excluded, sec):
-    """버린 것 가운데 「보안 소식인데 안 쓴다는 이유」인 것 (HYO-205 사용자 2026-11-20: 보안 소식은 코드에 없다고 빼지 않는다 — 찾아본 결과를 적어 올린다).
-    이유가 사용 여부가 아닌 것(스택 밖 · 내용 없음 · 다른 줄의 백포트)은 그대로 둔다 — 보고서가 따로 센다."""
-    return [e for e in excluded if e.get("url") in sec and (e.get("unused_claim") or _UNUSED_WORDS.search(e.get("reason") or ""))]
+    """버린 것 가운데 관문이 security로 남긴 소식 — **이유가 무엇이든** 전부 (HYO-206). 같은 내용이라 다른 후보에 붙인 것(fold_duplicates)은 이미 빠져 있다.
+    처음(HYO-205, 사용자 2026-11-20)에는 「우리 코드가 안 쓴다」는 이유만 막았다. 그 뒤 같은 입력을 세 번씩 돌리니 보안 소식이 다른 이유로도 실행마다 갈렸다 —
+    W46 transformers 보안 패치를 「어느 manifest에도 없다」(거르기는 루트 manifest만 읽는다 — arena/requirements.txt에 있다)며 세 번 중 한 번,
+    W47 eslint 보안 표시 릴리스를 「일상 릴리스」라며 세 번 중 두 번. 이유의 종류를 가려 막으면 모델이 다른 종류를 고르는 것으로 다시 갈린다.
+    보안 소식은 놓치는 쪽이 비싸다 — 관문이 남겼으면 초안으로 올리고 사람이 기각한다 (기각한 소식은 다시 올라오지 않는다, HYO-142)."""
+    return [e for e in excluded if e.get("url") in sec]
 
 
-def to_rescue(excluded, sec, slotted):
-    """거르기가 버렸지만 버릴 수 없는 소식 → [(버린 줄, 왜 못 버리나)] (HYO-205).
-    slot = 자리 질의가 이미 후보로 고른 것 — 어디에 쓰나를 detect가 다시 판단해 빼면 실행마다 갈린다 · security = 보안 소식을 안 쓴다는 이유로 버린 것."""
+def to_rescue(excluded, sec, slotted, missing=()):
+    """거르기가 버렸지만 버릴 수 없는 소식 · 답을 빠뜨린 소식 → [(줄, 왜 되돌리나)] (HYO-205 · HYO-206).
+    slot = 자리 질의가 이미 후보로 고른 것 — 어디에 쓰나를 detect가 다시 판단해 빼면 실행마다 갈린다 · security = 관문이 security로 남긴 소식(이유와 무관) ·
+    missing = 후보에도 버린 것에도 없는 소식 (다시 묻는다 — 조용히 사라지게 두지 않는다)."""
     unused = {id(e) for e in unused_security(excluded, sec)}
-    return [(e, "slot" if e.get("url") in slotted else "security") for e in excluded if e.get("url") in slotted or id(e) in unused]
+    out = [(e, "slot" if e.get("url") in slotted else "security") for e in excluded if e.get("url") in slotted or id(e) in unused]
+    return out + [({"url": u, "reason": "거르기가 답하지 않았다", "checked": []}, "slot" if u in slotted else "security" if u in sec else "missing")
+                  for u in missing]
+
+
+def unanswered(feed, cands, excluded):
+    """거르기가 후보에도 버린 것에도 적지 않은 소식의 url (HYO-206 — W46 세 번 중 두 번, 경보 그물 소식 하나가 답 없이 사라졌다)."""
+    seen = {u for c in cands for u in c.get("source_urls") or []} | {e.get("url") for e in excluded}
+    return [it["url"] for it in feed if it.get("url") and it["url"] not in seen]
+
+
+def fold_duplicates(cands, excluded):
+    """「후보로 올린 소식과 같은 내용」이라며 버린 소식을 그 후보의 근거(source_urls)에 붙인다 → (남은 excluded, 붙인 목록) (HYO-206).
+    같은 소식 둘을 한 번은 따로 올리고 한 번은 하나만 올리면, 버려진 쪽은 어느 초안에 들어갔는지 남지 않고 다음 주에 다시 올라온다.
+    duplicate_of가 후보의 소식을 가리키지 않으면 그대로 둔다 — 붙일 곳을 코드가 지어내지 않는다. 후보에도 있는 url의 버린 줄은 뺀다(후보가 이긴다)."""
+    by_url = {u: c for c in cands for u in c.get("source_urls") or []}
+    left, folded = [], []
+    for e in excluded:
+        if e.get("url") in by_url:
+            continue
+        target = by_url.get(e.get("duplicate_of") or "") if e.get("why") == "duplicate" else None
+        if target is None:
+            left.append(e)
+            continue
+        target["source_urls"] = list(target["source_urls"]) + [e["url"]]
+        by_url[e["url"]] = target
+        folded.append({"url": e["url"], "into": e["duplicate_of"], "reason": e.get("reason") or ""})
+    return left, folded
+
+
+def gate_tech(c):
+    """앞 단계가 붙인 이름 → {url: 기술 이름}. 이름이 하나로 정해지는 소식만 — 둘 이상이면 어느 이름인지 코드가 고르지 않는다.
+    자리 질의가 대상 repo의 자리 후보로 고른 소식은 그 출시의 모델 이름(slots의 model)이 먼저다 — 후보는 새 모델이지 관문이 걸어 준 우리 기술이 아니다.
+    그 밖은 관문이 남긴 기술(kept_by)."""
+    out = {}
+    for url, v in _why(c).items():
+        models = list(dict.fromkeys(h.get("model") for h in v.get("slots") or [] if h.get("repo") in c.targets and h.get("model")))
+        names = models or list(dict.fromkeys(k.get("technology") for k in v.get("kept_by") or [] if k.get("technology")))
+        if len(names) == 1:
+            out[url] = names[0]
+    return out
+
+
+def fix_names(cands, tech_of):
+    """후보의 technology를 관문이 붙인 기술 이름으로 맞춘다 → 바꾼 목록 [{source_urls, model, gate}] (HYO-206 · HYO-214).
+    같은 소식에 모델이 실행마다 다른 이름을 붙였다 (Node.js 보안 릴리스 → Electron / Node.js · Langfuse / langfuse) — technology는 기존 ADR과 겹침을 보는
+    동일성 키라 이름이 갈리면 겹침 검사와 「거부한 소식 다시 안 올리기」가 빗나간다. 근거 소식이 전부 관문이 남긴 것이고 기술 이름이 하나일 때만 바꾼다
+    (자리 질의 · 관심사로 온 소식은 관문 이름이 없다 — 그대로 둔다)."""
+    changed = []
+    for cand in cands:
+        urls = cand.get("source_urls") or []
+        names = {tech_of.get(u) for u in urls}
+        if not urls or None in names or len(names) != 1:
+            continue
+        gate = names.pop()
+        if cand["technology"] != gate:
+            changed.append({"source_urls": list(urls), "model": cand["technology"], "gate": gate})
+            cand["technology"] = gate
+    return changed
 
 
 def usage_lines(c, patterns):
@@ -201,7 +258,7 @@ def check_unused(c, excluded):
     return out
 
 
-def detect_report(c, now, *, skipped, dropped, excluded, written, failed, security=None):
+def detect_report(c, now, *, skipped, dropped, excluded, written, failed, security=None, notes=None):
     """run_report (references/schema.md). pr.needed는 이번 실행에서 초안을 쓴 것이 1개 이상일 때 (detect).
 
     report의 candidates는 **초안을 쓴 후보**다 — 거른 뒤 남아 초안이 된 것. skipped_existing·dropped·excluded는 따로 둔다.
@@ -226,6 +283,9 @@ def detect_report(c, now, *, skipped, dropped, excluded, written, failed, securi
                    "greps": len(grep_log(c))},
         # 관문이 security로 남긴 소식이 어떻게 됐나 (HYO-205) — rescued: 「안 쓴다」며 버린 것을 코드가 후보로 되돌림 · excluded: 다른 이유로 버림(사람이 본다)
         **({"security": security} if security else {}),
+        # 거르기의 답을 코드가 맞춘 것 (HYO-206) — folded: 같은 내용이라 다른 후보의 근거에 붙인 소식 · missing: 거르기가 답을 빠뜨려 다시 물은 소식 ·
+        # unanswered: 다시 물어도 답이 없던 소식(사람이 본다) · renamed: 관문 이름으로 고친 technology
+        **({"triage": notes} if notes and any(notes.values()) else {}),
     }
 
 

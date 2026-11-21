@@ -346,13 +346,15 @@ def links_note(rows):
 
 
 def slot_hits(slots, item_id):
-    """항목이 든 자리 전부 → [{slot, name, repo, role, fit, reason}] (자리 순). slot_picks는 처음 자리 하나만 남긴다 — detect에는 전부 넘긴다 (HYO-205)."""
+    """항목이 든 자리 전부 → [{slot, name, repo, role, fit, reason, model}] (자리 순). slot_picks는 처음 자리 하나만 남긴다 — detect에는 전부 넘긴다 (HYO-205).
+    model = 자리 질의가 그 출시에 붙인 모델 이름 (HYO-206 — detect가 실행마다 다른 이름을 붙였다: EmbeddingGemma / EmbeddingGemma 2 / embeddinggemma-2.
+    이름은 앞 단계가 한 번 정한 것을 쓴다). 예전 slots.json에는 없다 — None."""
     out = []
     for slot, xs in ((slots or {}).get("per_slot") or {}).items():
         for x in xs:
             if x["id"] == item_id:
                 out.append({"slot": slot, "name": (slots.get("slot_names") or {}).get(slot), "repo": (slots.get("slot_repos") or {}).get(slot),
-                            "role": (slots.get("slot_roles") or {}).get(slot), "fit": x["fit"], "reason": x["reason"]})
+                            "role": (slots.get("slot_roles") or {}).get(slot), "fit": x["fit"], "reason": x["reason"], "model": x.get("model")})
     return out
 
 
