@@ -25,6 +25,7 @@ class Ctx:
     events: list = dataclasses.field(default_factory=list)
     calls: int = 0  # 지금 판정에서 모델이 부른 도구 수 — P3 「도구 호출 누락」
     now: str = ""  # capture 초안의 date
+    excludes: dict = dataclasses.field(default_factory=dict)  # repo 이름 → radar-targets.json의 exclude (내 스택이 아닌 폴더 — repo_grep이 건너뛴다, HYO-205)
 
     def record(self, name, inp):
         self.events.append({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}})
@@ -37,10 +38,11 @@ class Ctx:
         adr_dir = env.get("RADAR_ADR_DIR") or os.path.join(".", "docs", "adr")
         tpath = env.get("RADAR_TARGETS") or os.path.join(adr_dir, "..", "..", "radar-targets.json")
         base = os.path.dirname(os.path.abspath(tpath))
-        targets = {t["repo"]: os.path.abspath(os.path.join(base, t["path"]))
-                   for t in json.load(open(tpath, encoding="utf-8"))} if os.path.exists(tpath) else {}
+        rows = json.load(open(tpath, encoding="utf-8")) if os.path.exists(tpath) else []
+        targets = {t["repo"]: os.path.abspath(os.path.join(base, t["path"])) for t in rows}
         return cls(radar_py=radar_py, env=dict(env, PYTHONIOENCODING="utf-8"), adr_dir=adr_dir,
-                   targets=targets, dry_run=env.get("RADAR_DRY_RUN") == "1")
+                   targets=targets, dry_run=env.get("RADAR_DRY_RUN") == "1",
+                   excludes={t["repo"]: list(t.get("exclude") or []) for t in rows})
 
 
 def radar(ctx, *args, stdin=None, ok_codes=(0,)):

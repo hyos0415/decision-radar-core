@@ -53,7 +53,7 @@ print("2. detect 그래프")
 src = open(os.path.join(HERE, "detect.py"), encoding="utf-8").read()
 added = set(re.findall(r'g\.add_node\("(\w+)"', src))
 check("노드 = {load, triage, draft, write, repair, report}", added == {"load", "triage", "draft", "write", "repair", "report"}, sorted(added))
-check("모델에게 주는 도구는 읽기뿐 (snapshot_*)", [t.name for t in DETECT_TOOLS] == ["snapshot_fetch", "snapshot_search"])
+check("모델에게 주는 도구는 읽기뿐 (snapshot_* · repo_grep)", [t.name for t in DETECT_TOOLS] == ["snapshot_fetch", "snapshot_search", "repo_grep"])
 
 # 제품 eval이 엔진을 고를 수 있다 (HYO-99) — run_eval.py가 --engine을 안 받아 CLI 스모크가 늘 API로 돌던 틈
 from radar.evalkit import build_parser  # noqa: E402

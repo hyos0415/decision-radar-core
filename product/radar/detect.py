@@ -26,12 +26,14 @@ from common.core import check_scope
 from common.schemas import AdrDraft
 
 from . import detect_ops, hitl
-from .detect_prompts import DRAFT_INSTRUCTIONS, REPAIR_INSTRUCTIONS, TRIAGE_INSTRUCTIONS, draft_prompt, repair_prompt, triage_prompt
-from .detect_schemas import DraftBody, Triage
+from .detect_prompts import (DRAFT_INSTRUCTIONS, REPAIR_INSTRUCTIONS, RESCUE_INSTRUCTIONS, TRIAGE_INSTRUCTIONS, draft_prompt, repair_prompt,
+                             rescue_prompt, triage_prompt)
+from .detect_schemas import DraftBody, Rescued, Triage
 from .engines import as_runner
 from .tools import detect_tools
 
-DETECT_MAX_TURNS = 8  # 소식 몇 건을 열어 보고 답 한 번이면 끝난다. 넘으면 루프로 보고 오류로 센다 (P3)
+DETECT_MAX_TURNS = 8  # draft · repair — 소식 몇 건을 열어 보고 답 한 번이면 끝난다. 넘으면 루프로 보고 오류로 센다 (P3)
+TRIAGE_MAX_TURNS = 24  # triage는 소식 전체(주 20~40건)를 본다 — 8이면 열기·코드 찾기를 합쳐 8번뿐이라 찾아볼 여유가 없었다 (HYO-205, W47 세 번 모두 검색 0회)
 
 
 class DetectState(TypedDict, total=False):
@@ -40,6 +42,7 @@ class DetectState(TypedDict, total=False):
     feed: list
     rejected: list  # 모델에 넘기지 않고 excluded 앞에 붙이는 소식 — 사람이 전에 거부한 것(HYO-142) · 관문 판정 뒤 이미 반영된 것(HYO-162)
     excluded: list
+    security: dict  # 관문이 security로 남긴 소식의 결과 (HYO-205)
     kept: list
     skipped: list
     dropped: list
@@ -57,7 +60,9 @@ def detect_graph(ctx, model):
     runner = as_runner(model)  # 에이전트 셋(triage·draft·repair)을 돌리는 실행 엔진 (engines.py, HYO-99)
 
     def agent(name, system, schema, user):
-        return runner.run(name=name, system=system, user=user, schema=schema, tools=detect_tools(ctx), ctx=ctx, max_turns=DETECT_MAX_TURNS)
+        first = name in ("detect-triage", "detect-rescue")  # 우리 코드를 찾아보는 것은 거르기 쪽만 — 초안 쪽은 그 결과를 받는다
+        return runner.run(name=name, system=system, user=user, schema=schema, tools=detect_tools(ctx, "triage" if first else "draft"), ctx=ctx,
+                          max_turns=TRIAGE_MAX_TURNS if name == "detect-triage" else DETECT_MAX_TURNS)
 
     run = {"id": None}
 
@@ -66,6 +71,10 @@ def detect_graph(ctx, model):
         run["id"] = f"detect-{state['now']}-{uuid.uuid4().hex[:8]}"  # 이 실행의 초안들이 같이 갖는 기록 — 같은 실행의 내보내기를 지문에서 넘기는 근거 (hitl._own_exports)
         feed, rejected = detect_ops.drop_rejected(ctx, detect_ops.snapshot_feed(ctx))
         feed, applied = detect_ops.drop_applied(ctx, feed)
+        sec = detect_ops.security_urls(ctx)  # 관문이 security로 남긴 소식 — 모델에게 표시해 주고, 「안 쓴다」며 버리면 코드가 되돌린다 (HYO-205)
+        feed = [{**it, "security": True} if it.get("url") in sec else it for it in feed]
+        slotted = detect_ops.slot_reasons(ctx)  # 자리 질의가 이미 후보로 고른 것 — 어느 repo의 어느 역할인지 넘기고, 거르기가 다시 빼지 못하게 한다 (HYO-205)
+        feed = [{**it, "candidate_for": slotted[it["url"]]} if it.get("url") in slotted else it for it in feed]
         return {"stack": detect_ops.read_stack(ctx), "feed": feed, "rejected": rejected + applied}
 
     async def triage_node(state):
@@ -79,8 +88,36 @@ def detect_graph(ctx, model):
                     "p3": [{"kind": "model_error", "stage": "triage", "type": type(e).__name__, "message": str(e)[:300]}]}
         t = r.structured
         cands = [c.model_dump() for c in t.candidates]
+        excluded, p3 = [e.model_dump() for e in t.excluded], []
+        # 못 버리는 소식 (HYO-205, 사용자 2026-11-20) — 보안 소식은 「우리 코드에 없다」는 이유로 빼지 않는다(찾아본 결과를 적어 올린다) ·
+        # 자리 질의가 고른 후보는 어디에 쓰나를 다시 판단해 빼지 않는다(실행마다 갈렸다). 버렸으면 코드가 되돌려 후보로 다시 쓰게 한다
+        sec = {it["url"] for it in feed if it.get("security")}
+        slotted = {it["url"] for it in feed if it.get("candidate_for")}
+        pairs = detect_ops.to_rescue(excluded, sec, slotted)
+        back, rescued = [e for e, _ in pairs], []
+        if back:
+            urls = [e["url"] for e in back]
+            try:
+                rr = await agent("detect-rescue", RESCUE_INSTRUCTIONS, Rescued,
+                                 rescue_prompt(state["now"], state["stack"], [it for it in feed if it.get("url") in urls],
+                                               [{**e, "kept_because": why} for e, why in pairs]))
+                got = [c.model_dump() for c in rr.structured.candidates]
+                for c in got:  # 버릴 때 적은 패턴을 후보로 옮긴다 — 초안에 찾아본 결과가 남는다
+                    mine = [p for e in back if e["url"] in c["source_urls"] for p in e.get("checked") or []]
+                    c["checked"] = list(dict.fromkeys(list(c.get("checked") or []) + mine))
+                rescued = sorted({u for c in got for u in c["source_urls"] if u in urls})
+                cands += got
+                excluded = [e for e in excluded if e["url"] not in rescued]
+            except Exception as e:  # 되돌리기에 실패하면 버린 채로 두되 오류로 센다 — 보고서의 security.excluded에 남는다
+                p3.append({"kind": "model_error", "stage": "rescue", "type": type(e).__name__, "message": str(e)[:300]})
         kept, skipped, dropped = detect_ops.screen(ctx, cands, state["feed"])
-        return {"kept": kept, "skipped": skipped, "dropped": dropped, "excluded": rejected + [e.model_dump() for e in t.excluded]}
+        excluded = detect_ops.check_unused(ctx, excluded)  # 「안 쓴다」는 말을 repo_grep 기록과 대조 (HYO-205)
+        security = {"total": len(sec), "rescued": [u for u in rescued if u in sec],
+                    "excluded": [{"url": e["url"], "reason": e["reason"]} for e in excluded if e["url"] in sec]} if sec else None
+        if slotted:  # 자리 질의 후보의 결과 — 남은 excluded는 되돌리기에 실패한 것뿐이다
+            security = {**(security or {}), "slot_candidates": {"total": len(slotted), "rescued": [u for u in rescued if u in slotted],
+                                                              "excluded": [e["url"] for e in excluded if e["url"] in slotted]}}
+        return {"kept": kept, "skipped": skipped, "dropped": dropped, "excluded": rejected + excluded, "security": security, "p3": p3}
 
     def fan_out(state):
         sends = [Send("draft", {"now": state["now"], "w": w, "item": _item_for(state["feed"], w["candidate"]["source_urls"])})
@@ -92,7 +129,8 @@ def detect_graph(ctx, model):
         cand = w["candidate"]
         related = [{k: r[k] for k in ("id", "status", "technology", "use")} for r in w["related"]]
         try:
-            r = await agent("detect-draft", DRAFT_INSTRUCTIONS, DraftBody, draft_prompt(inp["now"], cand, inp["item"], related))
+            r = await agent("detect-draft", DRAFT_INSTRUCTIONS, DraftBody,
+                            draft_prompt(inp["now"], cand, inp["item"], related, detect_ops.usage_lines(ctx, cand.get("checked"))))
         except Exception as e:
             return {"p3": [{"kind": "model_error", "stage": "draft", "technology": cand["technology"], "source_urls": cand.get("source_urls") or [],
                             "type": type(e).__name__, "message": str(e)[:300]}]}
@@ -102,7 +140,7 @@ def detect_graph(ctx, model):
         written = []
         for d in sorted(state.get("drafts") or [], key=lambda x: x["w"]["idx"]):  # 병렬 가지의 도착 순서와 무관하게 소식 순서대로 번호를 받는다
             w, cand = d["w"], d["w"]["candidate"]
-            body = detect_ops.compose(d["draft"], w)  # 후보의 정체·related는 코드가 덮어쓴다 — draft는 서술만 한다
+            body = detect_ops.compose(detect_ops.with_usage(ctx, d["draft"], cand), w)  # 후보의 정체·related · 코드 찾기 결과는 코드가 적는다 — draft는 서술만 한다
             ctx.calls += 1
             item_id = hitl.new_item_id(ctx, "detect", cand["technology"])  # 별도 파일은 초안 파일을 쓰는 순간에 생긴다 (설계 §3-1)
             sources = [it["id"] for it in state["feed"] if it.get("id") and it.get("url") in cand["source_urls"]]
@@ -132,14 +170,16 @@ def detect_graph(ctx, model):
                 p3.append({"kind": "model_error", "stage": "repair", "adr": x["id"], "type": type(e).__name__, "message": str(e)[:300]})
                 out.append(x)
                 continue
-            errs = detect_ops.rewrite(ctx, x["path"], x["id"], AdrDraft.model_validate(detect_ops.compose(body, x["w"])), item_id=x.get("item"))
+            fixed = detect_ops.compose(detect_ops.with_usage(ctx, body, x["candidate"]), x["w"])
+            errs = detect_ops.rewrite(ctx, x["path"], x["id"], AdrDraft.model_validate(fixed), item_id=x.get("item"))
             out.append({**x, "body": body, "validate_errors": errs, "repaired": True})
         return {"written": out, "p3": p3}
 
     def report_node(state):
         failed = [p for p in state.get("p3") or [] if p.get("stage") == "draft"]
         rep = detect_ops.detect_report(ctx, state["now"], skipped=state.get("skipped") or [], dropped=state.get("dropped") or [],
-                                       excluded=state.get("excluded") or [], written=state.get("written") or [], failed=failed)
+                                       excluded=state.get("excluded") or [], written=state.get("written") or [], failed=failed,
+                                       security=state.get("security"))
         return {"report": rep}
 
     g = StateGraph(DetectState)

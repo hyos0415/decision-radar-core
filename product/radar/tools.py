@@ -37,7 +37,12 @@ def corpus_grep(pattern: str, runtime: ToolRuntime[Ctx]) -> str:
     return ops.corpus_grep(runtime.context, pattern)
 
 
-LOOKUP_BUDGET = 4  # source_hint 열기 1 + 검색 1 + 검색 결과 열기 2. 스킬은 403 케이스 실행 전체가 도구 6~7회다
+@tool("repo_grep", description=ops.DOCS["repo_grep"])
+def repo_grep(pattern: str, runtime: ToolRuntime[Ctx]) -> str:
+    return ops.repo_grep(runtime.context, pattern)
+
+
+LOOKUP_BUDGET = 4 # source_hint 열기 1 + 검색 1 + 검색 결과 열기 2. 스킬은 403 케이스 실행 전체가 도구 6~7회다
 LOOKUPS = ("snapshot_fetch", "snapshot_search")
 _SCHEME = re.compile(r"https?://")
 
@@ -121,9 +126,12 @@ def propose_adr(draft: AdrDraft, runtime: ToolRuntime[Ctx]) -> str:
 
 REVISIT_TOOLS = [guarded_fetch, guarded_search, read_repo_file]
 CAPTURE_TOOLS = [guarded_fetch, match_adr, propose_adr]  # 대화에 인용된 1차 출처를 열어 R17 basis를 확인한다 — 스킬과 같은 조건 (HYO-137, JHS-033)
-DETECT_TOOLS = [snapshot_fetch, snapshot_search]  # 읽기만
+DETECT_TOOLS = [snapshot_fetch, snapshot_search, repo_grep]  # 읽기만. repo_grep = 우리 코드가 그것을 쓰는지 (HYO-205)
 
 
-def detect_tools(ctx):
-    """코퍼스(RADAR_CORPUS)가 켜져 있으면 grep을 더 준다 (DCI, HYO-201) — 꺼져 있으면 예전 그대로."""
-    return DETECT_TOOLS + [corpus_grep] if ctx.env.get("RADAR_CORPUS") else DETECT_TOOLS
+def detect_tools(ctx, stage="triage"):
+    """코퍼스(RADAR_CORPUS)가 켜져 있으면 grep을 더 준다 (DCI, HYO-201) — 꺼져 있으면 예전 그대로.
+    repo_grep은 거르기(triage · rescue)에만 준다 — 초안 단계(draft · repair)는 거르기가 찾아본 결과(code_search)를 받는다.
+    W47에서 초안 에이전트가 초안마다 같은 것을 다시 찾아 초안 단계 도구가 9~10회 → 22~36회였다 (HYO-205)."""
+    base = DETECT_TOOLS if stage == "triage" else [t for t in DETECT_TOOLS if t is not repo_grep]
+    return base + [corpus_grep] if ctx.env.get("RADAR_CORPUS") else base

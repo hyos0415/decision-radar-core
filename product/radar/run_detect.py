@@ -51,6 +51,15 @@ def summarize(rep, funnel, adr_dir):
     lines = [funnel_line(funnel)] if funnel else []
     lines.append(f"후보 {len(cands)}건 · 이미 있는 결정이라 건너뜀 {len(rep.get('skipped_existing') or [])}건 · "
                  f"제외 {len(rep.get('excluded') or [])}건 · R10 버림 {len(rep.get('dropped') or [])}건")
+    un = rep.get("unused") or {}
+    if un.get("verified") or un.get("unverified"):  # 「안 쓴다」며 버린 소식 — 찾아보니 0곳 / 찾아본 기록과 안 맞음 (HYO-205)
+        lines.append(f"코드에 없어 뺀 소식 {len(un.get('verified') or [])}건 (찾아봄) · 확인 안 된 「미사용」 {len(un.get('unverified') or [])}건 — 사람이 본다")
+    sec = rep.get("security") or {}
+    sc = sec.get("slot_candidates") or {}
+    if sc:  # 자리 질의가 고른 후보 — 거르기가 다시 빼지 못한다 (HYO-205)
+        lines.append(f"자리 질의 후보 {sc.get('total', 0)}건 · 거르기가 버려 되돌림 {len(sc.get('rescued') or [])}건 · 되돌리지 못함 {len(sc.get('excluded') or [])}건")
+    if "total" in sec:  # 관문이 security로 남긴 소식 — 「안 쓴다」로는 못 뺀다 (HYO-205)
+        lines.append(f"보안 소식 {sec.get('total', 0)}건 · 「안 쓴다」며 버린 것을 되돌림 {len(sec.get('rescued') or [])}건 · 다른 이유로 뺌 {len(sec.get('excluded') or [])}건")
     drafts = []
     for c in cands:
         f = next(iter(sorted(p for p in os.listdir(adr_dir) if p.startswith(f"{c['adr']}-"))), None) if c.get("adr") else None
