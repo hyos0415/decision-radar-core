@@ -11,7 +11,11 @@ GPT-6.1 Terra(관문 분류 자리) · Claude Haiku 5.5(조건 추출 자리)가
    스크립트가 id · 자리 이름 · 점수를 검사한다. 원본 응답은 `slots-raw.json`
 3. 순위: 자리마다 적합도 → 공식 출처 먼저 → 출처 안 인기 → id. 문턱(FIT_MIN) 이상 top-k. 없으면 「없음」
 
-출력 `<out>/slots.json`: {slots_version, candidates, judged, per_slot: {자리: [후보…]}, to_detect: [자리마다 top-k id], unjudged}
+4. 언어 확인 (스크립트, HYO-244): 자리가 `lang: ko`를 적었으면, 판정이 「언어 정보가 모자라 1점」(`missing == ["language"]`)으로 낮춘 것을 HF 태그로 코드가 다시 본다 —
+   한국어 · 다국어(≥3개 언어) 태그가 있으면 2점으로 올리고, 영어 태그만 있으면 0점으로 내린다. 태그가 없으면 그대로. 고친 것은 `lang_adjusted`에 남긴다.
+   판정 입력에는 후보마다 태그에서 뽑은 `langs` · `base_model` · `size`가 붙는다 (HF 소식은 text가 비어 모델이 태그를 못 봤다 — W47 LFM3-1.7B)
+
+출력 `<out>/slots.json`: {slots_version, candidates, judged, per_slot: {자리: [후보…]}, to_detect: [자리마다 top-k id], unjudged, lang_adjusted}
 """
 import argparse
 import json
@@ -75,9 +79,13 @@ SYSTEM_V2 = """너는 기술 스택 관리자의 조수다. 이번 주 수집한
   1 = 관련은 있으나 must 일부를 못 지키거나 불확실하다
   0이면 넣지 않는다
 - reason: 한국어 한 문장 — 왜 그 역할인지, 지금 것과 무엇을 비교할지
+- missing: 모르거나 불분명한 정보 때문에 fit을 낮췄으면 그 정보 종류를 language · size · runtime · license · other 중에서 담는다. 정보가 충분해 낮추지 않았으면 빈 배열
+후보의 langs(HF 태그에서 뽑은 언어 코드) · base_model · size는 코드가 뽑아 준 확인된 값이다. 있으면 그것을 근거로 쓰고, 없을 때만 「모른다」로 본다
 모든 후보 id에 대해 한 줄씩 답한다. 주어진 글만 근거로 한다 — 모르는 건 지어내지 않고 fit을 낮춘다."""
 SLOT_FIELDS = {1: ("id", "name", "repo", "role", "current", "constraints", "prefer"),
                2: ("id", "name", "repo", "role", "current", "must", "now_via", "prefer", "kinds")}
+
+MISSING_KINDS = ("language", "size", "runtime", "license", "other")
 
 SCHEMA = {
     "type": "object",
@@ -86,7 +94,8 @@ SCHEMA = {
         "properties": {"id": {"type": "string"}, "release": {"type": "boolean"}, "model": {"type": "string"},   # model은 v2만 (같은 모델 묶기)
                        "matches": {"type": "array", "items": {"type": "object", "properties": {
                            "slot": {"type": "string"}, "fit": {"type": "integer", "minimum": 0, "maximum": 3}, "reason": {"type": "string"},
-                           "switch": {"type": "string"}},     # v2만 쓴다 (바꾸려면 필요한 것) — 필수가 아니라 v1 답도 그대로 통과
+                           "switch": {"type": "string"},      # v2만 쓴다 (바꾸려면 필요한 것) — 필수가 아니라 v1 답도 그대로 통과
+                           "missing": {"type": "array", "items": {"type": "string", "enum": list(MISSING_KINDS)}}},   # 낮춘 까닭이 정보 부족일 때 (HYO-244)
                            "required": ["slot", "fit", "reason"]}}},
         "required": ["id", "release", "matches"]}}},
     "required": ["judgments"],
@@ -103,6 +112,9 @@ def load_slots(path):
     ids = [s.get("id") for s in slots]
     if not slots or any(not i for i in ids) or len(set(ids)) != len(ids):
         raise SlotError(f"{path}: 자리 id가 비었거나 겹친다")
+    for sl in slots:
+        if "lang" in sl and not (isinstance(sl["lang"], str) and re.fullmatch(r"[a-z]{2}", sl["lang"])):
+            raise SlotError(f"{path}: 자리 {sl.get('id')}의 lang은 소문자 두 글자 언어 코드여야 한다 ({sl['lang']!r})")
     return {"version": d.get("version"), "slots": slots}
 
 
@@ -168,6 +180,25 @@ def popularity(it):
     return 999
 
 
+ISO639_1 = frozenset(
+    "aa ab ae af ak am an ar as av ay az ba be bg bh bi bm bn bo br bs ca ce ch co cr cs cu cv cy da de dv dz ee el en eo es et eu fa ff fi fj fo fr fy "
+    "ga gd gl gn gu gv ha he hi ho hr ht hu hy hz ia id ie ig ii ik io is it iu ja jv ka kg ki kj kk kl km kn ko kr ks ku kv kw ky la lb lg li ln lo lt "
+    "lu lv mg mh mi mk ml mn mr ms mt my na nb nd ne ng nl nn no nr nv ny oc oj om or os pa pi pl ps pt qu rm rn ro ru rw sa sc sd se sg si sk sl sm sn "
+    "so sq sr ss st su sv sw ta te tg th ti tk tl tn to tr ts tt tw ty ug uk ur uz ve vi vo wa wo xh yi yo za zh zu".split())
+SIZE = re.compile(r"(?<![A-Za-z0-9.])(E?\d+(?:\.\d+)?[BM])(?![A-Za-z0-9])")    # 1.7B · 0.6B · E2B · 27B · 135M (30B-A3B의 A3B는 앞이 글자라 빠진다)
+
+
+def derive_fields(it):
+    """소식의 meta.tags · 제목에서 결정론으로 뽑은 확인된 값 → {langs: [코드…, multilingual?], base_model, size} (HYO-244). 없으면 빈 값."""
+    tags = [t for t in ((it.get("meta") or {}).get("tags") or []) if isinstance(t, str)]
+    langs = sorted({t for t in tags if t in ISO639_1})
+    if "multilingual" in tags:
+        langs.append("multilingual")
+    base = next((t.split(":", 1)[1] for t in tags if t.startswith("base_model:") and t.count(":") == 1), "")   # base_model:finetune:X 같은 한정 꼴은 건너뛴다
+    m = SIZE.search(f"{it.get('title') or ''} {str(it.get('id') or '').split(':', 1)[-1]}")
+    return {"langs": langs, "base_model": base, "size": m.group(1) if m else ""}
+
+
 def collect(items):
     """후보 목록 (같은 url은 하나만 — 공식 출처 먼저)."""
     out, seen = [], set()
@@ -180,7 +211,7 @@ def collect(items):
             continue
         seen.add(key)
         out.append({"id": it["id"], "source": it.get("source"), "why": why, "title": it.get("title") or "", "url": it.get("url") or "",
-                    "text": (it.get("text") or "")[:TEXT_CHARS], "popularity": popularity(it)})
+                    "text": (it.get("text") or "")[:TEXT_CHARS], "popularity": popularity(it), **derive_fields(it)})
     return sorted(out, key=lambda c: str(c["id"]))
 
 
@@ -195,7 +226,8 @@ def system_for(slots):
 def prompt(cands, slots):
     fields = SLOT_FIELDS[2 if is_v2(slots) else 1]
     sl = [{k: s.get(k) for k in fields if s.get(k) is not None} for s in slots["slots"]]
-    lines = [json.dumps({k: c[k] for k in ("id", "source", "title", "url", "text")}, ensure_ascii=False) for c in cands]
+    lines = [json.dumps({**{k: c[k] for k in ("id", "source", "title", "url", "text")},
+                         **{k: c[k] for k in ("langs", "base_model", "size") if c.get(k)}}, ensure_ascii=False) for c in cands]   # 태그에서 뽑은 값 — 있는 것만
     return ("## 자리\n" + yaml.safe_dump(sl, allow_unicode=True, sort_keys=False) +
             f"\n## 후보 ({len(cands)}건, 한 줄에 하나)\n" + "\n".join(lines) + "\n")
 
@@ -247,10 +279,44 @@ def validate(so, cands, slots):
             elif not isinstance(m.get("fit"), int) or not 0 <= m["fit"] <= 3:
                 dropped["bad_fit"] += 1
             else:
-                ms.append({"slot": m["slot"], "fit": m["fit"], "reason": str(m.get("reason") or ""), "switch": str(m.get("switch") or "")})
+                ms.append({"slot": m["slot"], "fit": m["fit"], "reason": str(m.get("reason") or ""), "switch": str(m.get("switch") or ""),
+                           "missing": [x for x in (m.get("missing") or []) if x in MISSING_KINDS] if isinstance(m.get("missing"), list) else []})
         got[j["id"]] = {"release": bool(j.get("release")), "matches": ms if j.get("release") else [],
                         "model": str(j.get("model") or "").strip()}
     return got, dropped
+
+
+def lang_status(c):
+    """후보의 언어 상태 (HF 태그만 근거) → (pass | english_only | unknown, 보일 코드 문자열)."""
+    langs = set(c.get("langs") or [])
+    codes = langs - {"multilingual"}
+    if "ko" in langs or "multilingual" in langs or len(codes) >= 3:
+        return "pass", "ko" if "ko" in langs else ("multilingual" if "multilingual" in langs else ",".join(sorted(codes)))
+    if codes == {"en"}:
+        return "english_only", "en"
+    return "unknown", ""
+
+
+def apply_lang(cands, judged, slots):
+    """`lang`을 적은 자리의 1점 중 「언어만 모자라」 낮춘 것을 HF 태그로 다시 본다 (HYO-244, 규율 1). judged를 고치고 기록 목록을 돌려준다."""
+    by_id = {c["id"]: c for c in cands}
+    need = {s["id"]: s["lang"] for s in slots["slots"] if s.get("lang")}
+    adj = []
+    for cid, j in judged.items():
+        for m in j["matches"]:
+            if m["slot"] not in need or m["fit"] != 1 or m.get("missing") != ["language"]:
+                continue
+            status, codes = lang_status(by_id[cid])
+            if status == "pass":
+                to, why, note = 2, f"HF 태그로 확인({codes})", f" · 언어: HF 태그로 확인({codes}) — 코드가 2로 올림"
+            elif status == "english_only":
+                to, why, note = 0, "영어 전용 태그", " · 언어: 영어 전용 태그 — 코드가 0으로 내림"
+            else:
+                continue
+            adj.append({"id": cid, "slot": m["slot"], "from": m["fit"], "to": to, "why": why})
+            m["fit"], m["reason"] = to, m["reason"] + note
+        j["matches"] = [m for m in j["matches"] if m["fit"] > 0]      # 0점은 「넣지 않는다」와 같다
+    return adj
 
 
 def fold_same_model(xs):
@@ -340,13 +406,14 @@ def run(items, slots, engine="claude", out=None, reuse=False, model=None):
     else:
         raise SlotError(f"모르는 엔진 {engine!r} (claude · stub — codex는 HYO-169)")
     judged, dropped = validate(so, cands, slots)
+    lang_adjusted = apply_lang(cands, judged, slots)
     per = rank(cands, judged, slots)
     to_detect = []      # 자리마다 top-k 전부 (detect_feed.slot_picks와 같은 규칙 — query-topk.md §2 변경 2026-11-04)
     for s in slots["slots"]:
         to_detect += [x["id"] for x in per[s["id"]] if x["id"] not in to_detect]
     return {"slots_version": slots.get("version"), "engine": engine, "k": None if is_v2(slots) else TOPK, "fit_min": FIT_MIN,
             "candidates": len(cands), "judged": len(judged), "releases": sum(1 for j in judged.values() if j["release"]),
-            "unjudged": sorted({c["id"] for c in cands} - set(judged)), "dropped": dropped,
+            "unjudged": sorted({c["id"] for c in cands} - set(judged)), "dropped": dropped, "lang_adjusted": lang_adjusted,
             "slot_names": {s["id"]: s.get("name") for s in slots["slots"]},
             "slot_current": {s["id"]: s.get("current") or [] for s in slots["slots"]},
             "slot_repos": {s["id"]: s.get("repo") for s in slots["slots"]},       # detect가 「어느 repo의 어느 역할 후보인가」를 받게 (HYO-205)
