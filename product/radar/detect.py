@@ -8,7 +8,8 @@
 
   load    대상 repo의 CLAUDE.md·manifest 읽기 + 소식 수집(radar.py snapshot feed). 거부한 소식(HYO-142)·이미 반영된 릴리스(HYO-162)는 코드가 뺀다
   triage  모델이 소식을 거른다 — 후보(technology·affected·dependency)와 버린 것(이유). 의존성 릴리스는 breaking·security·major만 (A5b)
-  screen  R10(affected 하나 이상·실재 repo)과 R14(기존 ADR과 겹침 → skipped_existing)를 **코드가** 집행한다. 겹침 판정은 radar.py match
+  screen  R16(매핑에 있는 기술은 affected = CLAUDE.md 「의존성 → component」 매핑 그대로, HYO-246) · R10(affected 하나 이상·실재 repo ·
+          폴더가 있는 repo) · R14(기존 ADR과 겹침 → skipped_existing)를 **코드가** 집행한다. 겹침 판정은 radar.py match
   draft   모델이 후보마다 초안 서술(title·use·context·decision·evidence·revisit_when)을 쓴다. 병렬
   write   초안 파일은 코드가 쓴다 — ops.propose_adr: next-id → proposed로 렌더 → radar.py validate
   repair  validate가 거부한 초안을 모델이 오류와 함께 **한 번** 고쳐 쓴다(서술만). 파일은 코드가 같은 번호로 다시 쓰고 validate를 다시 돈다
@@ -43,6 +44,7 @@ class DetectState(TypedDict, total=False):  # 흐름이 단계 사이에 넘기�
     stack: str
     feed: list
     rejected: list  # 모델에 넘기지 않고 excluded 앞에 붙이는 소식 — 사람이 전에 거부한 것(HYO-142) · 관문 판정 뒤 이미 반영된 것(HYO-162)
+    missing: list  # 폴더가 없는 대상 repo (HYO-246) — 그 repo를 가리키는 후보는 screen이 R10으로 뺀다
     excluded: list
     security: dict  # 관문이 security로 남긴 소식의 결과 (HYO-205)
     triage_notes: dict  # 거르기의 답을 코드가 맞춘 기록 — 붙인 소식 · 답 없던 소식 · 고친 이름 (HYO-206)
@@ -89,7 +91,9 @@ def detect_flow(ctx, model):
         feed = [{**it, "security": True} if it.get("url") in sec else it for it in feed]
         slotted = detect_ops.slot_reasons(ctx)  # 자리 질의가 이미 후보로 고른 것 — 어느 repo의 어느 역할인지 넘기고, 거르기가 다시 빼지 못하게 한다 (HYO-205)
         feed = [{**it, "candidate_for": slotted[it["url"]]} if it.get("url") in slotted else it for it in feed]
-        return {"stack": detect_ops.read_stack(ctx), "feed": feed, "rejected": rejected + applied}
+        missing = detect_ops.missing_targets(ctx)  # 폴더가 없는 대상 repo — 오류로 세고(조용히 추측하지 않게) 그 repo 후보는 screen이 뺀다 (HYO-246)
+        return {"stack": detect_ops.read_stack(ctx), "feed": feed, "rejected": rejected + applied, "missing": [m["repo"] for m in missing],
+                "p3": [{"kind": "target_missing", "repo": m["repo"], "path": m["path"]} for m in missing]}
 
     async def triage_node(state):
         feed, rejected = state["feed"], state.get("rejected") or []
@@ -135,8 +139,9 @@ def detect_flow(ctx, model):
         silent = detect_ops.unanswered(feed, cands, excluded)  # 다시 물어도 답이 없는 소식 — 버린 것으로 적되 사람이 보게 따로 센다
         excluded += [{"url": u, "reason": "거르기도 되돌리기도 답하지 않았다 — 판정 없음", "why": "other", "unanswered": True} for u in silent]
         renamed = detect_ops.fix_names(cands, detect_ops.gate_tech(ctx))  # technology는 관문이 붙인 이름으로 (실행마다 Electron / Node.js로 갈렸다)
-        notes = {"folded": folded, "missing": missing, "unanswered": silent, "renamed": renamed}
-        kept, skipped, dropped = detect_ops.screen(ctx, cands, state["feed"])
+        r16 = detect_ops.fix_affected(cands, detect_ops.dependency_map(ctx))  # 이름을 맞춘 뒤 — 매핑에 있는 기술은 affected를 매핑 그대로 (R16, HYO-246)
+        notes = {"folded": folded, "missing": missing, "unanswered": silent, "renamed": renamed, "r16": r16, "missing_targets": state.get("missing") or []}
+        kept, skipped, dropped = detect_ops.screen(ctx, cands, state["feed"], missing=state.get("missing") or ())
         excluded = detect_ops.check_unused(ctx, excluded)  # 「안 쓴다」는 말을 repo_grep 기록과 대조 (HYO-205)
         security = {"total": len(sec), "rescued": [u for u in rescued if u in sec],
                     "excluded": [{"url": e["url"], "reason": e["reason"]} for e in excluded if e["url"] in sec]} if sec else None

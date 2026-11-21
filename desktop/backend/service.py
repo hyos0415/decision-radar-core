@@ -52,7 +52,7 @@ sys.path.insert(1, REPO)  # pipeline.detect_feed — 실행 요약의 건수 한
 
 import devprofiles  # noqa: E402
 import engine_status  # noqa: E402
-from radar import hitl  # noqa: E402  — radar/__init__이 spike/common을 경로에 올린다
+from radar import detect_ops, hitl  # noqa: E402  — radar/__init__이 spike/common을 경로에 올린다
 from radar.adr_copy import copy_adr  # noqa: E402
 from radar.export import ExportRefused, GhPr  # noqa: E402
 from radar import script as stub_scripts  # noqa: E402
@@ -1845,6 +1845,7 @@ class RadarService:
         head = f"소식 {n_feed}건 → " if n_feed is not None else ""
         summary = [x for x in [self._funnel_line()] if x]  # 수집 스냅숏에서 만든 입력이면(pipeline.detect_feed) 깔때기 건수 한 줄 (HYO-84)
         summary += [f"{head}후보 {len(cands)}건 · 이미 있는 결정이라 건너뜀 {len(skipped)}건 · 제외 {len(excluded)}건"]
+        summary += detect_ops.r16_lines(rep.get("triage"))  # 코드가 매핑대로 고친 affected · 폴더가 없는 대상 repo (HYO-246) — 숨기지 않는다
         if drafts:
             bad = sum(1 for d in drafts if d["validate_errors"])
             summary.append(f"초안 {len(drafts)}건 작성 (proposed)" + (f" — validate 실패 {bad}건" if bad else ""))
