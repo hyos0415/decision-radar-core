@@ -7,7 +7,8 @@
 작업 하나: id · kind · state(queued → running → done | error) · created/started/finished · message(한 줄) · result(동기 엔드포인트와 같은 모양) · item.
 끝나면 화면이 Inbox를 다시 읽고 OS 알림을 띄운다 (알림은 화면 몫). 실제 모델 실행은 분 단위라 창에서 기다리지 않게 하는 것이 목적이다.
 
-일꾼 스레드는 하나 — 작업은 접수 순서대로 하나씩 돈다 (쓰기는 어차피 RadarService.lock으로 줄 선다).
+일꾼은 두 줄 — 실험(experiment)은 따로 돈다. 사본 · 설치 · 검사로 분 단위라 그 뒤에 capture가 줄 서지 않게 (HYO-248, 11/21 실험 약 2분).
+나머지(capture · detect · revisit)는 한 줄에서 접수 순서대로 하나씩 (쓰기는 어차피 RadarService.lock으로 줄 선다). 실험 둘은 서로 줄 선다.
 입력 검사(빈 대화 · 모르는 흐름 · 데모에서 revisit)는 접수할 때 한다 — 잘못된 요청은 작업이 되지 않고 4xx로 돌아온다.
 기록은 `<data>/jobs.json`. 백엔드가 다시 뜨면 끝나지 않은 작업은 error(「백엔드가 다시 시작됐다」)로 닫는다 — 다시 돌리지 않는다(과금).
 """
@@ -21,8 +22,13 @@ import uuid
 from service import ServiceError, now_iso
 
 KINDS = ("capture", "detect", "revisit", "experiment")  # experiment = 승인한 결정을 레시피로 실험 (HYO-116 — 사본 · 설치 · 검사라 분 단위)
+LANES = ("main", "experiment")
 JOBS_FILE = "jobs.json"
 KEEP = 100
+
+
+def lane_of(kind):
+    return "experiment" if kind == "experiment" else "main"
 
 
 class Jobs:
@@ -30,12 +36,17 @@ class Jobs:
         self.svc = svc
         self.path = os.path.join(svc.data_dir, JOBS_FILE)
         self.lock = threading.Lock()
-        self.q = queue.Queue()
+        self.queues = {lane: queue.Queue() for lane in LANES}
+        self.q = self.queues["main"]  # 테스트가 start=False로 손수 꺼내 돌린다 — 실험은 queue_of("experiment")
         self.items = self._load()
         svc.jobs = self  # Inbox가 접수된 capture를 보인다 (화면 설계 ①)
-        self.thread = threading.Thread(target=self._loop, name="radar-jobs", daemon=True)
+        self.threads = [threading.Thread(target=self._loop, args=(lane,), name=f"radar-jobs-{lane}", daemon=True) for lane in LANES]
         if start:
-            self.thread.start()
+            for t in self.threads:
+                t.start()
+
+    def queue_of(self, kind):
+        return self.queues[lane_of(kind)]
 
     def _load(self):
         try:
@@ -76,7 +87,7 @@ class Jobs:
             self.items.append(job)
             self._save()
         self.svc.log("job_submitted", job["id"], kind=kind)
-        self.q.put((job["id"], payload))
+        self.queue_of(kind).put((job["id"], payload))
         return dict(job)
 
     def list(self, limit=50):
@@ -138,14 +149,16 @@ class Jobs:
         j = self.get(job_id)
         self.svc.log("job_done", job_id, kind=kind, state=j["state"])
 
-    def _loop(self):
+    def _loop(self, lane="main"):
+        q = self.queues[lane]
         while True:
-            job_id, payload = self.q.get()
+            job_id, payload = q.get()
             try:
                 self.run_one(job_id, payload)
             finally:
-                self.q.task_done()
+                q.task_done()
 
     def join(self):
-        """테스트용 — 접수된 작업이 다 끝날 때까지 기다린다."""
-        self.q.join()
+        """테스트용 — 접수된 작업이 (두 줄 다) 끝날 때까지 기다린다."""
+        for q in self.queues.values():
+            q.join()

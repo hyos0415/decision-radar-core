@@ -64,6 +64,36 @@ def test_plan_checks_the_pin_exists_now():
     assert not done["ready"] and "이미 2.0.0" in done["reason"], done
 
 
+def _npm_app(d, locked="1.0.0", run=True):
+    """대상 repo에 web/package.json · lockfile을 두고 검사 설정에 npm 칸을 더한다 (HYO-248)."""
+    web = Path(d) / "app" / "web"
+    web.mkdir()
+    (web / "package.json").write_text(tryout._json_text({"name": "web", "devDependencies": {"zz-web": "^1.0.0"}}), encoding="utf-8")
+    (web / "package-lock.json").write_text(tryout._json_text({"name": "web", "lockfileVersion": 3, "packages": {
+        "": {"devDependencies": {"zz-web": "^1.0.0"}}, "node_modules/zz-web": {"version": locked, "resolved": "r", "integrity": "i"}}}), encoding="utf-8")
+    comp = {**CHECKS["app"]["components"]["api"], "npm": {"dir": "web", "run": [{"cmd": ["npm", "run", "build"]}] if run else []}}
+    (Path(d) / "adr" / "radar-checks.json").write_text(json.dumps({"app": {"python": "3.12", "components": {"api": comp}}}), encoding="utf-8")
+
+
+def test_plan_reads_npm_version():
+    """package.json에 있으면 npm 경로 — Python 고정 줄이 없어도 lockfile의 설치 버전을 미리 본다 (HYO-248)."""
+    with tempfile.TemporaryDirectory() as d:
+        _, p = adr_repo(d, reqs="other==1.0\n")
+        _npm_app(d)
+        pl = experiment.plan(p["0001-dep.md"])
+    assert pl["ready"] and "zz-web 1.0.0 → 2.0.0 (app · api)" in pl["detail"] and "package.json · lockfile 올림" in pl["detail"], pl
+    with tempfile.TemporaryDirectory() as d:
+        _, p = adr_repo(d, reqs="other==1.0\n")
+        _npm_app(d, locked="2.0.0")
+        done = experiment.plan(p["0001-dep.md"])
+    assert not done["ready"] and "이미 2.0.0" in done["reason"] and "package-lock.json" in done["reason"], done
+    with tempfile.TemporaryDirectory() as d:
+        _, p = adr_repo(d, reqs="other==1.0\n")
+        _npm_app(d, run=False)
+        none = experiment.plan(p["0001-dep.md"])
+    assert not none["ready"] and "npm 검사" in none["reason"], none
+
+
 def test_plan_reasons_instead_of_guessing():
     with tempfile.TemporaryDirectory() as d:
         _, p = adr_repo(d, files={"0001-nover.md": NOVER, "0002-else.md": ELSEWHERE, "0003-model.md": MODEL, "0004-bad.md": "no front matter\n"})

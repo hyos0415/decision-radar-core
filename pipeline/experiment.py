@@ -7,7 +7,7 @@
 
 레시피 = 손으로 해 본 실험을 그대로 옮긴 것이다. 결정 기록의 모양으로 고른다.
   dependency  의존성 릴리스 대응(use가 「의존성 릴리스 <버전> 대응」) → 올려 보기(`pipeline/tryout.py` — 격리된 사본에서
-              기준 검사 → 고정 버전 올림 → 같은 검사). 로컬 · 모델 호출 0
+              기준 검사 → 고정 버전 올림 → 같은 검사). Python 고정 줄 · npm package.json(HYO-248) 둘 다. 로컬 · 모델 호출 0
   다음 조각    embedding(HYO-228 Arena 정답지) · gate(HYO-169 정답 118건) · medical-llm(HYO-229 추출 평가)
 
 원칙 (HYO-116):
@@ -62,16 +62,24 @@ class Dependency:
         except ValueError as e:
             return {"ready": False, "reason": str(e)}
         # 고정 줄이 지금 대상 repo에 있나 미리 본다 (읽기만) — 이미 걷어낸 의존성(langchain · ADR 0030)이 「돌릴 수 있음」으로 보이지 않게 (HYO-116).
-        # 실제 실행은 원격 기본 브랜치의 사본에서 다시 본다
-        _, pins = tryout.bump_all(targets[repo], check.get("manifests") or [], [(adr["technology"], version)])
-        if not pins:
-            return {"ready": False, "reason": f"{repo}의 manifest({', '.join(check.get('manifests') or []) or '없음'})에 "
-                                              f"{adr['technology']} 고정 줄(`이름==버전`)이 없다 — 이미 뺐거나 범위로 고정했다"}
-        frm = pins[0]["from"]
+        # 실제 실행은 원격 기본 브랜치의 사본에서 다시 본다. package.json에 있으면 npm 경로 (HYO-248)
+        dep = tryout.npm_dep(targets[repo], check.get("npm"), adr["technology"])
+        if dep:
+            if not dep["from"]:
+                return {"ready": False, "reason": f"{dep['lock']}에 {dep['name']} 항목이 없다 — 지금 설치 버전을 모른다"}
+            if not (check["npm"].get("run")):
+                return {"ready": False, "reason": f"{repo} · {comp}의 npm 검사(radar-checks.json의 npm.run)가 없다"}
+            frm, where, how = dep["from"], dep["lock"], "package.json · lockfile 올림"
+        else:
+            _, pins = tryout.bump_all(targets[repo], check.get("manifests") or [], [(adr["technology"], version)])
+            if not pins:
+                return {"ready": False, "reason": f"{repo}의 manifest({', '.join(check.get('manifests') or []) or '없음'})에 "
+                                                  f"{adr['technology']} 고정 줄(`이름==버전`)이 없다 — 이미 뺐거나 범위로 고정했다"}
+            frm, where, how = pins[0]["from"], pins[0]["manifest"], "고정 버전 올림"
         if frm == version:
-            return {"ready": False, "reason": f"이미 {version}이다 — 올릴 것이 없다 ({pins[0]['manifest']})"}
+            return {"ready": False, "reason": f"이미 {version}이다 — 올릴 것이 없다 ({where})"}
         return {"ready": True, "params": {"package": adr["technology"], "to": version, "repo": repo, "component": comp},
-                "detail": f"{adr['technology']} {frm} → {version} ({repo} · {comp}) — 격리된 사본에서 기준 검사 → 고정 버전 올림 → 같은 검사"}
+                "detail": f"{adr['technology']} {frm} → {version} ({repo} · {comp}) — 격리된 사본에서 기준 검사 → {how} → 같은 검사"}
 
     def run(self, adr, root, plan, out, export=False):
         p = plan["params"]

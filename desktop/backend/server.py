@@ -254,7 +254,7 @@ def main(argv=None):
         sys.exit(str(e))
     if not devdata.is_seeded(a.data_dir):
         print(f"개발 데이터를 만든다: {a.data_dir} (프로필 {profile})", flush=True)
-        print(devdata.seed(a.data_dir, profile), flush=True)
+        print(devdata.seed(a.data_dir, profile, examples=True), flush=True)  # 실험 예시를 씨앗 앞에 — 뒤에 더하면 씨앗이 stale로 뜬다 (HYO-248)
     else:
         if devdata.ensure_snapshots(a.data_dir):
             print("개발 데이터에 스냅숏을 더했다", flush=True)

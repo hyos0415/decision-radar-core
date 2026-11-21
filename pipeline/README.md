@@ -150,7 +150,7 @@ python pipeline/tests/test_replay.py                                          # 
 python -m pipeline.tryout --adr ../adr/docs/adr/0017-fastapi.md --repo decision-radar --component desktop --checks ../adr/radar-checks.json
 python -m pipeline.tryout --adr ../adr/docs/adr/0019-langchain.md --repo decision-radar --component product --with langchain-core==1.8.0   # 혼자서는 설치가 안 될 때
 
-python pipeline/tests/test_tryout.py           # 오프라인 — 가짜 대상 repo · 가짜 환경 · 가짜 gh + 변이 12개
+python pipeline/tests/test_tryout.py           # 오프라인 — 가짜 대상 repo · 가짜 환경(uv · npm) · 가짜 gh + 변이 18개 (node 22.15+가 있으면 진짜 모듈 훅도 본다)
 ```
 
 - 순서: 사본(대상의 `origin/<기본>`) → 기준(지금 고정 버전으로 설치 · 검사) → manifest의 `이름==버전` 줄을 올림 → 다시 설치 · 같은 검사 → `result.json` · `report.md` (기본 `pipeline/out/tryout/<기록>-<패키지>-<버전>-<repo>-<component>/`)
@@ -163,7 +163,12 @@ python pipeline/tests/test_tryout.py           # 오프라인 — 가짜 대상 
   ```bash
   python -m pipeline.tryout --adr ../adr/docs/adr/0017-fastapi.md --repo decision-radar --component desktop --export
   ```
-- 한계: `이름==버전` 고정 줄만 고친다(범위 고정 · package.json은 아직) · 「그 패키지를 올렸나」는 검사 프로세스 안의 `sys.modules`만 본다(자식 프로세스에서만 쓰면 「아니오」) · 기존 검사가 덮지 않는 동작은 알 수 없다
+- **npm 의존성 (HYO-248)**: 검사 설정 component에 `"npm": {"dir": "desktop", "run": [{"cmd": ["npm", "run", "build"]}, …]}`를 두면, 패키지가 그 `package.json`(dependencies · devDependencies · optionalDependencies)에 있을 때 npm 경로로 돈다 — 기준 `npm ci` → 검사 → **package.json 범위(^ · ~ 앞머리 그대로)와 package-lock.json의 그 항목(version · resolved · integrity)만** 고침 → 다시 `npm ci` → 같은 검사. 새 버전의 tarball · integrity는 `npm view`로 받는다
+  - lockfile을 npm으로 다시 만들지 않는다 — npm 판이 다르면 남의 줄까지 바뀐다(11/21 Electron #362: npm 10.9.9가 다른 항목의 `libc` 칸을 지웠다). 같은 모양(들여쓰기 2)으로 다시 쓸 수 없는 파일 · 범위가 단순하지 않은 의존성(`>=1 <3` 등) · lockfile 1은 `no_pin` + 이유. 새 버전의 의존성이 바뀌었으면 `npm ci`가 lockfile이 안 맞는다고 멈춘다 → `install_failed`(그때는 사람이 `npm install`로)
+  - 「그 패키지를 불렀나」는 node 모듈 훅(`module.registerHooks`의 **load**, node 22.15+)을 `NODE_OPTIONS=--import`로 검사와 그 자식 node 프로세스에 건다. 경로만 찾은 것(resolve)은 세지 않는다. 훅이 없는 node면 「아니오」(모름)로 남는다. 11/22 데스크톱에서 잰 것: `npm run build`(electron-vite)는 `electron/package.json`을 부르고, `electron --version`은 Electron 바이너리 안의 기본 앱까지 부른다 · `npm run lint`는 Electron을 안 부른다
+  - 함께 올리기(`--with`)는 npm에서 아직 안 된다(`no_pin`). 내보내기는 Python과 같다 — 커밋에는 package.json · lockfile만
+- PR 본문의 결정 기록 위치는 `docs/adr/<파일>`만 적는다 — 이 기기의 절대 경로를 남의 repo에 남기지 않는다 (HYO-248)
+- 한계: Python은 `이름==버전` 고정 줄만 고친다(범위 고정은 아직) · Python의 「그 패키지를 올렸나」는 검사 프로세스 안의 `sys.modules`만 본다(자식 프로세스에서만 쓰면 「아니오」) · 기존 검사가 덮지 않는 동작은 알 수 없다
 
 ## 승인 뒤 — 실험 실행기 (HYO-116: `experiment.py`)
 
@@ -171,7 +176,7 @@ python pipeline/tests/test_tryout.py           # 오프라인 — 가짜 대상 
 
 | 레시피 | 고르는 조건 | 하는 일 | 비용 |
 |---|---|---|---|
-| `dependency` 의존성 올려 보기 | use가 「의존성 릴리스 <버전> 대응」 | 위 올려 보기(`tryout.py`) — 기준 검사 → 고정 버전 올림 → 같은 검사. 내보내기는 `pass`일 때만 draft PR | local |
+| `dependency` 의존성 올려 보기 | use가 「의존성 릴리스 <버전> 대응」 | 위 올려 보기(`tryout.py`) — 기준 검사 → 고정 버전 올림(Python 고정 줄 · npm package.json · lockfile) → 같은 검사. 내보내기는 `pass`일 때만 draft PR | local |
 | (다음) embedding · gate · medical-llm | 자리 후보 | HYO-228 Arena 정답지 · HYO-169 정답 118건 · HYO-229 추출 평가 | local · subscription · api |
 
 ```bash
