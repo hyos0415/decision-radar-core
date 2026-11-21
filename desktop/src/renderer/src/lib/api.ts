@@ -31,6 +31,11 @@ export const SUCCESS_OUTCOMES: Outcome[] = [
   'acked'
 ]
 
+/** 자리 질의 「확인 필요」 (HYO-245) — 주당 Inbox 항목 하나, 자리마다 후보 목록 */
+export type CheckDetail = S['CheckDetail']
+export type CheckGroup = S['CheckGroup']
+export type CheckRow = S['CheckRow']
+
 export type CaptureResult = S['CaptureResult']
 
 export type DecisionRevisit = S['DecisionRevisit']
@@ -119,6 +124,27 @@ export const api = {
   /** 「확인함」 — 접수된 capture(끝난 것)·revisit 충족 알림을 Inbox에서 치운다. ADR은 안 바꾼다 (R8) */
   ack: (id: string) =>
     unwrap(client.POST('/inbox/{item_id}/ack', { params: { path: { item_id: id } } })),
+  /** 「확인 필요」 후보 하나로 초안 만들기 — 그 한 건만 detect (모델을 부른다). 초안은 detect 항목으로 Inbox에 온다 */
+  checkDraft: (id: string, row: string) =>
+    unwrap(
+      client.POST('/inbox/{item_id}/check/draft', {
+        params: { path: { item_id: id } },
+        body: { row }
+      })
+    ),
+  /** 「확인 필요」 후보 하나 기각 — 같은 소식은 다시 올라오지 않는다 */
+  checkReject: (id: string, row: string) =>
+    unwrap(
+      client.POST('/inbox/{item_id}/check/reject', {
+        params: { path: { item_id: id } },
+        body: { row }
+      })
+    ),
+  /** 「확인 필요」 남은 후보 전부 기각 — 항목이 Inbox에서 빠진다 */
+  checkRejectRest: (id: string) =>
+    unwrap(
+      client.POST('/inbox/{item_id}/check/reject-rest', { params: { path: { item_id: id } } })
+    ),
   event: (event: EventName, item?: string): void => {
     unwrap(client.POST('/events', { body: { event, item: item ?? null, detail: {} } })).catch(
       () => {}

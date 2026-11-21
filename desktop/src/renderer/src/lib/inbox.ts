@@ -18,7 +18,8 @@ export const STATE_ICON: Record<ItemState, StatusKey> = {
   no_draft: 'not_met',
   met: 'met',
   not_met: 'not_met',
-  undetermined: 'undetermined'
+  undetermined: 'undetermined',
+  check: 'undetermined'
 }
 
 export function waitText(days: number): string {

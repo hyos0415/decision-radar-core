@@ -9,6 +9,8 @@
   capture    대화 → `capture_turn1` → 승인 대기 (R9: ADR repo 쓰기 0)
   Decisions  `radar.py list` + ADR 파일 제목 — 읽기만 (R8: status는 화면에서 바꾸지 않는다)
   실행       `detect`·`revisit` 그래프를 그대로 한 번 돌리고 보고서를 요약한다 (`<data>/runs.jsonl`)
+  확인 필요   자리 질의 「확인 필요」(detect 입력 폴더의 check.json, HYO-245) — 주당 Inbox 항목 하나. 후보마다 초안 만들기(그 한 건만 detect) ·
+             기각(`hitl.reject_sources` — detect 거부와 같은 기억), 나머지 전부 기각. 줄 상태는 `<data>/check-rows.json`
 
 안전 (작업 지시서 §5):
   - 모델은 스텁이 기본이다. 실제 모델은 **데모 모드**(`RADAR_APP_MODEL=anthropic` + `RADAR_APP_DEMO=1`, HYO-85)에서만 — 하나만 있으면 거부한다
@@ -31,6 +33,7 @@
 """
 
 import asyncio
+import copy
 import datetime as dt
 import json
 import os
@@ -40,6 +43,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -57,7 +61,7 @@ from radar.detect import detect  # noqa: E402
 from radar.revisit import revisit  # noqa: E402
 from radar.stub_model import StubChat  # noqa: E402
 from common import ops  # noqa: E402
-from pipeline.detect_feed import funnel_line, url_key  # noqa: E402
+from pipeline.detect_feed import check_input, funnel_line, slot_entry, url_key  # noqa: E402
 from pipeline import basis  # noqa: E402
 from pipeline import topic_hier  # noqa: E402
 from pipeline import skill_line  # noqa: E402
@@ -86,6 +90,9 @@ SOURCE_HEALTH_FILE = "source-health.json"  # 출처 건강 검사 (HYO-172)
 LIST_KEYS = ("always", "tech", "slots", "alarm", "not_ours")
 TOPICS_MORE_MAX = 120  # 화제 탭 「더 보기」 상한 (HYO-154) — 부모 제안 규칙을 오프라인에서 잰 범위 (gold-w42·w43 상위 120)
 ALERTS_FILE = "alerts.json"  # revisit 충족 알림 — Inbox 항목 (화면 설계 ③). 앱 데이터에만, ADR repo에는 안 쓴다
+CHECK_FILE = "check.json"  # 자리 질의 「확인 필요」 (pipeline.detect_feed, HYO-245) — 목록 주차 폴더(list.json 옆)
+CHECK_STATE_FILE = "check-rows.json"  # 「확인 필요」 줄마다 답한 상태 {주차: {줄 id: {state, at, …}}} — 앱 데이터에만 (거부 기억은 ADR repo)
+CHECK_PREFIX = "check-"  # Inbox 항목 id = check-<주차>
 DEFAULT_STUB = "JHS-014"  # 2턴 스텁 대본 — 2턴에서는 도구 결과 순서만 보고 끝내므로 항목마다 달라도 같다 (stub_policy.capture_step)
 UI_EVENTS = ("app_opened", "item_opened", "notification_shown", "notification_clicked", "capture_opened", "decision_opened",
              "topics_opened", "topic_opened")
@@ -148,6 +155,7 @@ class RadarService:
         self.events_path = os.path.join(self.data_dir, EVENTS_FILE)
         self.runs_path = os.path.join(self.data_dir, RUNS_FILE)
         self.alerts_path = os.path.join(self.data_dir, ALERTS_FILE)
+        self.check_path = os.path.join(self.data_dir, CHECK_STATE_FILE)
         # 레인 C 화제 (HYO-127) — `python -m pipeline.topics run --out <폴더>`가 쓴 `<주차>.json`을 읽기만 한다. 저장한 화제는 따로 (복사본)
         self.topics_dir = os.path.abspath(os.environ.get("RADAR_TOPICS_DIR") or os.path.join(self.data_dir, "topics"))
         self.topics_saved_path = os.path.join(self.data_dir, TOPICS_SAVED_FILE)
@@ -430,7 +438,7 @@ class RadarService:
 
     # ── 지난 알림 (HYO-110) — notification_shown을 읽기만 한다. 따로 저장하지 않는다 ─────
 
-    ANSWERS = ("approve", "edit", "reject", "ack")
+    ANSWERS = ("approve", "edit", "reject", "ack", "reject_rest")  # reject_rest = 「확인 필요」 나머지 전부 기각 (HYO-245) — 줄마다 답은 check_draft · check_reject
     ADR_KEPT = ("written", "acked")  # 답한 뒤에도 ADR 파일이 남는 결과 — 승인으로 씀 · revisit 확인함
 
     def notifications(self, limit=100):
@@ -573,11 +581,12 @@ class RadarService:
         return acts[0] if acts else None
 
     def inbox(self):
-        ctx = self.ctx()  # 읽기 — 쓰기 잠금을 기다리지 않는다 (머리말)
+        ctx = self.ctx()  # 읽기 — 쓰기 잠금을 기다리지 않는다 (머리말). 자리 질의 「확인 필요」(HYO-245)는 주당 한 항목
         rows = [self._capture_row(ctx, c)[0] for c in self._captures(ctx)]
         rows += [self._review_row(ctx, q)[0] for q in hitl.review_queue(ctx)]
         rows += [self._pending_row(j) for j in (self.jobs.pending() if self.jobs else [])]
         rows += [self._alert_row(a) for a in self._alerts() if not a.get("acked")]
+        rows += self._check_items(ctx)
         return sorted(rows, key=lambda r: str(r["since"]))
 
     # ── 접수된 capture (화면 설계 ①) · revisit 충족 알림 (화면 설계 ③) — 답은 「확인함」뿐 ──────
@@ -648,6 +657,8 @@ class RadarService:
             elif self.jobs and any(j["id"] == item_id for j in self.jobs.pending()):
                 self.jobs.ack(item_id)
                 res = {"outcome": "acked", "message": "확인했어요 — 접수 기록을 치웠어요"}
+            elif item_id.startswith(CHECK_PREFIX) and any(r["id"] == item_id for r in self.inbox()):
+                raise ServiceError(409, f"{item_id}: 자리 질의 확인 필요는 후보마다 초안 만들기 · 기각, 또는 나머지 전부 기각으로 답한다")
             elif any(r["id"] == item_id for r in self.inbox()):
                 raise ServiceError(409, f"{item_id}: 초안은 승인·수정·거부로 답한다 — 확인함은 접수·재검토 알림만")
             else:
@@ -657,6 +668,13 @@ class RadarService:
 
     def detail(self, item_id):
         ctx = self.ctx()  # 읽기 — 쓰기 잠금을 기다리지 않는다
+        if item_id.startswith(CHECK_PREFIX):
+            week = item_id[len(CHECK_PREFIX):]
+            v = self._check_view(ctx, week)
+            if v is None or not v["open"]:
+                raise ServiceError(404, f"{item_id}: 대기 항목이 아니다")
+            return {**self._check_item_row(week, v), "draft": None, "markdown": "", "changes": [], "number_note": "",
+                    "check": self._check_detail(week, v)}
         for c in self._captures(ctx):
             if c["id"] == item_id:
                 row, changes = self._capture_row(ctx, c)
@@ -696,6 +714,8 @@ class RadarService:
             if item_id not in ids:
                 q = next((q for q in hitl.review_queue(ctx) if q["item"] == item_id), None)
                 if q is None:
+                    if item_id.startswith(CHECK_PREFIX) and any(r["id"] == item_id for r in self.inbox()):
+                        raise ServiceError(409, f"{item_id}: 자리 질의 확인 필요는 후보마다 초안 만들기 · 기각, 또는 나머지 전부 기각으로 답한다")
                     if any(r["id"] == item_id for r in self.inbox()):
                         raise ServiceError(409, f"{item_id}: 접수·재검토 알림은 「확인함」(ack)으로 답한다")
                     raise ServiceError(404, f"{item_id}: 대기 항목이 아니다")
@@ -786,6 +806,235 @@ class RadarService:
             return {**res, "message": "다시 판정하려면 대화를 다시 넣어 주세요 (원래 대화가 앱에 없어요)"}
         new_id, _ = self.capture(m["conversation"], stub=m.get("stub"), repo=m.get("repo"))
         return {**res, "message": f"바뀐 ADR repo로 다시 판정했어요 → {new_id}", "new_item": new_id}
+
+    # ── 자리 질의 「확인 필요」 (HYO-245, 사용자 11/21) ─────────────────────────────
+    # 자리 질의가 적합도 1로 본 출시(정보가 모자라거나 역할 조건 일부를 못 지킴)는 detect로 안 간다 — detect_feed가 check.json으로 남긴다.
+    # 주당 Inbox 항목 하나(check-<주차>), 열면 자리마다 모델 목록. 줄마다 [초안 만들기](그 한 건만 detect — 모델을 부르는 유일한 답) · [기각],
+    # 그리고 [나머지 전부 기각]. 기각은 detect 거부와 같은 기억(hitl.reject_sources → rejected_sources)이라 같은 소식이 관문 · 자리 질의로
+    # 다시 와도 detect가 뺀다. 열린 줄이 하나라도 있는 동안만 보인다. 다른 데서 이미 거부한 소식은 줄에서 뺀다.
+
+    def _check_weeks(self):
+        """check.json이 있는 목록 주차 — 실사용은 radar-snapshots/detect/<주차>/ (수집 PC가 push), 그 밖은 <data>/lists/<주차>/ (개발 예시)."""
+        root = self._list_root()
+        try:
+            names = os.listdir(root)
+        except OSError:
+            return []
+        return sorted(n for n in names if _WEEK_DIR.match(n) and os.path.exists(os.path.join(root, n, CHECK_FILE)))
+
+    def _check_file(self, week):
+        try:
+            f = json.load(open(os.path.join(self._list_root(), week, CHECK_FILE), encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return f if isinstance(f, dict) and isinstance(f.get("items"), list) else None
+
+    def _check_states(self):
+        try:
+            s = json.load(open(self.check_path, encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return s if isinstance(s, dict) else {}
+
+    def _put_check_states(self, week, rows):
+        """줄 상태를 고친다 — rows = {줄 id: {칸: 값}}. 호출자가 self.lock을 잡고 있어야 한다."""
+        s = self._check_states()
+        for rid, kw in rows.items():
+            s.setdefault(week, {}).setdefault(rid, {}).update(kw)
+        tmp = self.check_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(s, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, self.check_path)
+
+    def _check_view(self, ctx, week, rejected=None):
+        """그 주의 「확인 필요」 → {file, rows: [(줄, 저장된 상태, open · drafted · rejected)], open} 또는 None (파일 없음).
+        아직 안 답한 줄 중 소식(id · 같은 모델로 접힌 also)을 이미 거부한 것(HYO-142 기억)은 뺀다 — 이 화면에서 기각한 줄은 rejected로 남는다."""
+        if not _WEEK_DIR.match(week or "") or week not in self._check_weeks():
+            return None
+        f = self._check_file(week)
+        if f is None:
+            return None
+        states = self._check_states().get(week) or {}
+        rejected = hitl.rejected_sources(ctx) if rejected is None else rejected
+        rows = []
+        for rec in f["items"]:
+            if not isinstance(rec, dict) or not rec.get("id") or not isinstance(rec.get("item"), dict):
+                continue
+            st = states.get(rec["id"]) or {}
+            state = st.get("state") or "open"
+            if state == "open" and any(s in rejected for s in [rec["id"], *(rec.get("also") or [])]):
+                continue
+            rows.append((rec, st, state))
+        return {"file": f, "rows": rows, "open": sum(1 for _, _, s in rows if s == "open")}
+
+    def _check_since(self, week, f):
+        made = f.get("made_at")
+        if made:
+            return made
+        try:
+            t = os.path.getmtime(os.path.join(self._list_root(), week, CHECK_FILE))
+        except OSError:
+            return now_iso()
+        return dt.datetime.fromtimestamp(t).astimezone().isoformat(timespec="seconds")
+
+    def _check_item_row(self, week, v):
+        since = self._check_since(week, v["file"])
+        slots = {(rec.get("slots") or [{}])[0].get("id") for rec, _, s in v["rows"] if s == "open"}
+        return {"id": CHECK_PREFIX + week, "kind": "check", "title": f"자리 질의 확인 필요 — {week} · {v['open']}건", "technology": None, "affected": [],
+                "since": since, "waiting_days": _days(since), "state": "check", "actions": ["reject_rest"], "why": None, "action": None, "adr": None,
+                "message": f"후보 {v['open']}건 · 자리 {len(slots)}곳 — 초안으로 만들 것만 고르고 나머지는 기각해요"}
+
+    def _check_items(self, ctx):
+        weeks = self._check_weeks()
+        if not weeks:
+            return []
+        rejected = hitl.rejected_sources(ctx)
+        out = []
+        for w in weeks:
+            v = self._check_view(ctx, w, rejected)
+            if v and v["open"]:
+                out.append(self._check_item_row(w, v))
+        return out
+
+    @staticmethod
+    def _check_detail(week, v):
+        """자리마다 묶은 목록 — 줄은 처음 자리(자리 질의가 이유를 적은 자리) 아래 한 번만. 다른 자리는 other_slots로."""
+        groups = {}
+        for rec, st, state in v["rows"]:
+            slots = rec.get("slots") or [{"id": "?", "name": None, "repo": None}]
+            s0 = slots[0]
+            g = groups.setdefault(s0.get("id") or "?", {"slot": s0.get("id") or "?", "name": s0.get("name"), "repo": s0.get("repo"), "rows": []})
+            g["rows"].append({"id": rec["id"], "title": rec.get("title") or "", "url": rec.get("url") or "", "source": rec.get("source") or "",
+                              "model": rec.get("model") or "", "reason": rec.get("reason") or "", "switch": rec.get("switch") or "",
+                              "other_slots": [s.get("name") or s.get("id") or "" for s in slots[1:]], "state": state,
+                              "actions": ["draft", "reject"] if state == "open" else [], "answered_at": st.get("at"),
+                              "new_item": st.get("new_item"), "adr": st.get("adr"), "message": st.get("message")})
+        return {"week": week, "open": v["open"], "total": len(v["rows"]), "groups": list(groups.values())}
+
+    def _check_detail_now(self, week):
+        """답한 뒤의 목록 — 열린 줄이 없으면(항목이 Inbox에서 빠진다) None."""
+        v = self._check_view(self.ctx(), week)
+        return self._check_detail(week, v) if v and v["open"] else None
+
+    def _check_row(self, item_id, row_id):
+        """(주차, 줄) — 열린 항목의 열린 줄만. 없으면 404, 이미 답한 줄이면 409."""
+        week = item_id[len(CHECK_PREFIX):] if item_id.startswith(CHECK_PREFIX) else None
+        v = self._check_view(self.ctx(), week) if week else None
+        if v is None or not v["open"]:
+            raise ServiceError(404, f"{item_id}: 대기 항목이 아니다")
+        hit = next(((rec, s) for rec, _, s in v["rows"] if rec["id"] == row_id), None)
+        if hit is None:
+            raise ServiceError(404, f"{item_id}: 후보 {row_id!r}가 없다")
+        if hit[1] != "open":
+            raise ServiceError(409, f"{row_id}: 이미 답했다 ({hit[1]})")
+        return week, hit[0]
+
+    def _reject_check(self, week, recs):
+        """줄들을 기각한다 — 기록 하나(hitl.reject_sources, 실사용은 커밋 1개를 main에)와 줄 상태. 호출자가 self.lock을 잡고 있어야 한다."""
+        ctx = self.ctx()  # 답 — 실사용은 git 내보내기 (거부 기록을 main에 — 다른 기기도 안다)
+        sources = list(dict.fromkeys(s for rec in recs for s in [rec["id"], *(rec.get("also") or [])]))
+        label = (recs[0].get("model") or recs[0]["id"]) if len(recs) == 1 else f"{week}-rest"
+        rid = hitl.new_item_id(ctx, "detect", f"check-{label}")
+        detail = {"week": week, "rows": [{"id": rec["id"], "model": rec.get("model") or "", "url": rec.get("url") or "",
+                                          "slots": [s.get("id") for s in rec.get("slots") or []]} for rec in recs]}
+        r = hitl.reject_sources(ctx, rid, sources, via="check", detail=detail)
+        at = now_iso()
+        self._put_check_states(week, {rec["id"]: {"state": "rejected", "at": at, "record": rid} for rec in recs})
+        note = ""
+        if r.get("state") == "blocked":
+            note = f" — 기록 커밋이 막혔어요 ({r.get('reason')}: {str(r.get('detail') or '')[:120]}). 이 기기는 기억해요"
+        return {"record": rid, "sources": sources, "export": r.get("state"), "note": note}
+
+    def check_reject(self, item_id, row_id):
+        """「확인 필요」 한 줄 기각 — 그 소식(같은 모델로 접힌 글까지)을 거부로 기억한다. 모델을 부르지 않는다."""
+        with self.lock:
+            week, rec = self._check_row(item_id, row_id)
+            r = self._reject_check(week, [rec])
+            self.log("check_reject", item_id, row=row_id, week=week, outcome="rejected", sources=r["sources"], record=r["record"], export=r["export"])
+            return {"outcome": "rejected", "message": f"{rec.get('model') or rec['id']} 기각했어요 — 다시 올라오지 않아요" + r["note"],
+                    "check": self._check_detail_now(week)}
+
+    def check_reject_rest(self, item_id):
+        """「나머지 전부 기각」 — 아직 안 답한 줄 전부를 기록 하나로 기각한다. 항목이 Inbox에서 빠진다."""
+        with self.lock:
+            week = item_id[len(CHECK_PREFIX):] if item_id.startswith(CHECK_PREFIX) else None
+            v = self._check_view(self.ctx(), week) if week else None
+            if v is None or not v["open"]:
+                raise ServiceError(404, f"{item_id}: 대기 항목이 아니다")
+            recs = [rec for rec, _, s in v["rows"] if s == "open"]
+            r = self._reject_check(week, recs)
+            self.log("reject_rest", item_id, week=week, outcome="rejected", rows=[rec["id"] for rec in recs], sources=r["sources"],
+                     record=r["record"], export=r["export"])
+            return {"outcome": "rejected", "message": f"나머지 {len(recs)}건을 기각했어요 — 다시 올라오지 않아요" + r["note"], "check": None}
+
+    def check_draft(self, item_id, row_id):
+        """「초안 만들기」 — 그 줄 하나로 detect 입력(한 건)을 만들어 detect를 그대로 돌린다 (pipeline.detect_feed.check_input). 자리를 gate.json에
+        적어 거르기가 빼지 못한다(candidate_for, HYO-205). 초안은 보통 detect 항목으로 Inbox에 온다(실사용 + 검토 PR이면 PR도). 모델을 부르는
+        유일한 답이다 — 실사용은 거르기 + 초안 세션 둘. runs.jsonl에는 남기지 않는다(정기 detect의 「이번 주 돌았나」를 흔들지 않게) — 사용량은 행동 로그에."""
+        with self.lock:
+            week, rec = self._check_row(item_id, row_id)
+            ctx = self.ctx(export=False)  # 그래프 실행은 dry-run + 로컬 내보내기 — 초안은 작업 사본에, 검토 대기로 (run과 같다)
+            notes = []
+            if self.mode == "real":  # 새 번호를 원격 기준으로 (run의 _prepare_real 중 ADR repo 따라잡기만 — 입력은 이미 있다)
+                b = hitl.sync_exporter(self.ctx())
+                if b:
+                    notes.append(f"ADR repo를 원격에 못 맞췄다 ({b.get('reason')}) — 로컬 상태로 돈다")
+            d = os.path.join(self.tmp, f"check-draft-{uuid.uuid4().hex[:8]}")
+            queued = {q["item"] for q in hitl.review_queue(ctx)}
+            rep, diag, err = {}, {}, None
+            try:
+                check_input(rec, d)
+                ctx.env["RADAR_SNAPSHOT_DIR"] = d
+                ctx.env.pop("RADAR_BASIS_NOW", None)  # 한 건 입력에는 관문 기준(basis.json)이 없다 — 대조할 것이 없다
+                script = self._check_stub_script(rec, ctx) if self.mode == "stub" else None
+                rep, diag = asyncio.run(detect(ctx, self.chat("detect", script), ctx.now, self.model_name))
+            except Exception as e:  # 실행이 죽어도 앱은 산다 — 줄은 열린 채로 두고 이유를 보인다
+                err = f"{type(e).__name__}: {str(e)[:300]}"
+            finally:
+                shutil.rmtree(d, ignore_errors=True)
+            new = [q for q in hitl.review_queue(ctx) if q["item"] not in queued and q["kind"] == "detect"]
+            for q in new:
+                self.log("item_created", q["item"], kind="detect", adr=q["adr"], via="check", check=item_id, row=row_id)
+            usage = self._usage(ctx)
+            if new:
+                if self.review_pr:
+                    notes += self._open_prs()
+                first = new[0]
+                self._put_check_states(week, {row_id: {"state": "drafted", "at": ctx.now, "new_item": first["item"], "adr": first["adr"], "message": None}})
+                res = {"outcome": "drafted", "new_item": first["item"], "adr": first["adr"],
+                       "message": f"초안을 만들었어요 — ADR {first['adr']} (Inbox의 detect 항목에서 승인 · 거부해요)" + ("".join(" · " + n for n in notes))}
+            else:
+                why = f"실행 오류 — {err}" if err else _no_draft_reason(rep, diag)
+                self._put_check_states(week, {row_id: {"message": f"초안이 나오지 않았어요 — {why}", "tried_at": ctx.now}})
+                res = {"outcome": "no_draft", "message": f"초안이 나오지 않았어요 — {why}" + ("".join(" · " + n for n in notes))}
+            res["usage"] = usage
+            self.log("check_draft", item_id, row=row_id, week=week, outcome=res["outcome"], new_item=res.get("new_item"), adr=res.get("adr"),
+                     usage=usage, **({"error": err} if err else {}))
+            res["check"] = self._check_detail_now(week)
+            return res
+
+    def _check_stub_script(self, rec, ctx):
+        """스텁 모드의 「초안 만들기」 — 판단표에 없는 소식이면 그 줄로 후보 한 칸 · 초안 한 벌을 덧붙인다. 배관 확인용이다 (판단이 아니다).
+        affected는 대상 repo인 첫 자리의 repo · 자리 id, 근거는 그 소식 (커뮤니티 글이면 validate가 거부한다 — 실제 모델은 1차 출처를 쓴다)."""
+        base = {"detect": self.pscript["detect"]} if self.pscript is not None else stub_scripts.detect_script()
+        out = copy.deepcopy(base)
+        out["detect"].setdefault("repairs", {})
+        url = rec["item"]["url"]
+        if url in (out["detect"].get("items") or {}):
+            return out
+        slots = rec.get("slots") or []
+        s = next((x for x in slots if x.get("repo") in ctx.targets), slots[0] if slots else {})
+        place = s.get("name") or s.get("id") or "자리"
+        tech = rec.get("model") or rec.get("title") or rec["id"]
+        out["detect"].setdefault("items", {})[url] = {"verdict": "candidate", "technology": tech, "dependency": False,
+                                                      "affected": [{"repo": s.get("repo") or "", "component": s.get("id") or "model"}]}
+        out["detect"].setdefault("drafts", {})[url] = {
+            "title": f"[스텁] {tech} — {place} 후보 검토", "use": f"{place} 자리 후보",
+            "evidence": [{"url": url, "source_type": slot_entry(rec["item"])["source_type"]}],
+            "context": rec.get("reason") or "자리 질의 「확인 필요」에서 사람이 고른 후보",
+            "decision": "제안 — 이 역할의 후보로 시험해 볼지 정한다. 채택 여부는 사람이 정한다.",
+            "research_note": ["스텁 초안 — 배관 확인용이고 모델 판단이 아니다", "재검토 조건 없음: 스텁 초안"], "revisit_when": []}
+        return out
 
     # ── capture (1턴) ────────────────────────────────────────────
 
@@ -1683,6 +1932,22 @@ def _detect_verdicts(rep):
     for e in rep.get("excluded") or []:
         put([e.get("url")], "excluded", reason=e.get("reason") or "")
     return out
+
+
+def _no_draft_reason(rep, diag):
+    """한 건 detect(「확인 필요」 초안 만들기)가 초안을 안 냈을 때 사람에게 보일 이유 한 줄 — 겹침 > R10 > 초안 실패 > 거르기 > 모델 오류."""
+    for s in rep.get("skipped_existing") or []:
+        return f"이미 있는 결정 ADR {s.get('adr')}과 겹쳐요 (R14)"
+    for d in rep.get("dropped") or []:
+        return d.get("reason") or "R10"
+    for f in rep.get("draft_failed") or []:
+        return f"초안 쓰기 실패 — {f.get('type')}: {str(f.get('message') or '')[:200]}"
+    for e in rep.get("excluded") or []:
+        return f"거르기에서 빠졌어요 — {e.get('reason') or ''}"
+    errs = (diag or {}).get("p3_errors") or []
+    if errs:
+        return "모델 오류 — " + "; ".join(f"{e.get('stage') or e.get('kind')}: {e.get('type') or ''}" for e in errs)
+    return "후보가 나오지 않았어요"
 
 
 def _latest_feed(snapshot_repo):

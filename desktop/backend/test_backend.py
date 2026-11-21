@@ -10,6 +10,7 @@ HYO-110: 지난 알림 목록(클릭 짝 · 열어 봄 · 항목의 지금 상�
 HYO-127: 화제 탭(레인 C) — 주차 목록 · k 자르기 · 저장/저장 빼기 · capture의 topic · 개발 예시.
 HYO-99: 실사용 모드 — 임시 git repo + 로컬 bare remote · 대역 모델로 시작 거부 · ctx 둘 · snapshots pull · 승인/거부/기록 커밋 · capture push.
 HYO-99: 엔진 상태(가짜 claude — 설치·버전·구독 로그인 · 키 지움 · 준비됨 판정) · 로그인 창(OS별 argv, 실제로 열지 않음).
+HYO-245: 자리 질의 「확인 필요」 — 주당 Inbox 항목 · 자리마다 목록 · 초안 만들기(스텁 detect 한 건) · 기각(거부 기억) · 나머지 전부 기각 · 재시작 · 실사용 기록 커밋.
 """
 
 import glob
@@ -192,6 +193,8 @@ def main():
         scenario_hyo166(tmp)
         scenario_hyo158(tmp)
         scenario_hyo158_blocked(tmp)
+        scenario_hyo245(tmp)
+        scenario_hyo245_real(tmp)
     finally:
         os.environ.pop("RADAR_EXPORT", None)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -1951,6 +1954,196 @@ def scenario_hyo152(tmp):
     srows = sc.get("/topics").json()["items"]
     check("개발 예시 화제: parent_suggestion · parent_manual 칸이 있다", srows and all("parent_suggestion" in x and "parent_manual" in x for x in srows))
 
+
+
+CHECK_ROWS_245 = [  # (id, source, 자리들, 모델, also) — 자리 repo는 픽스처 대상(finance-verifier · medical-mate), 마지막 자리만 대상 밖
+    ("hf:acme/judge-ko", "huggingface", ["fv-judge", "mm-summary"], "judge-ko", None),
+    ("vendor:acme:model-x", "vendor", ["fv-judge"], "model-x", ["hn:mx"]),
+    ("hf:acme/summ-ko", "huggingface", ["mm-summary"], "summ-ko", None),
+    ("hf:acme/old-one", "huggingface", ["mm-summary"], "old-one", None),
+    ("hf:acme/elsewhere", "huggingface", ["x-slot"], "elsewhere", None),
+]
+
+
+def _check_json_245(root, week):
+    """「확인 필요」 다섯 줄이 든 check.json을 파이프라인(detect_feed.build)으로 만든다 — 화면 쪽 계약이 파이프라인 출력과 맞는지가 같이 걸린다."""
+    from pipeline import detect_feed
+    run, snap, out = (os.path.join(root, week, x) for x in ("run", "snap", "out"))
+    os.makedirs(run)
+    os.makedirs(snap)
+    items = [{"id": i, "source": src, "channels": [src], "title": f"acme/{m}", "url": f"https://example.com/{src}/{m}",
+              "text": f"{m} — 새 모델 카드. 한국어 표시는 없다.", "meta": {}, "created_at": "2026-11-17T00:00:00Z"}
+             for i, src, _s, m, _a in CHECK_ROWS_245]
+    with open(os.path.join(snap, "items.jsonl"), "w", encoding="utf-8") as f:
+        f.write("".join(json.dumps(it, ensure_ascii=False) + "\n" for it in items))
+    json.dump({"snapshot": snap, "counts": {"items": 5, "lane_a": 0}, "lane_a_gate": {"model": "stub", "label": "0/0", "total_kept": 0}},
+              open(os.path.join(run, "run.json"), "w", encoding="utf-8"))
+    json.dump([], open(os.path.join(run, "lane_a.json"), "w", encoding="utf-8"))
+    check_rows = [{"id": i, "title": f"acme/{m}", "url": f"https://example.com/{src}/{m}", "source": src, "model": m, "slots": s,
+                   "reason": f"{m}: 역할 조건 일부를 모른다", "switch": "", "popularity": 1, **({"also": a} if a else {})}
+                  for i, src, s, m, a in CHECK_ROWS_245]
+    slots = {"per_slot": {"fv-judge": [], "mm-summary": [], "x-slot": []}, "candidates": 5, "releases": 5, "to_detect": [],
+             "slot_names": {"fv-judge": "주장 판정", "mm-summary": "상담 요약", "x-slot": "남의 자리"},
+             "slot_repos": {"fv-judge": "finance-verifier", "mm-summary": "medical-mate", "x-slot": "not-a-target"},
+             "slot_roles": {"fv-judge": "주장을 근거와 대조", "mm-summary": "상담 기록 요약", "x-slot": "x"}, "check": check_rows}
+    json.dump(slots, open(os.path.join(run, "slots.json"), "w", encoding="utf-8"), ensure_ascii=False)
+    detect_feed.build(run, out)
+    return json.load(open(os.path.join(out, "check.json"), encoding="utf-8"))
+
+
+def scenario_hyo245(tmp):
+    """HYO-245 — 자리 질의 「확인 필요」 Inbox: 주당 한 항목 · 자리마다 목록 · 줄마다 초안 만들기(스텁 detect 한 건 → detect 항목) · 기각(거부 기억 —
+    다음 detect가 뺀다) · 나머지 전부 기각 · 백엔드를 다시 띄워도 상태 그대로 · 다른 데서 거부한 소식은 안 보임 · 개발 예시 모양 = 파이프라인 모양."""
+    print("\n— HYO-245: 자리 질의 확인 필요 —")
+    import jobs as jobs_mod
+    from pipeline import detect_feed
+    from radar import detect_ops
+    week, iid = "2026-W47", "check-2026-W47"
+    data = os.path.join(tmp, "data245")
+    devdata.seed(data)
+    svc = RadarService(data)
+    c = TestClient(server.create_app(svc, jobs=jobs_mod.Jobs(svc, start=False)))
+    base_ids = {i["id"] for i in c.get("/inbox").json()["items"]}
+    check("확인 필요: check.json이 없으면 항목 없음", not any(i["kind"] == "check" for i in c.get("/inbox").json()["items"]))
+    chk = _check_json_245(os.path.join(tmp, "pipe245"), week)
+    os.makedirs(os.path.join(data, "lists", week))
+    json.dump(chk, open(os.path.join(data, "lists", week, "check.json"), "w", encoding="utf-8"), ensure_ascii=False)
+    hitl.reject_sources(svc.ctx(), "pre-rejected-old-one", ["hf:acme/old-one"], via="detect")  # 다른 데서 이미 거부한 소식 (HYO-142 기억)
+    ids = [r[0] for r in CHECK_ROWS_245]
+    A, B, C, OLD, E = ids
+
+    row = next((i for i in c.get("/inbox").json()["items"] if i["id"] == iid), None)
+    check("확인 필요: 주당 한 항목 · 제목에 열린 줄 수 · 답은 나머지 전부 기각 (이미 거부한 소식은 안 셈)",
+          row and row["kind"] == "check" and row["state"] == "check" and row["title"] == f"자리 질의 확인 필요 — {week} · 4건"
+          and row["actions"] == ["reject_rest"] and row["since"] == chk["made_at"], row)
+    det = c.get(f"/inbox/{iid}").json()
+    groups = {g["slot"]: g for g in det["check"]["groups"]}
+    check("상세: 자리마다 묶음 (이름 · repo) · 줄은 처음 자리 아래 한 번 · 다른 자리 이름",
+          list(groups) == ["fv-judge", "mm-summary", "x-slot"] and groups["fv-judge"]["name"] == "주장 판정" and groups["fv-judge"]["repo"] == "finance-verifier"
+          and [r["id"] for r in groups["fv-judge"]["rows"]] == [A, B] and [r["id"] for r in groups["mm-summary"]["rows"]] == [C]
+          and groups["fv-judge"]["rows"][0]["other_slots"] == ["상담 요약"] and det["markdown"] == "" and det["check"]["open"] == 4, det["check"])
+    rows = {r["id"]: r for g in det["check"]["groups"] for r in g["rows"]}
+    check("상세: 줄마다 모델 · 이유 · url · 열림 · [초안 만들기, 기각] · 이미 거부한 소식은 빠짐",
+          OLD not in rows and rows[A]["model"] == "judge-ko" and rows[A]["reason"].startswith("judge-ko:") and rows[A]["url"].startswith("https://")
+          and all(r["state"] == "open" and r["actions"] == ["draft", "reject"] for r in rows.values()), rows)
+    check("확인 필요: 승인 · 확인함은 409 (줄마다 답한다)", c.post(f"/inbox/{iid}/approve", json={}).status_code == 409
+          and c.post(f"/inbox/{iid}/ack").status_code == 409, c.post(f"/inbox/{iid}/ack").text)
+    check("확인 필요: 없는 줄 404 · 없는 주 404", c.post(f"/inbox/{iid}/check/reject", json={"row": "nope"}).status_code == 404
+          and c.post("/inbox/check-2026-W01/check/reject", json={"row": A}).status_code == 404)
+
+    # 기각 — 거부 기억(detect 거부와 같은 저장소)에 소식과 같은 모델로 접힌 글까지
+    r = c.post(f"/inbox/{iid}/check/reject", json={"row": B}).json()
+    rj = hitl.rejected_sources(svc.ctx())
+    rec = hitl.read_item(svc.ctx(), rj.get(B)) if rj.get(B) else {}
+    check("기각 → rejected · 줄은 rejected로 남고 열린 줄 3", r["outcome"] == "rejected" and r["check"]["open"] == 3
+          and {x["id"]: x["state"] for g in r["check"]["groups"] for x in g["rows"]}[B] == "rejected", r)
+    check("기각: 거부 기억에 소식 + 접힌 글(also) · 닫힌 detect 기록(초안 없음 · via check)", B in rj and "hn:mx" in rj and rec.get("kind") == "detect"
+          and rec["export"] == {"state": "closed", "reason": "reject", "via": "check"} and rec.get("write_intent") is None
+          and rec["rejected"]["week"] == week, rec)
+    check("기각: 제목의 건수가 준다", next(i for i in c.get("/inbox").json()["items"] if i["id"] == iid)["title"].endswith("· 3건"))
+    check("기각: 같은 줄 다시 → 409", c.post(f"/inbox/{iid}/check/reject", json={"row": B}).status_code == 409)
+    check("기각: 행동 로그 check_reject", any(e["event"] == "check_reject" and e["item"] == iid and e["detail"]["row"] == B for e in events(svc)))
+    later = os.path.join(tmp, "later245")
+    detect_feed.check_input(next(x for x in chk["items"] if x["id"] == B), later)  # 다음 주 관문 · 자리 질의로 같은 소식이 다시 왔다
+    ctx = svc.ctx()
+    ctx.env.update(RADAR_SNAPSHOT_DIR=later, RADAR_DETECT_RESURFACE="0")
+    keep, out = detect_ops.drop_rejected(ctx, detect_ops.snapshot_feed(ctx))
+    check("기각한 소식은 다음 detect가 뺀다 (HYO-142 drop_rejected)", keep == [] and len(out) == 1 and "이전에 거부한 소식" in out[0]["reason"], (keep, out))
+
+    # 초안 만들기 — 스텁 detect 한 건 → 보통 detect 항목. 실행 기록(runs)은 안 남긴다 (정기 detect 판단을 흔들지 않게)
+    n_runs = len(svc.runs(limit=500))
+    r = c.post(f"/inbox/{iid}/check/draft", json={"row": A}).json()
+    new = r.get("new_item")
+    drow = next((i for i in c.get("/inbox").json()["items"] if i["id"] == new), None)
+    check("초안 만들기 → drafted · 새 detect 항목 (기술 = 자리 질의 모델 이름 · 대상 repo)", r["outcome"] == "drafted" and drow and drow["kind"] == "detect"
+          and drow["technology"] == "judge-ko" and drow["affected"][0]["repo"] == "finance-verifier" and r["adr"], (r, drow))
+    check("초안 만들기: 줄 drafted + 만든 항목 · 열린 줄 2 · 사용량(스텁 추정)", {x["id"]: (x["state"], x["new_item"]) for g in r["check"]["groups"] for x in g["rows"]}[A]
+          == ("drafted", new) and r["check"]["open"] == 2 and r["usage"] and r["usage"]["estimated"], r)
+    check("초안 만들기: detect 항목의 소식 = 그 줄 (거부하면 기억된다)", hitl.read_item(svc.ctx(), new)["sources"] == [A] if new else False)
+    check("초안 만들기: 실행 기록 안 남김 · 행동 로그 check_draft + item_created(via check)", len(svc.runs(limit=500)) == n_runs
+          and any(e["event"] == "check_draft" and e["detail"]["outcome"] == "drafted" for e in events(svc))
+          and any(e["event"] == "item_created" and e["item"] == new and e["detail"].get("via") == "check" for e in events(svc)))
+    check("초안 만들기: 임시 입력 폴더는 지운다", not glob.glob(os.path.join(svc.tmp, "check-draft-*")))
+    r = c.post(f"/inbox/{iid}/check/draft", json={"row": E}).json()
+    rows = {x["id"]: x for g in r["check"]["groups"] for x in g["rows"]}
+    check("초안 만들기: 초안 없이 끝나면 no_draft · 이유 · 줄은 열린 채", r["outcome"] == "no_draft" and "R10" in r["message"] and rows[E]["state"] == "open"
+          and "R10" in (rows[E]["message"] or "") and r["check"]["open"] == 2, r)
+
+    # 다시 띄워도 상태 그대로
+    svc2 = RadarService(data)
+    c2 = TestClient(server.create_app(svc2, jobs=jobs_mod.Jobs(svc2, start=False)))
+    rows = {x["id"]: x["state"] for g in c2.get(f"/inbox/{iid}").json()["check"]["groups"] for x in g["rows"]}
+    check("재시작: 줄 상태 유지", rows == {A: "drafted", B: "rejected", C: "open", E: "open"}, rows)
+
+    # 나머지 전부 기각 — 기록 하나로, 항목이 Inbox에서 빠진다
+    r = c2.post(f"/inbox/{iid}/check/reject-rest").json()
+    rj = hitl.rejected_sources(svc2.ctx())
+    check("나머지 전부 기각 → 열린 줄 전부 기억 · 기록 하나 · 항목 빠짐", r["outcome"] == "rejected" and r["check"] is None and "2건" in r["message"]
+          and C in rj and E in rj and rj[C] == rj[E] and A not in rj and iid not in {i["id"] for i in c2.get("/inbox").json()["items"]}, (r, rj))
+    check("나머지 전부 기각: 상세 404 · 다시 → 404", c2.get(f"/inbox/{iid}").status_code == 404 and c2.post(f"/inbox/{iid}/check/reject-rest").status_code == 404)
+    check("나머지 전부 기각: 행동 로그 reject_rest", any(e["event"] == "reject_rest" and e["item"] == iid for e in events(svc2)))
+    check("남은 Inbox = 처음 것 + 만든 detect 항목", {i["id"] for i in c2.get("/inbox").json()["items"]} == base_ids | {new})
+
+    # 개발 예시 — 처음 한 번만 · 파이프라인 모양과 같다 · 화면 계약으로 열린다
+    dev = os.path.join(tmp, "data245dev")
+    os.makedirs(dev)
+    check("ensure_check: 처음엔 만든다 · 다음엔 안 만든다", devdata.ensure_check(dev) is True and devdata.ensure_check(dev) is False)
+    ex = json.load(open(devdata.CHECK_FIXTURE, encoding="utf-8"))
+    pipe_row = set(chk["items"][0]) - {"also"}
+    check("예시 줄 칸 = 파이프라인 줄 칸 · 소식 칸은 파이프라인이 담는 칸 안",
+          all(set(x) - {"also"} == pipe_row for x in ex["items"]) and set(ex) >= {"week", "made_at", "items"}
+          and all(set(x["item"]) <= set(detect_feed.CHECK_ITEM_FIELDS) | {"primary"} for x in ex["items"])
+          and all(set(s) == {"id", "name", "repo", "role"} for x in ex["items"] for s in x["slots"]), (pipe_row, [set(x) for x in ex["items"]]))
+    dsvc = RadarService(dev)
+    dc = TestClient(server.create_app(dsvc, jobs=jobs_mod.Jobs(dsvc, start=False)))
+    dev_row = next((i for i in dc.get("/inbox").json()["items"] if i["kind"] == "check"), None)
+    check("예시: Inbox에 뜨고 상세가 열린다 (전부 [예시])", dev_row and dc.get(f"/inbox/{dev_row['id']}").status_code == 200
+          and all(x["title"].startswith("[예시]") for g in dc.get(f"/inbox/{dev_row['id']}").json()["check"]["groups"] for x in g["rows"]), dev_row)
+
+
+def scenario_hyo245_real(tmp):
+    """HYO-245 실사용 — 「확인 필요」는 radar-snapshots/detect/<주>/check.json(pull)에서 · 기각 기록은 커밋 1개로 main에 (A .radar/items만) ·
+    초안 만들기는 작업 사본에만(원격 무변경, 승인 전 push 0) · 임시 git repo + 로컬 bare remote, 모델 자리엔 대역."""
+    print("\n— HYO-245: 확인 필요 (실사용) —")
+    from radar import script as stub_scripts
+    from radar.stub_model import StubChat
+    with _Env(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", RADAR_REVIEW="app"):
+        root = os.path.join(tmp, "real245")
+        os.makedirs(root)
+        adr_remote, adr, base, snaps = _real_repos(root)
+        win = os.path.join(root, "snap-windows")
+        chk = _check_json_245(os.path.join(root, "pipe"), "2026-W44")
+        json.dump(chk, open(os.path.join(win, "detect", "2026-W44", "check.json"), "w", encoding="utf-8"), ensure_ascii=False)
+        _git(win, "add", "-A")
+        _git(win, "commit", "-q", "-m", "check 2026-W44")
+        _git(win, "push", "-q", os.path.join(root, "snap.git"), "main")
+        _git(snaps, "pull", "-q", "--ff-only")
+        svc = RadarService(os.path.join(root, "app-data"), app_mode="real", real_adr=adr, snapshot_repo=snaps, engine="api",
+                           chat_factory=lambda flow: StubChat(script=stub_scripts.detect_script(), flow=flow))
+        c = TestClient(server.create_app(svc))
+        iid = "check-2026-W44"
+        row = next((i for i in c.get("/inbox").json()["items"] if i["id"] == iid), None)
+        check("실사용 확인 필요: radar-snapshots/detect/<주>/check.json → Inbox 항목", row and row["kind"] == "check", c.get("/inbox").json())
+        A, B = CHECK_ROWS_245[0][0], CHECK_ROWS_245[1][0]
+        r = c.post(f"/inbox/{iid}/check/reject", json={"row": B}).json()
+        files = _git(adr_remote, "diff-tree", "--no-commit-id", "--name-status", "-r", "main")
+        check("실사용 기각 → main에 커밋 1개 (A .radar/items 하나 — ADR 파일 없음)", r["outcome"] == "rejected" and "막혔어요" not in r["message"]
+              and _git(adr_remote, "rev-list", "--count", f"{base}..main") == "1" and files.startswith("A\t.radar/items/") and len(files.splitlines()) == 1, (r, files))
+        pushed = _git(adr_remote, "show", f"main:{files.split(chr(9))[1].strip()}")
+        check("실사용 기각 기록에 소식 · via check가 함께 push된다 (다른 기기도 안다)", B in pushed and "hn:mx" in pushed and "via: check" in pushed, pushed[:400])
+        head = _git(adr_remote, "rev-parse", "main")
+        # 초안 만들기 — 대역 모델이 그 줄을 후보로 쓰게 (스텁 판단표 덧붙이기를 빌린다). 초안은 작업 사본에만
+        rec = next(x for x in chk["items"] if x["id"] == A)
+        svc.chat_factory = lambda flow: StubChat(script=svc._check_stub_script(rec, svc.ctx()), flow=flow)
+        r = c.post(f"/inbox/{iid}/check/draft", json={"row": A}).json()
+        untracked = _git(adr, "status", "--porcelain")
+        check("실사용 초안 만들기 → detect 항목 · 원격 그대로 (승인 전 push 0) · 초안은 미추적으로", r["outcome"] == "drafted"
+              and _git(adr_remote, "rev-parse", "main") == head and "docs/adr/" in untracked
+              and any(i["id"] == r["new_item"] and i["kind"] == "detect" for i in c.get("/inbox").json()["items"]), (r, untracked))
+        r = c.post(f"/inbox/{iid}/check/reject-rest").json()
+        files = _git(adr_remote, "diff-tree", "--no-commit-id", "--name-status", "-r", "main")
+        check("실사용 나머지 전부 기각 → 커밋 1개 더 (기록 하나)", r["outcome"] == "rejected" and _git(adr_remote, "rev-parse", "main~1") == head
+              and files.startswith("A\t.radar/items/") and len(files.splitlines()) == 1 and iid not in {i["id"] for i in c.get("/inbox").json()["items"]}, (r, files))
 
 
 class _FakeGh:

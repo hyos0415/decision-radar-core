@@ -6,7 +6,7 @@ import { COPY } from '../copy'
 
 // Everything here talks only to the local backend (127.0.0.1) over fetch.
 
-type InboxKind = 'capture' | 'detect' | 'pending' | 'revisit'
+type InboxKind = 'capture' | 'detect' | 'pending' | 'revisit' | 'check'
 type InboxItem = { id: string; kind: InboxKind; title: string }
 type RunResult = { id: string }
 

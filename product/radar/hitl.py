@@ -1262,6 +1262,25 @@ def rejected_sources(ctx):
     return out
 
 
+def reject_sources(ctx, item_id, sources, *, via, detail=None, exporter=None):
+    """초안 없이 소식만 거부한다 (HYO-245 — 데스크톱 「자리 질의 확인 필요」의 기각). 초안을 지운 거부와 같은 모양의 닫힌 detect 항목
+    (export closed · reason reject · sources)을 남긴다 — `rejected_sources`가 똑같이 읽어, 같은 소식이 다음에 관문 · 자리 질의로 다시 와도
+    detect가 뺀다 (HYO-142). 기록은 `_discard_draft`처럼 별도 파일 하나를 커밋한다 (git 내보내기면 main에 push — 다른 기기도 안다).
+    via = 어디서 거부했나 (check …), detail = 사람이 본 것 (주차 · 모델 · url …). 결과 dict (publish 결과 + outcome · item)."""
+    ex = exporter or exporter_for(ctx)
+    if not sources:
+        raise HitlError(f"{item_id}: 거부할 소식이 없다")
+    item = new_item(ctx, item_id, "detect", "CLOSED")
+    item["sources"] = list(sources)
+    item["export"] = {"state": "closed", "reason": "reject", "via": via}
+    if detail:
+        item["rejected"] = dict(detail)
+    item["history"].append(_event(ctx, to="CLOSED", reason="reject", by="human", via=via))
+    save_item(ctx, item)
+    res = ex.publish([_rel(ctx, item_path(ctx, item_id))], f"{item_id}: {via} 기각 — 소식 {', '.join(sources)}\n\nitem: {item_id}\n")
+    return {**res, "outcome": "reject", "item": item_id}
+
+
 def review_queue(ctx):
     """검토 대기·보류 항목 — Inbox가 보일 목록 (대기 일수는 since에서)."""
     d, out = items_dir(ctx), []

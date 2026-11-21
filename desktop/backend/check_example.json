@@ -1,0 +1,73 @@
+{
+ "week": "2026-W45",
+ "made_at": "2026-11-04T18:00:00+09:00",
+ "items": [
+  {
+   "id": "hf:example/tiny-judge-ko",
+   "title": "[예시] example/tiny-judge-ko",
+   "url": "https://example.com/models/tiny-judge-ko",
+   "source": "huggingface",
+   "model": "[예시] tiny-judge-ko",
+   "reason": "[예시] 판정 모델이지만 구조화 출력(JSON) 지원이 모델 카드에 없다",
+   "switch": "[예시] vLLM으로 띄우기",
+   "slots": [
+    {"id": "verifier-judge", "name": "[예시] 주장 판정", "repo": "finance-verifier", "role": "[예시] 재무 문장의 주장을 근거와 대조해 판정"}
+   ],
+   "item": {
+    "id": "hf:example/tiny-judge-ko",
+    "title": "[예시] example/tiny-judge-ko",
+    "url": "https://example.com/models/tiny-judge-ko",
+    "source": "huggingface",
+    "channels": ["huggingface"],
+    "text": "[예시] tiny-judge-ko — 한국어 판정 모델 (1.5B). 라이선스 Apache-2.0. 출력 형식은 적혀 있지 않다.",
+    "meta": {"tags": ["ko", "text-classification"]},
+    "created_at": "2026-11-03T09:00:00Z"
+   }
+  },
+  {
+   "id": "vendor:example-ai:example-model-3-mini",
+   "title": "[예시] [example-ai] Introducing example-model-3-mini",
+   "url": "https://example.com/blog/example-model-3-mini",
+   "source": "vendor",
+   "model": "[예시] example-model-3-mini",
+   "reason": "[예시] 더 싸지만 한국어 성능이 공지에 없다",
+   "switch": "",
+   "slots": [
+    {"id": "verifier-judge", "name": "[예시] 주장 판정", "repo": "finance-verifier", "role": "[예시] 재무 문장의 주장을 근거와 대조해 판정"},
+    {"id": "consult-summary", "name": "[예시] 상담 요약", "repo": "medical-mate", "role": "[예시] 상담 기록을 한국어로 요약"}
+   ],
+   "item": {
+    "id": "vendor:example-ai:example-model-3-mini",
+    "title": "[예시] [example-ai] Introducing example-model-3-mini",
+    "url": "https://example.com/blog/example-model-3-mini",
+    "source": "vendor",
+    "channels": ["vendor:example-ai"],
+    "text": "[예시] example-model-3-mini: 입력 $0.05 / MTok. 영어 벤치마크만 공개.",
+    "meta": {"vendor": "example-ai"},
+    "created_at": "2026-11-03T12:00:00Z"
+   }
+  },
+  {
+   "id": "hf:example/summ-ko-small",
+   "title": "[예시] example/summ-ko-small",
+   "url": "https://example.com/models/summ-ko-small",
+   "source": "huggingface",
+   "model": "[예시] summ-ko-small",
+   "reason": "[예시] 한국어 요약 모델 — 의료 문서 평가가 없다",
+   "switch": "[예시] 로컬 추론 서버",
+   "slots": [
+    {"id": "consult-summary", "name": "[예시] 상담 요약", "repo": "medical-mate", "role": "[예시] 상담 기록을 한국어로 요약"}
+   ],
+   "item": {
+    "id": "hf:example/summ-ko-small",
+    "title": "[예시] example/summ-ko-small",
+    "url": "https://example.com/models/summ-ko-small",
+    "source": "huggingface",
+    "channels": ["huggingface"],
+    "text": "[예시] summ-ko-small — 한국어 요약 (0.5B). 뉴스 요약으로만 평가했다.",
+    "meta": {"tags": ["ko", "summarization"]},
+    "created_at": "2026-11-02T08:00:00Z"
+   }
+  }
+ ]
+}

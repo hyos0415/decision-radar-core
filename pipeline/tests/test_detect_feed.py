@@ -269,6 +269,86 @@ def test_fetched_page_wins_over_post_body_and_no_fetcher_unchanged():
     assert "1차 출처 링크" not in (out2 / "feed.json").read_text(encoding="utf-8")
 
 
+HF_CHECK = {"id": "hf:acme/tiny-judge", "source": "huggingface", "channels": ["huggingface"], "title": "acme/tiny-judge",
+            "url": "https://huggingface.co/acme/tiny-judge", "text": "", "created_at": "2026-11-17T00:00:00Z",
+            "meta": {"text_file": "cards/tiny-judge.md", "tags": ["en"]}}
+HN_CHECK = {"id": "hn:9", "source": "hn", "channels": ["hn"], "title": "Kopii 3 Flash is out", "url": "https://news.ycombinator.com/item?id=9",
+            "text": "Discussion: 120 points", "meta": {}, "links": ["https://openai.com/index/kopii-3-flash/", "https://someblog.example/k3"]}
+
+
+def check_run(fetcher=None, check=True):
+    """W47 모양의 자리 질의 결과: 자리 top-k 하나(detect로) + 「확인 필요」 두 줄(HF 모델 카드 · HN 글, detect로는 안 간다) + 스냅숏에 없는 줄 하나."""
+    tmp = Path(tempfile.mkdtemp(prefix="detect-feed-check-"))
+    run = make_run(tmp)
+    snap = tmp / "snap"
+    (snap / "cards").mkdir()
+    (snap / "cards" / "tiny-judge.md").write_text("Tiny judge model. Korean: no.", encoding="utf-8")
+    with (snap / "items.jsonl").open("a", encoding="utf-8") as f:
+        for it in (HF_CHECK, HN_CHECK):
+            f.write(json.dumps(it) + "\n")
+    rows = [{"id": "hf:acme/tiny-judge", "title": HF_CHECK["title"], "url": HF_CHECK["url"], "source": "huggingface", "model": "tiny-judge",
+             "slots": ["eval-judge", "gate-classifier"], "reason": "판정 모델이지만 한국어 표시가 없다", "switch": "한국어 확인", "popularity": 3},
+            {"id": "hn:9", "title": HN_CHECK["title"], "url": HN_CHECK["url"], "source": "hn", "model": "Kopii 3 Flash", "slots": ["gate-classifier"],
+             "reason": "제목뿐 — 구조화 출력 불명", "switch": "", "popularity": 1, "also": ["reddit:k3"]},
+            {"id": "gone:1", "title": "x", "url": "https://x.example", "source": "vendor", "model": "x", "slots": ["eval-judge"], "reason": "", "switch": ""}]
+    slots = {"per_slot": {"gate-classifier": [{"id": "news-1", "rank": 1, "fit": 2, "reason": "새 모델", "title": "t", "url": ITEMS[1]["url"], "source": "vendor"}]},
+             "slot_names": {"gate-classifier": "관문 분류", "eval-judge": "eval judge"},
+             "slot_repos": {"gate-classifier": "decision-radar", "eval-judge": "decision-radar"},
+             "slot_roles": {"gate-classifier": "변화 종류 분류", "eval-judge": "답 채점"},
+             "candidates": 5, "releases": 3, "to_detect": ["news-1"], "check": rows if check else []}
+    (run / "slots.json").write_text(json.dumps(slots, ensure_ascii=False), encoding="utf-8")
+    out = tmp / "out"
+    f = detect_feed.build(run, out, fetcher=fetcher)
+    return tmp, out, f
+
+
+def test_check_json_written_not_sent_to_detect():
+    # HYO-245: 「확인 필요」는 detect 입력(feed)에 넣지 않고 check.json으로 — 자리 이름 · repo · 역할 · 소식 전문을 담는다
+    fetcher = FakeFetcher({"https://openai.com/index/kopii-3-flash": (200, b"<p>Kopii 3 Flash: JSON mode, $0.1 / MTok.</p>")})
+    _tmp, out, f = check_run(fetcher)
+    feed_ids = [e["id"] for e in json.loads((out / "feed.json").read_text(encoding="utf-8"))]
+    assert "hf:acme/tiny-judge" not in feed_ids and "hn:9" not in feed_ids, feed_ids
+    chk = json.loads((out / detect_feed.CHECK).read_text(encoding="utf-8"))
+    assert chk["week"] == "snap" and chk["made_at"] and chk["missing"] == ["gone:1"], chk.get("missing")
+    hf, hn = chk["items"]
+    assert hf["slots"] == [{"id": "eval-judge", "name": "eval judge", "repo": "decision-radar", "role": "답 채점"},
+                           {"id": "gate-classifier", "name": "관문 분류", "repo": "decision-radar", "role": "변화 종류 분류"}], hf["slots"]
+    assert (hf["model"], hf["reason"], hf["switch"]) == ("tiny-judge", "판정 모델이지만 한국어 표시가 없다", "한국어 확인")
+    assert hf["item"]["text"] == "Tiny judge model. Korean: no." and hf["item"]["meta"]["tags"] == ["en"], hf["item"]   # text_file은 지금 풀어 둔다
+    assert hn["also"] == ["reddit:k3"] and "primary" not in hf["item"]
+    prim = {p["url"]: p for p in hn["item"]["primary"]}
+    assert "Kopii 3 Flash: JSON mode" in prim["openai.com/index/kopii-3-flash"]["text"] and not any("someblog" in u for u in prim), prim  # 커뮤니티 링크는 안 받는다 (R2)
+    assert f["slots"]["check"] == 3 and "확인 필요 3" in detect_feed.funnel_line(f), f["slots"]
+    _tmp2, out2, f2 = check_run(check=False)
+    assert not (out2 / detect_feed.CHECK).exists() and "check" not in f2["slots"]
+
+
+def test_check_input_one_item_detect_reads():
+    # 사람이 「초안 만들기」를 고른 줄 → detect 한 건 입력. radar.py feed · fetch가 그대로 읽고, gate.json의 자리를 제품 detect가 candidate_for로 받는다
+    fetcher = FakeFetcher({"https://openai.com/index/kopii-3-flash": (200, b"<p>Kopii 3 Flash: JSON mode.</p>")})
+    tmp, out, _ = check_run(fetcher)
+    hf, hn = json.loads((out / detect_feed.CHECK).read_text(encoding="utf-8"))["items"]
+    d = tmp / "one-hf"
+    detect_feed.check_input(hf, d)
+    feed = radar(d, "feed")
+    assert len(feed) == 1 and feed[0]["kind"] == "model_release" and feed[0]["source_type"] == "repo" and feed[0]["url"] == HF_CHECK["url"], feed
+    body = radar(d, "fetch", HF_CHECK["url"])
+    assert body["ok"] and "Korean: no." in body["body"], body
+    sys.path.insert(0, str(REPO / "product"))
+    from radar import detect_ops
+    ctx = type("C", (), {"env": {"RADAR_SNAPSHOT_DIR": str(d)}, "targets": {"decision-radar": "/x"}})()
+    hits = detect_ops.slot_reasons(ctx)[HF_CHECK["url"]]
+    assert [h["slot"] for h in hits] == ["eval-judge", "gate-classifier"] and hits[0]["repo"] == "decision-radar" and hits[0]["model"] == "tiny-judge", hits
+    assert detect_ops.gate_tech(ctx)[HF_CHECK["url"]] == "tiny-judge"          # 기술 이름은 자리 질의가 붙인 모델 이름
+    ctx.targets = {"other": "/y"}
+    assert detect_ops.slot_reasons(ctx) == {}                                  # 대상 repo가 아닌 자리는 넘기지 않는다 (HYO-205 그대로)
+    d2 = tmp / "one-hn"
+    detect_feed.check_input(hn, d2)
+    doc = radar(d2, "fetch", "https://openai.com/index/kopii-3-flash/")
+    assert doc["ok"] and "JSON mode" in doc["body"] and doc["source_type_hint"] == "official_doc", doc   # 얼려 둔 1차 출처가 열린다
+    assert "openai.com/index/kopii-3-flash (official_doc)" in radar(d2, "feed")[0]["summary"]
+
+
 def test_link_type():
     d = detect_feed.official_domains()
     assert {"openai.com", "claude.com"} <= d, d
@@ -287,7 +367,22 @@ def mutations():
     orig_key, orig_select = detect_feed.url_key, detect_feed.select
     orig_quiet, orig_note = policy.quiet_advisory, detect_feed.folded_note
     orig_type, orig_lnote = detect_feed.link_type, detect_feed.links_note
+    orig_crows, orig_citem = detect_feed.check_rows, detect_feed.check_item
+    orig_cinput = detect_feed.check_input
+
+    def input_without_slots(rec, out_dir):
+        e = orig_cinput(rec, out_dir)
+        p = Path(out_dir) / "gate.json"
+        why = json.loads(p.read_text(encoding="utf-8"))
+        p.write_text(json.dumps({u: {**v, "slots": []} for u, v in why.items()}), encoding="utf-8")
+        return e
     return [
+        ("확인 필요를 안 씀 (HYO-245)", lambda: setattr(detect_feed, "check_rows", lambda *a, **k: ([], [])),
+         lambda: setattr(detect_feed, "check_rows", orig_crows)),
+        ("확인 필요 소식 전문을 안 풂", lambda: setattr(detect_feed, "check_item", lambda item, snap_dir=None: {k: item.get(k) for k in ("id", "title", "url", "source")}),
+         lambda: setattr(detect_feed, "check_item", orig_citem)),
+        ("한 건 입력에 자리를 안 적음 (거르기가 뺄 수 있다)", lambda: setattr(detect_feed, "check_input", input_without_slots),
+         lambda: setattr(detect_feed, "check_input", orig_cinput)),
         ("모든 링크를 1차 출처로 (R2 깨짐)", lambda: setattr(detect_feed, "link_type", lambda u, d: "official_doc"),
          lambda: setattr(detect_feed, "link_type", orig_type)),
         ("받은 링크를 소식에 안 적음", lambda: setattr(detect_feed, "links_note", lambda rows: ""), lambda: setattr(detect_feed, "links_note", orig_lnote)),
