@@ -283,6 +283,50 @@ def test_gate_judged_nothing_stops_with_hint():
     assert "OPENAI_API_KEY" in g2["detail"] and "claude" not in g2["detail"], g2["detail"]
 
 
+def _gate_with_lane_a(w, statuses, rc=0):
+    """가짜 관문: --out 에 lane_a.json 을 쓰고 종료 코드 rc 를 낸다 (statuses 의 None 은 관문 안 거친 항목)."""
+    def runner(m, a, log):
+        if m == "pipeline.profile_filter":
+            w.calls.append((m, list(a)))
+            out = Path(a[a.index("--out") + 1])
+            out.mkdir(parents=True, exist_ok=True)
+            lane_a = [{"id": i, "gate": ({"status": s} if s else None)} for i, s in enumerate(statuses)]
+            (out / "lane_a.json").write_text(json.dumps(lane_a), encoding="utf-8")
+            return rc
+        return w.runner(m, a, log)
+    return runner
+
+
+def test_gate_partial_errors_warn_and_continue():
+    """일부 소식만 오류로 버려지면(종료 코드 0) 오류 수를 단계 detail · warn · 콘솔 끝줄에 남기고 사슬은 계속 간다 (HYO-243)."""
+    w = World()
+    rc, out = w.go("--no-push", runner=_gate_with_lane_a(w, ["ok", "error", "unclassified", "error", None]))
+    gate = next(s for s in w.summary()["steps"] if s["name"] == "gate")
+    assert rc == 0 and gate["ok"] and gate["warn"] is True, gate
+    assert "관문 오류 2건 버림" in gate["detail"] and "구독 한도" in gate["detail"] and "gate-calls.jsonl" in gate["detail"], gate["detail"]
+    assert "pipeline.detect_feed" in w.mods()
+    assert out.rstrip().splitlines()[-1].startswith("주의 [gate]") and "2건" in out.rstrip().splitlines()[-1], out
+
+
+def test_gate_no_errors_no_warn():
+    w = World()
+    rc, out = w.go("--no-push", runner=_gate_with_lane_a(w, ["ok", "unclassified", None]))
+    gate = next(s for s in w.summary()["steps"] if s["name"] == "gate")
+    assert rc == 0 and "warn" not in gate and gate["detail"] == f"백엔드 {weekly.DEFAULT_GATE}", gate
+    assert "주의" not in out and not any("warn" in s for s in w.summary()["steps"])
+    w2 = World()                                    # lane_a.json 자체가 없어도 0건으로 본다
+    w2.go("--no-push")
+    assert "warn" not in next(s for s in w2.summary()["steps"] if s["name"] == "gate")
+
+
+def test_gate_all_error_rc3_unchanged():
+    w = World()
+    rc, out = w.go("--no-push", runner=_gate_with_lane_a(w, ["error", "error"], rc=3))
+    gate = next(s for s in w.summary()["steps"] if s["name"] == "gate")
+    assert rc == 1 and not gate["ok"] and "warn" not in gate and "전부 오류" in gate["detail"] and "버림" not in gate["detail"], gate
+    assert "pipeline.detect_feed" not in w.mods() and "주의" not in out
+
+
 def test_feed_fail_stops():
     w = World(fail={"pipeline.detect_feed"})
     rc, _ = w.go()

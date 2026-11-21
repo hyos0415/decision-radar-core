@@ -77,6 +77,15 @@ def gate_args(snap, gate, p, out):
             "--profile", str(p["profile"]), "--targets", str(p["targets"]), "--adr-dir", str(p["adr_dir"]), "--out", str(out)]
 
 
+def gate_errors(run_out):
+    """관문이 오류로 버린 소식 수 (HYO-243) — `lane_a.json` 항목의 `gate.status == "error"`. 파일이 없거나 못 읽으면 0 (이 검사가 사슬을 막지 않는다)."""
+    try:
+        lane_a = json.loads((Path(run_out) / "lane_a.json").read_text(encoding="utf-8"))
+        return sum(1 for e in lane_a if (e.get("gate") or {}).get("status") == "error")
+    except (OSError, ValueError, AttributeError, TypeError):
+        return 0
+
+
 def _git(repo, *args):
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8")
 
@@ -148,9 +157,12 @@ def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None
             print(f"[targets] {summary['targets']}")
         return state["targets"] or p["targets"]
 
-    def record(name, ok, detail="", skipped=False, t0=None):
-        summary["steps"].append({"name": name, "ok": ok, "skipped": skipped, "seconds": round(time.time() - t0, 1) if t0 else 0, "detail": detail})
-        print(f"[{name}] {'건너뜀' if skipped else ('ok' if ok else '실패')} {detail}".rstrip())
+    def record(name, ok, detail="", skipped=False, t0=None, warn=False):
+        step = {"name": name, "ok": ok, "skipped": skipped, "seconds": round(time.time() - t0, 1) if t0 else 0, "detail": detail}
+        if warn:   # ok는 그대로 두고(사슬은 계속) 사람이 볼 경고만 남긴다 (HYO-243) — 평소엔 키 자체가 없다
+            step["warn"] = True
+        summary["steps"].append(step)
+        print(f"[{name}] {'건너뜀' if skipped else ('ok' if ok else '실패')}{' (경고)' if warn else ''} {detail}".rstrip())
 
     def stop(why):
         state["stopped"] = True
@@ -224,7 +236,12 @@ def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None
                     stop("관문 입력이 없다")
                     continue
                 rc = runner("pipeline.profile_filter", gate_args(p["snapshots"] / week, gate, {**p, "targets": targets()}, run_out), log)
-                record(name, rc == 0, f"백엔드 {gate}" if rc == 0 else f"관문({gate}) 실패, 종료 코드 {rc}" + (" (모델에 물은 소식 전부 오류)" if rc == 3 else "") + f" — {gate_hint(gate)} · {log} 를 본다", t0=t0)
+                n_err = gate_errors(run_out) if rc == 0 else 0     # 일부만 오류면 rc 0 — 그 소식은 detect 입력에서 조용히 빠진다 (HYO-243)
+                if rc == 0:
+                    detail = f"백엔드 {gate}" + (f" · 관문 오류 {n_err}건 버림 (구독 한도일 수 있다 — {run_out / 'gate-calls.jsonl'} 의 error를 본다)" if n_err else "")
+                else:
+                    detail = f"관문({gate}) 실패, 종료 코드 {rc}" + (" (모델에 물은 소식 전부 오류)" if rc == 3 else "") + f" — {gate_hint(gate)} · {log} 를 본다"
+                record(name, rc == 0, detail, t0=t0, warn=bool(n_err))
                 if rc != 0:
                     stop("관문 실패 — feed·게시를 하지 않는다")
                 elif state["targets"]:  # 관문이 읽은 기준 — detect_feed가 detect/<주>/로 옮긴다
@@ -275,6 +292,9 @@ def run(a, runner=run_step, env=None, root=REPO, out_dir=None, pipeline_out=None
                     stop(detail)
     summary["finished"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
     (out_dir / "last-weekly.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    for s in summary["steps"]:   # 예약 작업 콘솔(last-weekly.log)의 맨 끝 — 성공으로 끝나도 사람이 마지막에 보는 자리 (HYO-243)
+        if s.get("warn"):
+            print(f"주의 [{s['name']}]: {s['detail']}", file=sys.stderr)
     return 1 if state["stopped"] else 0
 
 
