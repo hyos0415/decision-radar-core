@@ -76,6 +76,20 @@ def test_reddit_urls_cover_flairs():
     assert "flair%3A%22New%20Model%22" in got[1][1] and "t=week" in got[1][1]
 
 
+def test_retired_source_skipped_by_default_but_runs_when_named():
+    """은퇴한 출처(pool.yaml `retired`)는 기본 실행에서 빠지고 이유가 남는다 — 직접 이름을 주면 돈다 (HYO-189, Reddit RSS 종료)."""
+    from collector import run
+    pool = {"reddit": {"retired": {"since": "2026-11-17", "why": "RSS 종료"}}, "hn": {}}
+    wanted, retired = run.pick_sources(",".join(run.SOURCES), pool)
+    assert "reddit" not in wanted and "hn" in wanted and retired == {"reddit": pool["reddit"]["retired"]}, (wanted, retired)
+    wanted, retired = run.pick_sources("reddit", pool)
+    assert wanted == ["reddit"] and retired == {}, (wanted, retired)                    # 직접 부르면 돈다 (시험 · 다시 켤 때)
+    wanted, _ = run.pick_sources(",".join(run.SOURCES), {"reddit": {}, "hn": {}})
+    assert wanted == list(run.SOURCES), wanted                                           # 은퇴 표시가 없으면 그대로
+    real = run.load_yaml(Path(run.HERE) / "pool.yaml")
+    assert "reddit" not in run.pick_sources(",".join(run.SOURCES), real)[0], real.get("reddit")   # 지금 설정: reddit은 은퇴
+
+
 def test_merge_combines_channels():
     a = reddit.parse(REDDIT_ATOM, "r/LocalLLaMA:top-week", "LocalLLaMA", None)[0]
     b = reddit.parse(REDDIT_ATOM, "r/LocalLLaMA:flair:New Model", "LocalLLaMA", "New Model")[0]

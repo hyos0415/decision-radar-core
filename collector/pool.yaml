@@ -1,9 +1,15 @@
 # 출처 풀 — 수집 기준 (docs/design/doc-pipeline.md §4, 2026-10-02 사용자 결정)
 # 기준을 바꾸면 이 파일을 고치고 version을 올린다. 결과를 본 뒤 바꾸면 doc-pipeline에 `변경`으로 남긴다.
-version: 3                  # 2026-11-04: 공식 보안 채널(security — OSV · Python · Node.js 공지) 추가 (HYO-170 다)
+version: 4                  # 2026-11-22: reddit 은퇴 — Reddit이 RSS를 끝냈다 (HYO-189, doc-pipeline §4-1 변경)
+# version 3 (2026-11-04): 공식 보안 채널(security — OSV · Python · Node.js 공지) 추가 (HYO-170 다)
 # version 2 (2026-10-08): 의존성 릴리스에 npm 경로(package.json 직접 읽기) 추가
 
 reddit:
+  # 은퇴한 출처 — 수집기가 기본 실행에서 뺀다(`--sources reddit`으로 직접 부르면 돈다). 아래 설정은 기록 · 다시 켤 때를 위해 둔다
+  retired:
+    since: 2026-11-17
+    why: "Reddit이 RSS를 끝냈다 — www.reddit.com의 모든 .rss가 404 (11/17 19:08 UTC쯤부터, 외부 보고). 공식 Data API는 승인제"
+    issue: HYO-189
   min_interval_s: 61          # 8초면 429, 60초면 통과 (probe 2026-10-02)
   limit: 100
   subreddits:

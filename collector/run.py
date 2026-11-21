@@ -32,6 +32,17 @@ def load_yaml(p):
         return yaml.safe_load(f)
 
 
+def pick_sources(arg, pool):
+    """--sources 값 → (돌릴 출처, {뺀 출처: retired 설정}). pool.yaml에 `retired`가 적힌 출처는 기본 실행(전부)에서 뺀다 —
+    직접 이름을 주면(`--sources reddit`) 돈다. 은퇴한 출처를 매주 돌리면 실패 요청 · 대기 시간 · 「0건」 경보만 남는다 (HYO-189)."""
+    names = [s for s in arg.split(",") if s]
+    explicit = arg != ",".join(SOURCES)
+    retired = {s: (pool.get(s) or {}).get("retired") for s in names if (pool.get(s) or {}).get("retired")}
+    if explicit:
+        return names, {}
+    return [s for s in names if s not in retired], retired
+
+
 def targets():
     path = Path(os.environ.get("RADAR_TARGETS") or (REPO.parent / "adr" / "radar-targets.json"))
     if not path.exists():
@@ -161,7 +172,7 @@ def main(argv=None):
 
     pool = load_yaml(HERE / "pool.yaml")
     vendors_cfg = load_yaml(HERE / "vendors.yaml")
-    wanted = [s for s in a.sources.split(",") if s]
+    wanted, retired = pick_sources(a.sources, pool)
     now = time.time()
     fetcher = Fetcher()
     mirror_pull = refresh_collect_only(my_mirror_roots())          # 내 스택의 읽기 전용 사본 — 읽기 전에 당긴다
@@ -177,7 +188,8 @@ def main(argv=None):
     roots = merge_targets(roots, extra_roots, "repo 루트")
     excludes = {**target_excludes(), **collect_only["excludes"]}
     run = {"started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), "pool_version": pool["version"],
-           "vendors_version": vendors_cfg["version"], "targets": targets_path, "collect_only": collect_only, "sources": {}}
+           "vendors_version": vendors_cfg["version"], "targets": targets_path, "collect_only": collect_only, "sources": {},
+           "retired": {s: {k: str(v) for k, v in (cfg or {}).items()} for s, cfg in retired.items()}}   # 뺀 출처와 이유 (HYO-189)
     all_items = []
     for name in wanted:
         t0 = time.time()
@@ -220,6 +232,8 @@ def main(argv=None):
                    "non_200": [{"url": u, "status": s, "attempts": n} for u, s, n in fetcher.log if s != 200],
                    "redirects": [{"url": u, "final": f} for u, f in dict(fetcher.redirects).items()]}
     (out / "run.json").write_text(json.dumps(run, ensure_ascii=False, indent=1), encoding="utf-8", newline="\n")
+    for s, cfg in retired.items():
+        print(f"{s:12} 은퇴 — 돌리지 않음 ({(cfg or {}).get('since', '?')}: {(cfg or {}).get('why', '')[:60]})")
     print(f"-> {out} ({len(all_items)} items)")
     return 0 if not any("crash" in r for r in run["sources"].values()) else 1
 
