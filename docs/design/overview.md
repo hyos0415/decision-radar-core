@@ -185,6 +185,8 @@ Anthropic·Gemini·OpenAI 크레딧을 역할별로 쓴다. 제안서 §14(PARTI
 | 대량 작업 (LightRAG 추출·gold 초안·질의 바꿔쓰기) | 가장 싼 후보 — 표본으로 품질 측정 후 선택 | 비용 |
 | 임베딩 | 여러 회사 + 로컬 BGE-M3 | Arena의 Dense 전략 |
 
+> **변경 (2026-11-21, 사용자 — HYO-210)**: LLM judge의 「평가 대상과 다른 회사」를 **기본값에서는 지키지 못한다**. eval judge가 쓰던 GPT-6 Sol(`codex exec`, ChatGPT 구독)이 11월 말에 끝나고, 유료 API는 상시로 쓰지 않는다(Gemini 결제는 성능 시험용 선불). 남는 구독인 Claude Sonnet 5.5(`claude -p`)를 기본 judge로 둔다. 같은 표본 · 루브릭 · 문구로 codex · Claude · Gemini 4 Carbon을 견주니 모든 칸이 같았다(19칸, 흔들림 0, 실제 표본을 고친 어려운 음성 4/4 — `eval/judge/README.md`). 다만 표본이 작아 같은 회사 편향이 없다고는 못 한다 — 다른 회사 judge(Gemini · codex)는 선택지로 남겨 가끔 교차 확인한다. judge를 쓰는 케이스는 JHS-022 · JHS-036 둘뿐이고 나머지는 스크립트 채점이다
+
 모든 호출에 회사·모델·토큰·비용을 기록한다 — 비용 비교는 **토큰 수**로 나란히 둔다 (스킬은 API 환산 추정치, 제품은 실청구액이라 단위가 다르다).
 키는 `.env`(gitignore), 레포에는 `.env.example`만.
 
